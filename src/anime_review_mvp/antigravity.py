@@ -22,8 +22,6 @@ class RequiredOutputs:
     truth: str
     scene_packets: str
     script: str
-    tts: str
-    edl: str
     audit: str
 
 
@@ -62,20 +60,14 @@ def build_operator_job(
             truth=str(paths.truth_dir / "su_that_tap_phim.json"),
             scene_packets=str(paths.truth_dir / "scene_packets.json"),
             script=str(paths.script_dir / "kich_ban_review.json"),
-            tts=str(paths.tts_dir / "tts_manifest.json"),
-            edl=str(paths.edl_dir / "edl.json"),
             audit=str(paths.report_dir / "kiem_dinh.json"),
         ),
         write_policy=WritePolicy(
             allowed_write_roots=tuple(
                 str(path.resolve())
                 for path in (
-                    paths.input_dir,
                     paths.truth_dir,
                     paths.script_dir,
-                    paths.tts_dir,
-                    paths.edl_dir,
-                    paths.final_dir,
                     paths.report_dir,
                     paths.temp_dir,
                 )
@@ -90,6 +82,11 @@ def build_operator_job(
                     paths.root / "docs",
                     paths.root / ".git",
                     paths.script_dir / "khoa_cau_canh.json",
+                    paths.tts_dir,
+                    paths.edl_dir,
+                    paths.final_dir,
+                    paths.episode_dir / "Bao_cao_Codex",
+                    paths.report_dir / "kiem_dinh_engine.json",
                 )
             ),
         ),
