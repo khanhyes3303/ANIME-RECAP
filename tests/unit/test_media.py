@@ -49,9 +49,7 @@ class FakeWhisperModel:
 def test_probe_rejects_a_source_without_video_stream(tmp_path: Path) -> None:
     source = tmp_path / "audio-only.mp4"
     source.write_bytes(b"media")
-    runner = FakeRunner(
-        stdout=json.dumps({"format": {"duration": "10.0"}, "streams": []})
-    )
+    runner = FakeRunner(stdout=json.dumps({"format": {"duration": "10.0"}, "streams": []}))
 
     with pytest.raises(MvpError, match="exactly one video stream"):
         probe_source(source, runner=runner)
@@ -92,9 +90,7 @@ def test_transcribe_forces_english_and_persists_word_times(tmp_path: Path) -> No
 def test_detect_shots_adds_source_edges_around_ffmpeg_scene_cuts(tmp_path: Path) -> None:
     source = tmp_path / "episode.mp4"
     source.write_bytes(b"media")
-    runner = FakeRunner(
-        stderr="[Parsed_showinfo] n:1 pts:2500 pts_time:2.500 pos:0\n"
-    )
+    runner = FakeRunner(stderr="[Parsed_showinfo] n:1 pts:2500 pts_time:2.500 pos:0\n")
 
     shots = detect_shots(source, 5_000, runner=runner)
 

@@ -28,16 +28,58 @@ def _board() -> AtomicStoryboard:
     )
     beats = (
         AtomicBeat(
-            "beat-001", "scene-001", ("event-001",), ("claim-001",),
-            (SpanSourceRange("range-001", 0, 336_000, "scene-001", "beat-001", ("shot-001",), ("event-001",)),),
-            "Jiro chạy.", ("Jiro",), ("Jiro",), "ACTION", 0, 1_000,
-            "Jiro lao đi.", ("frame-001.jpg",), 336_000, 336_000, "key-1", "LOCKED", (),
+            "beat-001",
+            "scene-001",
+            ("event-001",),
+            ("claim-001",),
+            (
+                SpanSourceRange(
+                    "range-001", 0, 336_000, "scene-001", "beat-001", ("shot-001",), ("event-001",)
+                ),
+            ),
+            "Jiro chạy.",
+            ("Jiro",),
+            ("Jiro",),
+            "ACTION",
+            0,
+            1_000,
+            "Jiro lao đi.",
+            ("frame-001.jpg",),
+            336_000,
+            336_000,
+            "key-1",
+            "LOCKED",
+            (),
         ),
         AtomicBeat(
-            "beat-002", "scene-002", ("event-002",), ("claim-002",),
-            (SpanSourceRange("range-002", 336_000, 420_000, "scene-002", "beat-002", ("shot-002",), ("event-002",)),),
-            "Rago quay lại.", ("Rago",), ("Rago",), "REACTION", 336_000, 337_000,
-            "Rago quay phắt lại.", ("frame-002.jpg",), 84_000, 84_000, "key-2", "LOCKED", (),
+            "beat-002",
+            "scene-002",
+            ("event-002",),
+            ("claim-002",),
+            (
+                SpanSourceRange(
+                    "range-002",
+                    336_000,
+                    420_000,
+                    "scene-002",
+                    "beat-002",
+                    ("shot-002",),
+                    ("event-002",),
+                ),
+            ),
+            "Rago quay lại.",
+            ("Rago",),
+            ("Rago",),
+            "REACTION",
+            336_000,
+            337_000,
+            "Rago quay phắt lại.",
+            ("frame-002.jpg",),
+            84_000,
+            84_000,
+            "key-2",
+            "LOCKED",
+            (),
         ),
     )
     return AtomicStoryboard("ANTIGRAVITY", "atomic-v1", "producer-01", claims, beats)
@@ -49,7 +91,11 @@ def _tts() -> AtomicTtsManifest:
             AtomicTtsBeat("beat-001", "1.mp3", "1.wav", 336_000, "key-1"),
             AtomicTtsBeat("beat-002", "2.mp3", "2.wav", 84_000, "key-2"),
         ),
-        "narration.wav", "fake", "BV074_streaming", "atomic-v1", TtsCacheStats(0, 2),
+        "narration.wav",
+        "fake",
+        "BV074_streaming",
+        "atomic-v1",
+        TtsCacheStats(0, 2),
     )
 
 
@@ -74,16 +120,25 @@ def test_atomic_edl_preserves_many_shots_for_one_beat() -> None:
 
 def test_atomic_audit_counts_only_evidenced_beats_without_blocking_findings() -> None:
     critic = CriticReviewDocument(
-        "VIDEO", "producer-01", "critic-01",
+        "VIDEO",
+        "producer-01",
+        "critic-01",
         (
             CriticBeatReview("beat-001", (), ("frame-001.jpg",), "Khớp."),
-            CriticBeatReview("beat-002", ("VOICE_AHEAD",), ("frame-002.jpg",), "Lời đi trước hình."),
+            CriticBeatReview(
+                "beat-002", ("VOICE_AHEAD",), ("frame-002.jpg",), "Lời đi trước hình."
+            ),
         ),
     )
     render = RenderResult("proxy.mp4", 420_000, 420_000, 420_000, 0, 1, 1)
 
     report = build_atomic_engine_audit(
-        _board(), _tts(), critic, render, expected_policy_sha256="a" * 64, actual_policy_sha256="a" * 64
+        _board(),
+        _tts(),
+        critic,
+        render,
+        expected_policy_sha256="a" * 64,
+        actual_policy_sha256="a" * 64,
     )
 
     assert report.coverage_ratio == "0.8"
@@ -96,7 +151,9 @@ def test_atomic_audit_counts_only_evidenced_beats_without_blocking_findings() ->
 
 def test_atomic_audit_rejects_policy_change() -> None:
     critic = CriticReviewDocument(
-        "VIDEO", "producer-01", "critic-01",
+        "VIDEO",
+        "producer-01",
+        "critic-01",
         tuple(
             CriticBeatReview(beat.beat_id, (), beat.frame_evidence, "Khớp.")
             for beat in _board().beats
@@ -105,7 +162,12 @@ def test_atomic_audit_rejects_policy_change() -> None:
     render = RenderResult("final.mp4", 420_000, 420_000, 420_000, 0, 1, 1)
 
     report = build_atomic_engine_audit(
-        _board(), _tts(), critic, render, expected_policy_sha256="a" * 64, actual_policy_sha256="b" * 64
+        _board(),
+        _tts(),
+        critic,
+        render,
+        expected_policy_sha256="a" * 64,
+        actual_policy_sha256="b" * 64,
     )
 
     assert "POLICY_CHANGED_DURING_RUN" in {finding.code for finding in report.findings}

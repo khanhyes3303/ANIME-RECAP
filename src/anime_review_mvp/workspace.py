@@ -75,15 +75,13 @@ def create_job(
     anime_dir_name = _safe_anime_name(anime)
     project_root = root.resolve()
     episode_dir = (
-        project_root
-        / "Kho_Anime"
-        / anime_dir_name
-        / f"Mua_{season:02d}"
-        / f"Tap_{episode:03d}"
+        project_root / "Kho_Anime" / anime_dir_name / f"Mua_{season:02d}" / f"Tap_{episode:03d}"
     )
     final_dir = episode_dir / "Thanh_pham"
-    if not revision and final_dir.is_dir() and any(
-        item.is_file() and item.suffix.lower() == ".mp4" for item in final_dir.iterdir()
+    if (
+        not revision
+        and final_dir.is_dir()
+        and any(item.is_file() and item.suffix.lower() == ".mp4" for item in final_dir.iterdir())
     ):
         raise MvpError("MVP refuses to overwrite an existing final MP4")
     paths = JobPaths(

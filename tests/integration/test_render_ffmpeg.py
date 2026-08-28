@@ -63,10 +63,7 @@ def _dominant_zero_crossing_frequency(path: Path) -> float:
             int.from_bytes(frames[index : index + 2], "little", signed=True)
             for index in range(0, len(frames), 2)
         ]
-    crossings = sum(
-        a <= 0 < b or a >= 0 > b
-        for a, b in zip(samples, samples[1:], strict=False)
-    )
+    crossings = sum(a <= 0 < b or a >= 0 > b for a, b in zip(samples, samples[1:], strict=False))
     return crossings * rate / (2 * len(samples))
 
 
@@ -79,9 +76,7 @@ def test_real_render_contains_narration_tone_not_source_tone(tmp_path: Path) -> 
     _make_narration(narration)
     edl = EdlDocument((EdlSegment("segment-001", "cue-001", 0, 1_000),))
 
-    result = render_review(
-        source, narration, edl, output, allow_short_fixture=True
-    )
+    result = render_review(source, narration, edl, output, allow_short_fixture=True)
     subprocess.run(
         [
             "ffmpeg",

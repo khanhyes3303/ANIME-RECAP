@@ -53,9 +53,7 @@ def build_edl_from_locked_spans(
                 for start_ms, end_ms in used_ranges
             ):
                 raise MvpError("locked EDL reuses overlapping source footage")
-            used_ranges.append(
-                (source_range.source_start_ms, source_range.source_end_ms)
-            )
+            used_ranges.append((source_range.source_start_ms, source_range.source_end_ms))
             segments.append(
                 SpanEdlSegment(
                     segment_id=f"{span.span_id}-segment-{index:03d}",
@@ -94,9 +92,7 @@ def build_atomic_edl(
     used_ranges: list[tuple[int, int]] = []
     program_cursor_ms = 0
     for beat in storyboard.beats:
-        footage_ms = sum(
-            item.source_end_ms - item.source_start_ms for item in beat.source_ranges
-        )
+        footage_ms = sum(item.source_end_ms - item.source_start_ms for item in beat.source_ranges)
         if abs(footage_ms - durations[beat.beat_id]) > tolerance_ms:
             raise MvpError(f"atomic footage differs from TTS for {beat.beat_id}")
         if beat.sync_mode != "CONTEXT":

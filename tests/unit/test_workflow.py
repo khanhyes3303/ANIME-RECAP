@@ -10,8 +10,8 @@ from anime_review_mvp.workflow import (
     advance,
     new_state,
     read_state,
-    record_repair,
     record_beat_repair,
+    record_repair,
     record_stage_metric,
     resume_beat_repair,
 )
@@ -36,16 +36,12 @@ def test_state_advances_only_from_persisted_expected_stage(tmp_path: Path) -> No
 def test_third_failed_repair_becomes_human_required(tmp_path: Path) -> None:
     state = new_state(tmp_path / "run")
     for _ in range(3):
-        state = record_repair(
-            state.run_dir, "SUA_NOI_DUNG", ("UNSUPPORTED_CLAIM",)
-        )
+        state = record_repair(state.run_dir, "SUA_NOI_DUNG", ("UNSUPPORTED_CLAIM",))
 
     assert state.stage is Stage.CAN_CON_NGUOI_XU_LY
     assert len(read_state(state.run_dir).repair_history) == 3
     with pytest.raises(MvpError, match="human"):
-        record_repair(
-            state.run_dir, "SUA_NOI_DUNG", ("UNSUPPORTED_CLAIM",)
-        )
+        record_repair(state.run_dir, "SUA_NOI_DUNG", ("UNSUPPORTED_CLAIM",))
 
 
 def test_only_engine_audit_can_mark_run_complete(tmp_path: Path) -> None:
@@ -124,9 +120,7 @@ def test_stage_metrics_reject_negative_counters(tmp_path: Path) -> None:
 
 def test_resume_beat_repair_returns_to_the_smallest_required_stage(tmp_path: Path) -> None:
     state = new_state(tmp_path / "run", stage=Stage.PHAN_BIEN_VIDEO)
-    state = record_beat_repair(
-        state.run_dir, "VIDEO", ("beat-001",), ("VOICE_AHEAD",)
-    )
+    state = record_beat_repair(state.run_dir, "VIDEO", ("beat-001",), ("VOICE_AHEAD",))
 
     resumed = resume_beat_repair(state.run_dir, "VIDEO")
 

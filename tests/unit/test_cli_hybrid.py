@@ -37,8 +37,13 @@ def _locked(duration_ms: int) -> NarrationSpanDocument:
                 "Jiro chạy qua cổng.",
                 (
                     SpanSourceRange(
-                        "range-001", 0, duration_ms, "scene-001", "beat-001",
-                        ("shot-001",), ("event-001",),
+                        "range-001",
+                        0,
+                        duration_ms,
+                        "scene-001",
+                        "beat-001",
+                        ("shot-001",),
+                        ("event-001",),
                     ),
                 ),
             ),
@@ -72,8 +77,13 @@ def _episode(tmp_path: Path, duration_ms: int) -> tuple[Path, Path, Path]:
     source = tmp_path / "source.mp4"
     source.write_bytes(b"source")
     directories = (
-        "Dau_vao", "Su_that", "Kich_ban", "TTS", "Ke_hoach_canh",
-        "Thanh_pham", "Bao_cao",
+        "Dau_vao",
+        "Su_that",
+        "Kich_ban",
+        "TTS",
+        "Ke_hoach_canh",
+        "Thanh_pham",
+        "Bao_cao",
     )
     for directory in directories:
         (episode / directory).mkdir(parents=True, exist_ok=True)
@@ -122,15 +132,15 @@ def test_tts_builds_locked_edl_then_render_keeps_old_final(
     old_final = episode / "Thanh_pham" / "review_anime.mp4"
     old_final.write_bytes(b"old")
 
-    def fake_tts(
-        document: NarrationSpanDocument, output_dir: Path, **_: object
-    ) -> SpanTtsManifest:
+    def fake_tts(document: NarrationSpanDocument, output_dir: Path, **_: object) -> SpanTtsManifest:
         assert document.owner == "CODEX"
         narration = output_dir / "narration.wav"
         narration.write_bytes(b"voice")
         manifest = SpanTtsManifest(
             (SpanTts("span-001", "1.mp3", "1.wav", 1_000),),
-            str(narration), "fake", "BV074_streaming",
+            str(narration),
+            "fake",
+            "BV074_streaming",
         )
         dump_json(output_dir / "span_tts_manifest.json", manifest)
         return manifest
@@ -171,7 +181,9 @@ def test_engine_audit_publishes_candidate_and_backs_up_old_final(tmp_path: Path)
         episode / "TTS" / "span_tts_manifest.json",
         SpanTtsManifest(
             (SpanTts("span-001", "1.mp3", "1.wav", 420_000),),
-            "narration.wav", "fake", "BV074_streaming",
+            "narration.wav",
+            "fake",
+            "BV074_streaming",
         ),
     )
     source_anchors = _anchors("SOURCE", run / "codex_evidence" / "source")
@@ -180,9 +192,7 @@ def test_engine_audit_publishes_candidate_and_backs_up_old_final(tmp_path: Path)
         run / "render_result.json",
         RenderResult(str(candidate), 420_000, 420_000, 420_000, 0, 1, 1),
     )
-    evidence = tuple(
-        item.anchor_id for item in (*source_anchors.anchors, *program_anchors.anchors)
-    )
+    evidence = tuple(item.anchor_id for item in (*source_anchors.anchors, *program_anchors.anchors))
     review_path = episode / "Bao_cao_Codex" / "codex_semantic_review.json"
     dump_json(
         review_path,
@@ -192,9 +202,12 @@ def test_engine_audit_publishes_candidate_and_backs_up_old_final(tmp_path: Path)
         ),
     )
 
-    assert cli.main(
-        ["audit", "--run", str(run), "--phase", "video", "--codex-review", str(review_path)]
-    ) == 0
+    assert (
+        cli.main(
+            ["audit", "--run", str(run), "--phase", "video", "--codex-review", str(review_path)]
+        )
+        == 0
+    )
     assert read_state(run).stage is Stage.HOAN_THANH
     assert final.read_bytes() == b"new"
     backups = list((episode / "Bao_cao" / "phien_ban_cu").glob("*.mp4"))

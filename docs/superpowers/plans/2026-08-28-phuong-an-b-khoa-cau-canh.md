@@ -73,7 +73,9 @@ def test_operator_job_marks_codex_artifact_read_only(tmp_path: Path) -> None:
     job_path = build_operator_job(paths, source, transcript, shots)
     payload = json.loads(job_path.read_text(encoding="utf-8"))
     assert "codex_locked_spans" not in payload["required_outputs"]
-    assert str(paths.script_dir / "khoa_cau_canh.json") in payload["write_policy"]["read_only_roots"]
+    assert (
+        str(paths.script_dir / "khoa_cau_canh.json") in payload["write_policy"]["read_only_roots"]
+    )
 ```
 
 - [ ] **Step 2: Chạy test và xác nhận thất bại vì chưa có model/loader**
@@ -153,7 +155,11 @@ def test_extract_span_anchors_requests_start_middle_and_end(tmp_path: Path) -> N
     runner = FakeRunner()
     document = extract_span_anchors(
         tmp_path / "episode.mp4",
-        _locked_spans(SpanSourceRange("range-001", 1_000, 4_000, "scene-001", "beat-001", ("shot-1",), ("event-1",))),
+        _locked_spans(
+            SpanSourceRange(
+                "range-001", 1_000, 4_000, "scene-001", "beat-001", ("shot-1",), ("event-1",)
+            )
+        ),
         tmp_path / "anchors",
         timeline="SOURCE",
         runner=runner,
@@ -221,7 +227,9 @@ git commit -m "feat: extract deterministic span anchor frames"
 
 ```python
 def test_tts_manifest_uses_span_ids(tmp_path: Path) -> None:
-    manifest = synthesize_spans(_locked_spans(), tmp_path, provider=FakeProvider(), converter=_fake_converter)
+    manifest = synthesize_spans(
+        _locked_spans(), tmp_path, provider=FakeProvider(), converter=_fake_converter
+    )
     assert [item.span_id for item in manifest.spans] == ["span-001"]
     assert Path(manifest.spans[0].wav_path).name == "span-001.wav"
 
@@ -285,24 +293,33 @@ def build_edl_from_locked_spans(
     cursor = 0
     used_ranges: list[tuple[int, int]] = []
     for span in document.spans:
-        footage_ms = sum(
-            item.source_end_ms - item.source_start_ms for item in span.source_ranges
-        )
+        footage_ms = sum(item.source_end_ms - item.source_start_ms for item in span.source_ranges)
         if abs(footage_ms - durations[span.span_id]) > tolerance_ms:
             raise MvpError(f"locked footage differs from TTS for {span.span_id}")
         for index, item in enumerate(span.source_ranges, start=1):
             duration_ms = item.source_end_ms - item.source_start_ms
             if duration_ms < minimum_segment_ms and not item.short_action_exception:
                 raise MvpError(f"EDL segment must be at least {minimum_segment_ms} ms")
-            if any(item.source_start_ms < end and start < item.source_end_ms for start, end in used_ranges):
+            if any(
+                item.source_start_ms < end and start < item.source_end_ms
+                for start, end in used_ranges
+            ):
                 raise MvpError("locked EDL reuses source footage")
             used_ranges.append((item.source_start_ms, item.source_end_ms))
             segments.append(
                 EdlSegment(
-                    f"{span.span_id}-segment-{index:03d}", span.span_id,
-                    item.source_start_ms, item.source_end_ms, cursor, cursor + duration_ms,
-                    item.range_id, item.scene_id, item.beat_id, item.shot_ids,
-                    item.event_ids, item.short_action_exception,
+                    f"{span.span_id}-segment-{index:03d}",
+                    span.span_id,
+                    item.source_start_ms,
+                    item.source_end_ms,
+                    cursor,
+                    cursor + duration_ms,
+                    item.range_id,
+                    item.scene_id,
+                    item.beat_id,
+                    item.shot_ids,
+                    item.event_ids,
+                    item.short_action_exception,
                 )
             )
             cursor += duration_ms
@@ -497,7 +514,9 @@ def test_antigravity_draft_stops_for_codex_editor(tmp_path: Path) -> None:
 def test_final_audit_completes_without_package_or_cleanup(tmp_path: Path) -> None:
     run, episode = _rendered_fixture(tmp_path)
     review = episode / "Bao_cao_Codex" / "codex_semantic_review.json"
-    assert main(["audit", "--run", str(run), "--phase", "video", "--codex-review", str(review)]) == 0
+    assert (
+        main(["audit", "--run", str(run), "--phase", "video", "--codex-review", str(review)]) == 0
+    )
     assert read_state(run).stage is Stage.HOAN_THANH
     assert run.exists()
     assert not (tmp_path / "Goi_gui_ChatGPT_Web").exists()

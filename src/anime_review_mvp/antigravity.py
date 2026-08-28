@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 
 from .errors import MvpError
@@ -44,6 +44,7 @@ class OperatorJob:
     required_outputs: RequiredOutputs
     write_policy: WritePolicy
     policy_sha256: str
+    inspection_frames_dir: str
 
 
 def calculate_policy_sha256(root: Path) -> str:
@@ -112,6 +113,7 @@ def build_operator_job(
             ),
         ),
         policy_sha256=calculate_policy_sha256(paths.root),
+        inspection_frames_dir=str(paths.cache_dir / "source" / source.sha256 / "frames"),
     )
     output = paths.temp_dir / "cong_viec_antigravity.json"
     dump_json(output, job)

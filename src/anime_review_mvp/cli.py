@@ -5,7 +5,6 @@ import json
 import sys
 from pathlib import Path
 
-from .atomic import load_atomic_storyboard, load_critic_review
 from .antigravity import (
     build_operator_job,
     calculate_policy_sha256,
@@ -14,6 +13,7 @@ from .antigravity import (
     load_script,
     load_truth,
 )
+from .atomic import load_atomic_storyboard, load_critic_review
 from .audit import build_atomic_engine_audit, build_engine_audit
 from .editorial import load_locked_spans
 from .edl import build_atomic_edl, build_edl_from_locked_spans
@@ -31,19 +31,19 @@ from .models import (
     AtomicStoryboard,
     AtomicTtsManifest,
     CodexSemanticReview,
-    CriticReviewDocument,
     FrameAnchorDocument,
     NarrationSpanDocument,
     ShotDocument,
     SourceRef,
     SpanEdlDocument,
     SpanTtsManifest,
+    TranscriptDocument,
 )
 from .render import RenderResult, render_review
 from .tts import synthesize_atomic_beats, synthesize_spans
 from .validation import (
-    narration_style_findings,
     atomic_style_findings,
+    narration_style_findings,
     validate_scene_packets,
     validate_script,
     validate_truth,
@@ -157,15 +157,25 @@ def _prepare(run_dir: Path) -> int:
         raise MvpError("prepare requires CHUAN_BI stage")
     source = probe_source(Path(state.source_video))
     dump_json(episode / "Dau_vao" / "source_ref.json", source)
-    transcript = transcribe_english(
-        Path(state.source_video), run_dir / "transcript_english.json"
-    )
-    shots = detect_shots(Path(state.source_video), source.duration_ms)
-    dump_json(run_dir / "shots.json", ShotDocument(shots))
-    extract_inspection_assets(
-        Path(state.source_video), shots, run_dir / "inspection_frames"
-    )
     paths = _job_paths_from_state(state, episode)
+    source_cache = paths.cache_dir / "source" / source.sha256
+    source_cache.mkdir(parents=True, exist_ok=True)
+    transcript_cache = source_cache / "transcript_english.json"
+    shots_cache = source_cache / "shots.json"
+    frames_cache = source_cache / "frames"
+    if transcript_cache.is_file():
+        transcript = load_json(transcript_cache, TranscriptDocument)
+    else:
+        transcript = transcribe_english(Path(state.source_video), transcript_cache)
+    if shots_cache.is_file():
+        shots = load_json(shots_cache, ShotDocument).shots
+    else:
+        shots = detect_shots(Path(state.source_video), source.duration_ms)
+        dump_json(shots_cache, ShotDocument(shots))
+    if not frames_cache.is_dir() or not any(frames_cache.glob("*.jpg")):
+        extract_inspection_assets(Path(state.source_video), shots, frames_cache)
+    dump_json(run_dir / "transcript_english.json", transcript)
+    dump_json(run_dir / "shots.json", ShotDocument(shots))
     job_path = build_operator_job(paths, source, transcript, shots)
     advance(run_dir, Stage.CHUAN_BI, Stage.QUAN_SAT)
     _write_next(
@@ -268,9 +278,7 @@ def _validate(run_dir: Path, artifact: str) -> int:
             "SCRIPT",
         )
         codes_by_beat = {
-            item.beat_id: item.finding_codes
-            for item in review.beat_reviews
-            if item.finding_codes
+            item.beat_id: item.finding_codes for item in review.beat_reviews if item.finding_codes
         }
         style_findings = atomic_style_findings(storyboard)
         for finding in style_findings:
@@ -282,7 +290,9 @@ def _validate(run_dir: Path, artifact: str) -> int:
                 )
         if codes_by_beat:
             beat_ids = tuple(codes_by_beat)
-            codes = tuple(dict.fromkeys(code for values in codes_by_beat.values() for code in values))
+            codes = tuple(
+                dict.fromkeys(code for values in codes_by_beat.values() for code in values)
+            )
             repaired = record_beat_repair(run_dir, "SCRIPT", beat_ids, codes)
             _write_next(
                 run_dir,
@@ -342,12 +352,8 @@ def _validate(run_dir: Path, artifact: str) -> int:
             storyboard = load_json(
                 episode / "Kich_ban" / "atomic_storyboard.json", AtomicStoryboard
             )
-            tts = load_json(
-                episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest
-            )
-            edl = load_json(
-                episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument
-            )
+            tts = load_json(episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest)
+            edl = load_json(episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument)
             if edl != build_atomic_edl(storyboard, tts):
                 raise MvpError("persisted atomic EDL does not match storyboard and TTS")
             advance(run_dir, Stage.CAN_TTS, Stage.DUNG_PROXY)
@@ -452,12 +458,8 @@ def _tts(run_dir: Path) -> int:
 def _render(run_dir: Path, quality: str = "final") -> int:
     state, episode = _episode(run_dir)
     if quality == "proxy" and state.stage is Stage.DUNG_PROXY:
-        edl = load_json(
-            episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument
-        )
-        tts = load_json(
-            episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest
-        )
+        edl = load_json(episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument)
+        tts = load_json(episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest)
         output = run_dir / "proxy" / "review_proxy.mp4"
         result = render_review(
             Path(state.source_video),
@@ -476,12 +478,8 @@ def _render(run_dir: Path, quality: str = "final") -> int:
         print(output)
         return 0
     if quality == "final" and state.stage is Stage.DUNG_VIDEO_CUOI:
-        edl = load_json(
-            episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument
-        )
-        tts = load_json(
-            episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest
-        )
+        edl = load_json(episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument)
+        tts = load_json(episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest)
         output = run_dir / "final_candidate.mp4"
         result = render_review(
             Path(state.source_video),
@@ -500,9 +498,7 @@ def _render(run_dir: Path, quality: str = "final") -> int:
     edl = load_json(episode / "Ke_hoach_canh" / "edl.json", SpanEdlDocument)
     tts = load_json(episode / "TTS" / "span_tts_manifest.json", SpanTtsManifest)
     output = run_dir / "review_candidate.mp4"
-    result = render_review(
-        Path(state.source_video), Path(tts.narration_wav_path), edl, output
-    )
+    result = render_review(Path(state.source_video), Path(tts.narration_wav_path), edl, output)
     dump_json(run_dir / "render_result.json", result)
     extract_program_anchors(output, edl, run_dir / "codex_evidence" / "program")
     advance(run_dir, Stage.DUNG_VIDEO, Stage.KIEM_DINH_VIDEO)
@@ -546,14 +542,10 @@ def _audit_video(run_dir: Path, episode: Path, codex_review: Path | None) -> int
         run_dir / "codex_evidence" / "program" / "anchors.json", FrameAnchorDocument
     )
     render = load_json(run_dir / "render_result.json", RenderResult)
-    report = build_engine_audit(
-        locked, tts, review, source_anchors, program_anchors, render
-    )
+    report = build_engine_audit(locked, tts, review, source_anchors, program_anchors, render)
     dump_json(episode / "Bao_cao" / "kiem_dinh_engine.json", report)
     if not report.passed:
-        codes = tuple(
-            finding.code for finding in report.findings if finding.severity == "ERROR"
-        )
+        codes = tuple(finding.code for finding in report.findings if finding.severity == "ERROR")
         scene_markers = ("SCENE", "EDL", "FOOTAGE", "DRIFT", "VOICE")
         owner = (
             "SUA_EDL"

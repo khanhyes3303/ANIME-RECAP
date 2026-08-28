@@ -22,10 +22,10 @@ def _write(path: Path, payload: dict[str, object]) -> Path:
 
 def _truth(*, excluded: bool = False) -> TruthDocument:
     regions = (
-        SourceRegionAnnotation(
-            "region-001", 0, 1_000, "OPENING", "EXCLUDE", "Opening sequence."
-        ),
-    ) if excluded else ()
+        (SourceRegionAnnotation("region-001", 0, 1_000, "OPENING", "EXCLUDE", "Opening sequence."),)
+        if excluded
+        else ()
+    )
     return TruthDocument(
         events=(
             Event(

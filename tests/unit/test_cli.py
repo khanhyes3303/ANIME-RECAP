@@ -80,12 +80,23 @@ def test_start_revision_accepts_existing_final_without_replacing_it(
     final.parent.mkdir(parents=True)
     final.write_bytes(b"old")
 
-    assert main(
-        [
-            "start", "--anime", "A", "--season", "1", "--episode", "1",
-            "--video", str(source), "--revision",
-        ]
-    ) == 0
+    assert (
+        main(
+            [
+                "start",
+                "--anime",
+                "A",
+                "--season",
+                "1",
+                "--episode",
+                "1",
+                "--video",
+                str(source),
+                "--revision",
+            ]
+        )
+        == 0
+    )
     assert final.read_bytes() == b"old"
 
 

@@ -26,9 +26,9 @@ from .models import (
     ScriptDocument,
     SpanTts,
     SpanTtsManifest,
+    TtsCacheStats,
     TtsCue,
     TtsManifest,
-    TtsCacheStats,
 )
 
 ENDPOINT = "https://api16-normal-v6.tiktokv.com/media/api/text/speech/invoke/"
@@ -173,13 +173,9 @@ class TikTokCapCutProvider:
                 f"{profile.credential_env_name}"
             )
         owned = self._client is None
-        client = self._client or httpx.Client(
-            timeout=policy.request_timeout_milliseconds / 1_000
-        )
+        client = self._client or httpx.Client(timeout=policy.request_timeout_milliseconds / 1_000)
         try:
-            results = tuple(
-                self._one(client, text, credential, profile, policy) for text in chunks
-            )
+            results = tuple(self._one(client, text, credential, profile, policy) for text in chunks)
         finally:
             if owned:
                 client.close()
@@ -318,9 +314,7 @@ def synthesize_script(
         mp3_path.write_bytes(b"".join(chunk.audio for chunk in synthesis.chunks))
         converter(mp3_path, wav_path)
         duration_ms = _wav_duration_ms(wav_path)
-        cue_results.append(
-            TtsCue(cue.cue_id, str(mp3_path), str(wav_path), duration_ms)
-        )
+        cue_results.append(TtsCue(cue.cue_id, str(mp3_path), str(wav_path), duration_ms))
         wav_paths.append(wav_path)
 
     narration_path = output_dir / "narration.wav"

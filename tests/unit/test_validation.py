@@ -20,17 +20,17 @@ from anime_review_mvp.models import (
     SceneShot,
     ScriptDocument,
     SourceRegionAnnotation,
+    SpanSourceRange,
     TruthDocument,
     TtsCue,
     TtsManifest,
-    SpanSourceRange,
 )
 from anime_review_mvp.validation import (
+    atomic_style_findings,
     build_edl_from_scene_packets,
     coverage_ratio,
     cue_source_duration,
     narration_style_findings,
-    atomic_style_findings,
     review_duration_findings,
     validate_audit,
     validate_edl,
@@ -127,9 +127,12 @@ def test_narration_style_accepts_short_natural_cue() -> None:
         "scene-001",
         ("beat-001",),
     )
-    assert narration_style_findings(
-        ScriptDocument((cue,), (Claim("claim-001", "ACTION", "A", ("event-001",)),))
-    ) == ()
+    assert (
+        narration_style_findings(
+            ScriptDocument((cue,), (Claim("claim-001", "ACTION", "A", ("event-001",)),))
+        )
+        == ()
+    )
 
 
 def _atomic_texts(*texts: str) -> AtomicStoryboard:
@@ -139,10 +142,35 @@ def _atomic_texts(*texts: str) -> AtomicStoryboard:
     )
     beats = tuple(
         AtomicBeat(
-            f"beat-{index}", "scene-001", ("event-001",), (f"claim-{index}",),
-            (SpanSourceRange(f"range-{index}", index * 1_000, index * 1_000 + 900, "scene-001", f"beat-{index}", (f"shot-{index}",), ("event-001",), False),),
-            text, ("Jiro",), ("Jiro",), "ACTION", index * 1_000, index * 1_000 + 500,
-            text, (f"frame-{index}.jpg",), 900, None, "", "LOCKED", (),
+            f"beat-{index}",
+            "scene-001",
+            ("event-001",),
+            (f"claim-{index}",),
+            (
+                SpanSourceRange(
+                    f"range-{index}",
+                    index * 1_000,
+                    index * 1_000 + 900,
+                    "scene-001",
+                    f"beat-{index}",
+                    (f"shot-{index}",),
+                    ("event-001",),
+                    False,
+                ),
+            ),
+            text,
+            ("Jiro",),
+            ("Jiro",),
+            "ACTION",
+            index * 1_000,
+            index * 1_000 + 500,
+            text,
+            (f"frame-{index}.jpg",),
+            900,
+            None,
+            "",
+            "LOCKED",
+            (),
         )
         for index, text in enumerate(texts, start=1)
     )
@@ -296,9 +324,7 @@ def test_scene_packet_rejects_shot_outside_scene() -> None:
         packet.end_ms,
         packet.story_purpose,
         packet.event_ids,
-        (
-            SceneShot("shot-001", 0, 11_000, "MUST_KEEP", ("event-001",), "Too long"),
-        ),
+        (SceneShot("shot-001", 0, 11_000, "MUST_KEEP", ("event-001",), "Too long"),),
         packet.beats,
         packet.cue_ids,
     )

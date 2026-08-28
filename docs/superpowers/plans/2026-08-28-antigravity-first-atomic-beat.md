@@ -62,7 +62,9 @@ def test_atomic_storyboard_rejects_multi_action_and_bad_action_window(tmp_path: 
     payload["beats"][0]["visual_fact"] = "Jiro chạy vào sân rồi ông nội đánh cậu."
     payload["beats"][0]["action_window_start_ms"] = 900
     with pytest.raises(MvpError, match="action window|one primary action"):
-        load_atomic_storyboard(write_json(tmp_path / "atomic.json", payload), truth(), shots(), 10_000)
+        load_atomic_storyboard(
+            write_json(tmp_path / "atomic.json", payload), truth(), shots(), 10_000
+        )
 
 
 def test_atomic_storyboard_accepts_multiple_shots_for_one_action(tmp_path: Path) -> None:
@@ -146,10 +148,20 @@ git commit -m "feat: add atomic storyboard contract"
 ```python
 def test_antigravity_workflow_has_no_codex_editor_stage(tmp_path: Path) -> None:
     state = new_state(tmp_path / "run")
-    path = [Stage.CHUAN_BI, Stage.QUAN_SAT, Stage.LAP_STORYBOARD, Stage.VIET_LOI,
-            Stage.PHAN_BIEN_KICH_BAN, Stage.TAO_TTS, Stage.CAN_TTS,
-            Stage.DUNG_PROXY, Stage.PHAN_BIEN_VIDEO, Stage.DUNG_VIDEO_CUOI,
-            Stage.KIEM_DINH_ENGINE, Stage.HOAN_THANH]
+    path = [
+        Stage.CHUAN_BI,
+        Stage.QUAN_SAT,
+        Stage.LAP_STORYBOARD,
+        Stage.VIET_LOI,
+        Stage.PHAN_BIEN_KICH_BAN,
+        Stage.TAO_TTS,
+        Stage.CAN_TTS,
+        Stage.DUNG_PROXY,
+        Stage.PHAN_BIEN_VIDEO,
+        Stage.DUNG_VIDEO_CUOI,
+        Stage.KIEM_DINH_ENGINE,
+        Stage.HOAN_THANH,
+    ]
     assert Stage.CODEX_BIEN_TAP not in path
     assert state.stage is path[0]
 
@@ -223,7 +235,9 @@ def test_operator_job_allows_episode_outputs_but_locks_brain_and_code(tmp_path: 
     assert outputs["critic_script"].endswith("critic_script.json")
     assert outputs["critic_video"].endswith("critic_video.json")
     assert payload["policy_sha256"]
-    assert any(path.endswith("Bo_nao_Antigravity") for path in payload["write_policy"]["read_only_roots"])
+    assert any(
+        path.endswith("Bo_nao_Antigravity") for path in payload["write_policy"]["read_only_roots"]
+    )
     assert any(path.endswith("src") for path in payload["write_policy"]["read_only_roots"])
 ```
 
@@ -274,8 +288,20 @@ git commit -m "feat: grant scoped episode execution to Antigravity"
 ```python
 def test_atomic_tts_reuses_unchanged_beat(tmp_path: Path) -> None:
     provider = CountingProvider()
-    first = synthesize_atomic_beats(storyboard("Cậu lao vào sân."), tmp_path / "out", tmp_path / "cache", provider=provider, converter=fake_converter)
-    second = synthesize_atomic_beats(storyboard("Cậu lao vào sân."), tmp_path / "out2", tmp_path / "cache", provider=provider, converter=fake_converter)
+    first = synthesize_atomic_beats(
+        storyboard("Cậu lao vào sân."),
+        tmp_path / "out",
+        tmp_path / "cache",
+        provider=provider,
+        converter=fake_converter,
+    )
+    second = synthesize_atomic_beats(
+        storyboard("Cậu lao vào sân."),
+        tmp_path / "out2",
+        tmp_path / "cache",
+        provider=provider,
+        converter=fake_converter,
+    )
     assert provider.calls == 1
     assert first.spans[0].cache_key == second.spans[0].cache_key
     assert second.cache_stats.hits == 1
@@ -339,7 +365,9 @@ def test_atomic_edl_rejects_action_window_outside_selected_footage() -> None:
 
 
 def test_atomic_edl_accepts_many_shots_for_one_beat() -> None:
-    edl = build_atomic_edl(atomic_storyboard(source_range=(1_000, 4_000), shot_ids=("s1", "s2")), atomic_tts(3_000))
+    edl = build_atomic_edl(
+        atomic_storyboard(source_range=(1_000, 4_000), shot_ids=("s1", "s2")), atomic_tts(3_000)
+    )
     assert {shot for segment in edl.segments for shot in segment.shot_ids} == {"s1", "s2"}
 ```
 
@@ -347,7 +375,13 @@ def test_atomic_edl_accepts_many_shots_for_one_beat() -> None:
 
 ```python
 def test_atomic_audit_counts_only_evidenced_beats_without_blocking_findings() -> None:
-    report = build_atomic_engine_audit(board_two_beats(), tts_two_beats(), critic_with_error_on_second(), evidence(), render_result())
+    report = build_atomic_engine_audit(
+        board_two_beats(),
+        tts_two_beats(),
+        critic_with_error_on_second(),
+        evidence(),
+        render_result(),
+    )
     assert report.coverage_ratio == "0.5"
     assert report.passed is False
     assert "DIRECT_EVIDENCE_BELOW_90" in {finding.code for finding in report.findings}
@@ -401,12 +435,17 @@ git commit -m "feat: enforce atomic scene voice evidence"
 - [ ] **Step 1: Viết test RED cho một đường chạy không dừng chờ Codex**
 
 ```python
-def test_cli_advances_from_storyboard_to_antigravity_tts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_advances_from_storyboard_to_antigravity_tts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run, episode = prepared_atomic_run(tmp_path, Stage.LAP_STORYBOARD)
     write_atomic_storyboard(episode)
     assert main(["validate", "--run", str(run), "--artifact", "storyboard"]) == 0
     assert read_state(run).stage is Stage.VIET_LOI
-    assert "Codex" not in json.loads((run / "next_action.json").read_text(encoding="utf-8"))["instruction"]
+    assert (
+        "Codex"
+        not in json.loads((run / "next_action.json").read_text(encoding="utf-8"))["instruction"]
+    )
 ```
 
 - [ ] **Step 2: Viết test RED cho proxy không ghi đè thành phẩm**
@@ -574,13 +613,20 @@ git commit -m "docs: make Antigravity the episode operator"
 - [ ] **Step 1: Viết acceptance test RED**
 
 ```python
-def test_one_antigravity_run_reaches_final_without_codex_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_one_antigravity_run_reaches_final_without_codex_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run, episode = execute_fixture_pipeline(tmp_path, monkeypatch)
     assert read_state(run).stage is Stage.HOAN_THANH
     assert (episode / "Thanh_pham" / "review_anime.mp4").is_file()
     assert not (episode / "Kich_ban" / "khoa_cau_canh.json").exists()
     assert not (episode / "Bao_cao_Codex").exists()
-    assert json.loads((episode / "Bao_cao" / "kiem_dinh_engine.json").read_text(encoding="utf-8"))["passed"] is True
+    assert (
+        json.loads((episode / "Bao_cao" / "kiem_dinh_engine.json").read_text(encoding="utf-8"))[
+            "passed"
+        ]
+        is True
+    )
 ```
 
 - [ ] **Step 2: Chạy acceptance test và xác nhận RED**

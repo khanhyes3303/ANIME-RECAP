@@ -187,9 +187,7 @@ def advance(
 ) -> RunState:
     state = read_state(run_dir)
     if state.stage is not expected:
-        raise MvpError(
-            f"persisted stage is {state.stage}; expected {expected} before advancing"
-        )
+        raise MvpError(f"persisted stage is {state.stage}; expected {expected} before advancing")
     if _NEXT_STAGE.get(expected) is not target and (expected, target) not in _LEGACY_TRANSITIONS:
         raise MvpError(f"forbidden workflow transition: {expected} -> {target}")
     if target is Stage.HOAN_THANH and not _engine_audit_passed:

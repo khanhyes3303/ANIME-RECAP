@@ -26,9 +26,9 @@ from anime_review_mvp.tts import (
     default_profile,
     normalize_speech_text,
     plan_chunks,
+    synthesize_atomic_beats,
     synthesize_script,
     synthesize_spans,
-    synthesize_atomic_beats,
 )
 
 
@@ -64,9 +64,7 @@ def test_provider_retries_503_and_keeps_exact_voice(monkeypatch: pytest.MonkeyPa
 def test_missing_session_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANIME_RECAP_TIKTOK_SESSION", raising=False)
     with pytest.raises(MvpError, match="ANIME_RECAP_TIKTOK_SESSION"):
-        TikTokCapCutProvider().synthesize(
-            ("xin chào",), default_profile(), default_policy()
-        )
+        TikTokCapCutProvider().synthesize(("xin chào",), default_profile(), default_policy())
 
 
 class FakeProvider:

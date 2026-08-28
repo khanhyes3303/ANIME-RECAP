@@ -72,8 +72,13 @@ def _documents() -> tuple[
                 "Jiro chạy qua cổng.",
                 (
                     SpanSourceRange(
-                        "range-001", 0, 336_000, "scene-001", "beat-001",
-                        ("shot-001",), ("event-001",),
+                        "range-001",
+                        0,
+                        336_000,
+                        "scene-001",
+                        "beat-001",
+                        ("shot-001",),
+                        ("event-001",),
                     ),
                 ),
             ),
@@ -86,8 +91,13 @@ def _documents() -> tuple[
                 "Rago ngoảnh lại.",
                 (
                     SpanSourceRange(
-                        "range-002", 336_000, 420_000, "scene-002", "beat-002",
-                        ("shot-002",), ("event-002",),
+                        "range-002",
+                        336_000,
+                        420_000,
+                        "scene-002",
+                        "beat-002",
+                        ("shot-002",),
+                        ("event-002",),
                     ),
                 ),
             ),
@@ -187,9 +197,7 @@ def test_engine_audit_weights_verified_spans_by_tts_duration() -> None:
     )
     render = RenderResult("review.mp4", 420_000, 420_000, 420_000, 0, 1, 1)
 
-    report = build_engine_audit(
-        spans, tts, review, source_anchors, final_anchors, render
-    )
+    report = build_engine_audit(spans, tts, review, source_anchors, final_anchors, render)
 
     assert report.coverage_ratio == "0.8"
     assert report.passed is True

@@ -14,8 +14,13 @@ from anime_review_mvp.antigravity import (
 )
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.jsonio import load_json
-from anime_review_mvp.models import AtomicStoryboard, CriticReviewDocument
-from anime_review_mvp.models import Shot, SourceRef, TranscriptDocument
+from anime_review_mvp.models import (
+    AtomicStoryboard,
+    CriticReviewDocument,
+    Shot,
+    SourceRef,
+    TranscriptDocument,
+)
 from anime_review_mvp.workspace import create_job
 
 
@@ -71,7 +76,7 @@ def _script_payload() -> dict[str, object]:
                 "scene_id": "scene-001",
                 "beat_ids": ["beat-001"],
             }
-        ]
+        ],
     }
 
 
@@ -240,15 +245,13 @@ def test_operator_job_points_to_only_one_episode_and_expected_outputs(
     assert str(source_video.resolve()) in payload["write_policy"]["read_only_roots"]
     assert str(paths.root / "Bo_nao_Antigravity") in payload["write_policy"]["read_only_roots"]
     assert "script" not in payload["required_outputs"]
-    assert str(paths.script_dir / "khoa_cau_canh.json") in payload["write_policy"][
-        "read_only_roots"
-    ]
+    assert (
+        str(paths.script_dir / "khoa_cau_canh.json") in payload["write_policy"]["read_only_roots"]
+    )
     assert str(paths.tts_dir.resolve()) in payload["write_policy"]["read_only_roots"]
     assert str(paths.edl_dir.resolve()) in payload["write_policy"]["read_only_roots"]
     assert str(paths.final_dir.resolve()) in payload["write_policy"]["read_only_roots"]
-    assert str(paths.episode_dir / "Bao_cao_Codex") in payload["write_policy"][
-        "read_only_roots"
-    ]
+    assert str(paths.episode_dir / "Bao_cao_Codex") in payload["write_policy"]["read_only_roots"]
 
 
 def test_scene_packet_loader_rejects_extra_fields(tmp_path: Path) -> None:

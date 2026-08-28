@@ -37,10 +37,7 @@ def build_filter_graph(
         start = segment.source_start_ms / 1_000
         end = segment.source_end_ms / 1_000
         label = f"v{index}"
-        filters.append(
-            f"[0:v:0]trim=start={start:.3f}:end={end:.3f},"
-            f"setpts=PTS-STARTPTS[{label}]"
-        )
+        filters.append(f"[0:v:0]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[{label}]")
         labels.append(f"[{label}]")
     if quality == "proxy":
         filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[joined]")
@@ -80,15 +77,17 @@ def build_render_command(
     ]
     if quality == "proxy":
         command.extend(("-preset", "ultrafast", "-crf", "30"))
-    command.extend([
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "aac",
-        "-movflags",
-        "+faststart",
-        str(output),
-    ])
+    command.extend(
+        [
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-movflags",
+            "+faststart",
+            str(output),
+        ]
+    )
     return command
 
 
@@ -169,6 +168,4 @@ def render_review(
         raise MvpError("render inputs must exist")
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(build_render_command(source, narration_wav, edl, output, quality=quality), runner)
-    return probe_render(
-        output, allow_short_fixture=allow_short_fixture, runner=runner
-    )
+    return probe_render(output, allow_short_fixture=allow_short_fixture, runner=runner)

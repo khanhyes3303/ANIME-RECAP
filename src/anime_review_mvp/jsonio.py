@@ -51,10 +51,7 @@ def _from_value(value: Any, expected: Any) -> Any:
         allowed = {field.name for field in fields(expected)}
         if set(value) != allowed:
             raise MvpError("JSON object fields do not match the artifact contract")
-        converted = {
-            name: _from_value(value[name], hints[name])
-            for name in allowed
-        }
+        converted = {name: _from_value(value[name], hints[name]) for name in allowed}
         return expected(**converted)
     if expected is Any:
         return value

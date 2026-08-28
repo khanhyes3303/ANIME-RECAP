@@ -232,11 +232,15 @@ def build_atomic_engine_audit(
         )
     if not 420_000 <= render.duration_ms <= 720_000:
         findings.append(
-            AuditFinding("ERROR", "REVIEW_DURATION_OUT_OF_RANGE", None, "Final duration is invalid.", ())
+            AuditFinding(
+                "ERROR", "REVIEW_DURATION_OUT_OF_RANGE", None, "Final duration is invalid.", ()
+            )
         )
     if render.video_stream_count != 1 or render.audio_stream_count != 1:
         findings.append(
-            AuditFinding("ERROR", "FINAL_STREAM_LAYOUT_INVALID", None, "Final stream layout is invalid.", ())
+            AuditFinding(
+                "ERROR", "FINAL_STREAM_LAYOUT_INVALID", None, "Final stream layout is invalid.", ()
+            )
         )
     if render.drift_ms > 80 or abs(total_ms - render.audio_duration_ms) > 80:
         findings.append(

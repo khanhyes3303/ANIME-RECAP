@@ -166,9 +166,7 @@ def detect_shots(
     ordered = sorted(boundaries)
     return tuple(
         Shot(f"shot-{index:04d}", start, end)
-        for index, (start, end) in enumerate(
-            zip(ordered, ordered[1:], strict=False), start=1
-        )
+        for index, (start, end) in enumerate(zip(ordered, ordered[1:], strict=False), start=1)
     )
 
 
@@ -239,9 +237,7 @@ def extract_span_anchors(
                 ),
                 strict=True,
             ):
-                anchor_id = (
-                    f"{span.span_id}-{source_range.range_id}-{position.lower()}"
-                )
+                anchor_id = f"{span.span_id}-{source_range.range_id}-{position.lower()}"
                 frame = output_dir / f"{anchor_id}.jpg"
                 _run(
                     [

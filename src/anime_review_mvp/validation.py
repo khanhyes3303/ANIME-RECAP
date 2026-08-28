@@ -77,8 +77,7 @@ def narration_style_findings(script: ScriptDocument) -> tuple[AuditFinding, ...]
                     "ERROR",
                     "NARRATION_CUE_TOO_LONG",
                     cue.cue_id,
-                    f"cue has {len(text)} characters; maximum is "
-                    f"{MAX_NARRATION_CUE_CHARS}",
+                    f"cue has {len(text)} characters; maximum is {MAX_NARRATION_CUE_CHARS}",
                     (cue.scene_id, *cue.beat_ids),
                 )
             )
@@ -88,8 +87,7 @@ def narration_style_findings(script: ScriptDocument) -> tuple[AuditFinding, ...]
                     "ERROR",
                     "NARRATION_TOO_MANY_SENTENCES",
                     cue.cue_id,
-                    f"cue has {sentence_count} sentences; maximum is "
-                    f"{MAX_NARRATION_SENTENCES}",
+                    f"cue has {sentence_count} sentences; maximum is {MAX_NARRATION_SENTENCES}",
                     (cue.scene_id, *cue.beat_ids),
                 )
             )
@@ -99,8 +97,7 @@ def narration_style_findings(script: ScriptDocument) -> tuple[AuditFinding, ...]
                     "ERROR",
                     "NARRATION_TOO_MANY_CLAUSES",
                     cue.cue_id,
-                    f"cue has {clause_count} clauses; maximum is "
-                    f"{MAX_NARRATION_CLAUSES}",
+                    f"cue has {clause_count} clauses; maximum is {MAX_NARRATION_CLAUSES}",
                     (cue.scene_id, *cue.beat_ids),
                 )
             )
@@ -246,9 +243,7 @@ def coverage_ratio(script: ScriptDocument, tts: TtsManifest) -> Decimal:
     total = sum(durations.values())
     if total <= 0:
         raise MvpError("TTS duration must be positive")
-    supported = sum(
-        durations[cue.cue_id] for cue in script.cues if cue.directly_supported
-    )
+    supported = sum(durations[cue.cue_id] for cue in script.cues if cue.directly_supported)
     return Decimal(supported) / Decimal(total)
 
 
@@ -279,9 +274,7 @@ def validate_edl(
                 segment.source_end_ms, region.end_ms
             ):
                 raise MvpError("EDL intersects an excluded source region")
-        grouped[segment.cue_id].append(
-            (segment.source_start_ms, segment.source_end_ms)
-        )
+        grouped[segment.cue_id].append((segment.source_start_ms, segment.source_end_ms))
 
     if set(grouped) != set(expected):
         raise MvpError("EDL must provide footage for every TTS cue")
@@ -403,8 +396,7 @@ def validate_scene_packets(
         for scene_shot in packet.shots:
             if scene_shot.role == "MUST_KEEP":
                 has_evidence = bool(scene_shot.event_ids) or any(
-                    scene_shot.shot_id in beat.shot_ids and beat.event_ids
-                    for beat in packet.beats
+                    scene_shot.shot_id in beat.shot_ids and beat.event_ids for beat in packet.beats
                 )
                 if not has_evidence:
                     raise MvpError("MUST_KEEP shot requires event or beat evidence")
@@ -483,9 +475,10 @@ def validate_voice_lock(
     for segment in edl.segments:
         if segment.cue_id not in cue_by_id:
             raise MvpError(f"voice-lock EDL references unknown cue: {segment.cue_id}")
-        if not all(
-            (segment.scene_id, segment.shot_id, segment.beat_id, segment.role)
-        ) or not segment.event_ids:
+        if (
+            not all((segment.scene_id, segment.shot_id, segment.beat_id, segment.role))
+            or not segment.event_ids
+        ):
             raise MvpError("voice-lock EDL segment is missing semantic links")
         if segment.role not in _SCENE_SHOT_ROLES:
             raise MvpError("voice-lock EDL segment role is invalid")
@@ -557,13 +550,10 @@ def validate_voice_lock(
         for previous, current in zip(ordered, ordered[1:], strict=False):
             if current.source_start_ms < previous.source_end_ms:
                 raise MvpError(f"voice-lock EDL footage overlaps for {cue_id}")
-        footage_ms = sum(
-            segment.source_end_ms - segment.source_start_ms for segment in segments
-        )
+        footage_ms = sum(segment.source_end_ms - segment.source_start_ms for segment in segments)
         if abs(footage_ms - expected[cue_id]) > tolerance_ms:
             raise MvpError(
-                f"voice-lock duration for {cue_id} differs from TTS by more than "
-                f"{tolerance_ms} ms"
+                f"voice-lock duration for {cue_id} differs from TTS by more than {tolerance_ms} ms"
             )
         for segment in segments:
             duration_ms = segment.source_end_ms - segment.source_start_ms
@@ -612,9 +602,7 @@ def build_edl_from_scene_packets(
         target_ms = tts_by_cue[cue.cue_id]
         total_ms = sum(shot.end_ms - shot.start_ms for shot, _ in ordered_shots)
         must_keep_ms = sum(
-            shot.end_ms - shot.start_ms
-            for shot, _ in ordered_shots
-            if shot.role == "MUST_KEEP"
+            shot.end_ms - shot.start_ms for shot, _ in ordered_shots if shot.role == "MUST_KEEP"
         )
         if target_ms > total_ms:
             raise MvpError(f"insufficient scene footage for cue {cue.cue_id}")
@@ -633,8 +621,7 @@ def build_edl_from_scene_packets(
                 kept.append((shot, beat_id, start_ms, end_ms))
         if excess_ms:
             raise MvpError(
-                "cannot trim optional footage without cutting MUST_KEEP "
-                f"for cue {cue.cue_id}"
+                f"cannot trim optional footage without cutting MUST_KEEP for cue {cue.cue_id}"
             )
 
         for index, (shot, beat_id, start_ms, end_ms) in enumerate(kept, start=1):
