@@ -1,0 +1,11 @@
+{
+  "cues": [
+    {
+      "cue_id": "cue-001",
+      "text": "Loi review tieng Viet bam sat canh.",
+      "claim_ids": ["claim-001"],
+      "event_ids": ["event-001"],
+      "directly_supported": true
+    }
+  ]
+}

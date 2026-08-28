@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from anime_review_mvp.antigravity import (
+    build_operator_job,
+    load_audit,
+    load_script,
+    load_truth,
+)
+from anime_review_mvp.errors import MvpError
+from anime_review_mvp.models import Shot, SourceRef, TranscriptDocument
+from anime_review_mvp.workspace import create_job
+
+
+def _write(path: Path, payload: dict[str, object]) -> Path:
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _truth_payload() -> dict[str, object]:
+    return {
+        "events": [
+            {
+                "event_id": "event-001",
+                "start_ms": 1_000,
+                "end_ms": 3_000,
+                "characters": ["A"],
+                "description": "A runs through the gate.",
+                "importance": "MAIN_PLOT",
+                "confidence": 0.95,
+            }
+        ],
+        "source_regions": [
+            {
+                "region_id": "region-001",
+                "start_ms": 0,
+                "end_ms": 1_000,
+                "kind": "OPENING",
+                "decision": "EXCLUDE",
+                "reason": "Visible title sequence.",
+            }
+        ],
+        "source_region_scan_complete": True,
+    }
+
+
+def _script_payload() -> dict[str, object]:
+    return {
+        "cues": [
+            {
+                "cue_id": "cue-001",
+                "text": "A phi qua cổng như trễ deadline.",
+                "claim_ids": ["claim-001"],
+                "event_ids": ["event-001"],
+                "directly_supported": True,
+            }
+        ]
+    }
+
+
+def _audit_payload(*, passed: bool = True) -> dict[str, object]:
+    return {"passed": passed, "coverage_ratio": "1", "findings": []}
+
+
+def test_truth_rejects_editorial_jokes(tmp_path: Path) -> None:
+    payload = _truth_payload()
+    events = payload["events"]
+    assert isinstance(events, list)
+    events[0]["editorial_joke"] = "thanh nien bao doi"
+
+    with pytest.raises(MvpError, match="fields"):
+        load_truth(_write(tmp_path / "truth.json", payload), source_duration_ms=10_000)
+
+
+def test_truth_rejects_duplicate_ids_and_out_of_bounds_events(tmp_path: Path) -> None:
+    payload = _truth_payload()
+    events = payload["events"]
+    assert isinstance(events, list)
+    events.append(dict(events[0]))
+
+    with pytest.raises(MvpError, match="duplicate"):
+        load_truth(_write(tmp_path / "truth.json", payload), source_duration_ms=10_000)
+
+    events.pop()
+    events[0]["end_ms"] = 10_001
+    with pytest.raises(MvpError, match="duration"):
+        load_truth(_write(tmp_path / "truth.json", payload), source_duration_ms=10_000)
+
+
+def test_script_requires_claim_and_event_binding(tmp_path: Path) -> None:
+    payload = _script_payload()
+    cues = payload["cues"]
+    assert isinstance(cues, list)
+    cues[0]["event_ids"] = []
+
+    with pytest.raises(MvpError, match="claim and event"):
+        load_script(_write(tmp_path / "script.json", payload))
+
+
+def test_audit_cannot_pass_with_contradiction(tmp_path: Path) -> None:
+    payload = _audit_payload()
+    payload["findings"] = [
+        {
+            "severity": "ERROR",
+            "code": "FACT_CONTRADICTION",
+            "cue_id": "cue-001",
+            "message": "Wrong speaker.",
+            "evidence_refs": ["event-001"],
+        }
+    ]
+
+    with pytest.raises(MvpError, match="ERROR"):
+        load_audit(_write(tmp_path / "audit.json", payload))
+
+
+def test_truth_requires_completed_op_ed_scan(tmp_path: Path) -> None:
+    payload = _truth_payload()
+    payload["source_region_scan_complete"] = False
+
+    with pytest.raises(MvpError, match="source-region"):
+        load_truth(_write(tmp_path / "truth.json", payload), source_duration_ms=10_000)
+
+
+def test_operator_job_points_to_only_one_episode_and_expected_outputs(
+    tmp_path: Path,
+) -> None:
+    source_video = tmp_path / "episode.mp4"
+    source_video.write_bytes(b"media")
+    paths = create_job(tmp_path, "Anime A", 1, 2, source_video)
+    source = SourceRef(str(source_video), "a" * 64, 10_000, 320, 180, "1/1000", 1)
+
+    job_path = build_operator_job(
+        paths,
+        source,
+        TranscriptDocument(language="en", segments=()),
+        (Shot("shot-0001", 0, 10_000),),
+    )
+
+    payload = json.loads(job_path.read_text(encoding="utf-8"))
+    assert payload["anime"] == "Anime A"
+    assert payload["episode"] == 2
+    assert payload["source"]["path"] == str(source_video)
+    assert payload["required_outputs"] == {
+        "truth": str(paths.truth_dir / "su_that_tap_phim.json"),
+        "script": str(paths.script_dir / "kich_ban_review.json"),
+        "audit": str(paths.report_dir / "kiem_dinh.json"),
+    }
