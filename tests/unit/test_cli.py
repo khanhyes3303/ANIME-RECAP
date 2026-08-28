@@ -70,22 +70,55 @@ def test_cli_help_is_printable_on_the_windows_cp1258_console() -> None:
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
 
 
-def test_video_audit_routes_scene_errors_back_to_edl(tmp_path: Path) -> None:
+def test_start_revision_accepts_existing_final_without_replacing_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    source = tmp_path / "episode.mp4"
+    source.write_bytes(b"source")
+    final = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001" / "Thanh_pham" / "review_anime.mp4"
+    final.parent.mkdir(parents=True)
+    final.write_bytes(b"old")
+
+    assert main(
+        [
+            "start", "--anime", "A", "--season", "1", "--episode", "1",
+            "--video", str(source), "--revision",
+        ]
+    ) == 0
+    assert final.read_bytes() == b"old"
+
+
+def test_script_audit_hands_draft_to_codex_editor(tmp_path: Path) -> None:
     episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
     report = episode / "Bao_cao" / "kiem_dinh.json"
+    script = episode / "Kich_ban" / "kich_ban_review.json"
     report.parent.mkdir(parents=True)
+    script.parent.mkdir(parents=True)
     report.write_text(
+        json.dumps({"passed": True, "coverage_ratio": "1", "findings": []}),
+        encoding="utf-8",
+    )
+    script.write_text(
         json.dumps(
             {
-                "passed": False,
-                "coverage_ratio": "1",
-                "findings": [
+                "cues": [
                     {
-                        "severity": "ERROR",
-                        "code": "SCENE_MISMATCH",
                         "cue_id": "cue-001",
-                        "message": "Wrong scene",
-                        "evidence_refs": ["event-001"],
+                        "text": "Jiro lao qua cổng.",
+                        "claim_ids": ["claim-001"],
+                        "event_ids": ["event-001"],
+                        "directly_supported": True,
+                        "scene_id": "scene-001",
+                        "beat_ids": ["beat-001"],
+                    }
+                ],
+                "claims": [
+                    {
+                        "claim_id": "claim-001",
+                        "kind": "ACTION",
+                        "text": "Jiro runs.",
+                        "evidence_event_ids": ["event-001"],
                     }
                 ],
             }
@@ -93,7 +126,7 @@ def test_video_audit_routes_scene_errors_back_to_edl(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     run = tmp_path / "Tam_dang_xu_ly" / "run"
-    new_state(run, stage=Stage.KIEM_DINH_VIDEO, episode_dir=episode)
+    new_state(run, stage=Stage.KIEM_DINH_KICH_BAN, episode_dir=episode)
 
-    assert main(["audit", "--run", str(run), "--phase", "video"]) == 1
-    assert read_state(run).stage is Stage.LAP_EDL
+    assert main(["audit", "--run", str(run), "--phase", "script"]) == 0
+    assert read_state(run).stage is Stage.CODEX_BIEN_TAP

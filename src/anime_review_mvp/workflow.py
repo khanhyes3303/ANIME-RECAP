@@ -13,6 +13,7 @@ class Stage(StrEnum):
     QUAN_SAT = "QUAN_SAT"
     VIET_KICH_BAN = "VIET_KICH_BAN"
     KIEM_DINH_KICH_BAN = "KIEM_DINH_KICH_BAN"
+    CODEX_BIEN_TAP = "CODEX_BIEN_TAP"
     TAO_TTS = "TAO_TTS"
     LAP_EDL = "LAP_EDL"
     DUNG_VIDEO = "DUNG_VIDEO"
@@ -41,12 +42,12 @@ _NEXT_STAGE = {
     Stage.CHUAN_BI: Stage.QUAN_SAT,
     Stage.QUAN_SAT: Stage.VIET_KICH_BAN,
     Stage.VIET_KICH_BAN: Stage.KIEM_DINH_KICH_BAN,
-    Stage.KIEM_DINH_KICH_BAN: Stage.TAO_TTS,
+    Stage.KIEM_DINH_KICH_BAN: Stage.CODEX_BIEN_TAP,
+    Stage.CODEX_BIEN_TAP: Stage.TAO_TTS,
     Stage.TAO_TTS: Stage.LAP_EDL,
     Stage.LAP_EDL: Stage.DUNG_VIDEO,
     Stage.DUNG_VIDEO: Stage.KIEM_DINH_VIDEO,
-    Stage.KIEM_DINH_VIDEO: Stage.DONG_GOI,
-    Stage.DONG_GOI: Stage.HOAN_THANH,
+    Stage.KIEM_DINH_VIDEO: Stage.HOAN_THANH,
 }
 
 
@@ -116,7 +117,7 @@ def advance(
     expected: Stage,
     target: Stage,
     *,
-    _package_completed: bool = False,
+    _engine_audit_passed: bool = False,
 ) -> RunState:
     state = read_state(run_dir)
     if state.stage is not expected:
@@ -125,8 +126,8 @@ def advance(
         )
     if _NEXT_STAGE.get(expected) is not target:
         raise MvpError(f"forbidden workflow transition: {expected} -> {target}")
-    if target is Stage.HOAN_THANH and not _package_completed:
-        raise MvpError("only successful package finalization may mark a run complete")
+    if target is Stage.HOAN_THANH and not _engine_audit_passed:
+        raise MvpError("only a successful engine audit may mark a run complete")
     state = replace(state, stage=target)
     _write_state(state)
     return state
@@ -142,7 +143,7 @@ def record_repair(run_dir: Path, owner: str, codes: tuple[str, ...]) -> RunState
     if len(history) >= 3:
         target = Stage.CAN_CON_NGUOI_XU_LY
     else:
-        target = Stage.VIET_KICH_BAN if owner == "SUA_NOI_DUNG" else Stage.LAP_EDL
+        target = Stage.CODEX_BIEN_TAP if owner == "SUA_NOI_DUNG" else Stage.LAP_EDL
     state = replace(state, stage=target, repair_history=history)
     _write_state(state)
     return state

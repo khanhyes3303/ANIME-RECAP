@@ -54,6 +54,8 @@ def build_engine_audit(
     final_anchors: FrameAnchorDocument,
     render: RenderResult,
 ) -> EngineAuditReport:
+    if spans.owner != "CODEX":
+        raise MvpError("locked narration owner must be CODEX")
     if review.owner != "CODEX":
         raise MvpError("semantic review owner must be CODEX")
 

@@ -16,6 +16,7 @@ from .models import (
     NarrationSpanDocument,
     Shot,
     SourceRef,
+    SpanEdlDocument,
     TranscriptDocument,
     TranscriptSegment,
     TranscriptWord,
@@ -269,6 +270,57 @@ def extract_span_anchors(
                         str(frame.resolve()),
                     )
                 )
+    result = FrameAnchorDocument(tuple(anchors))
+    dump_json(output_dir / "anchors.json", result)
+    return result
+
+
+def extract_program_anchors(
+    video: Path,
+    edl: SpanEdlDocument,
+    output_dir: Path,
+    *,
+    runner: Runner = subprocess.run,
+) -> FrameAnchorDocument:
+    if not video.is_file():
+        raise MvpError(f"anchor video does not exist: {video}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    anchors: list[FrameAnchor] = []
+    for segment in edl.segments:
+        for position, timestamp_ms in zip(
+            ("START", "MIDDLE", "END"),
+            _anchor_timestamps(segment.program_start_ms, segment.program_end_ms),
+            strict=True,
+        ):
+            anchor_id = f"{segment.span_id}-{segment.range_id}-program-{position.lower()}"
+            frame = output_dir / f"{anchor_id}.jpg"
+            _run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-ss",
+                    f"{timestamp_ms / 1_000:.3f}",
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
+                    str(frame),
+                ],
+                runner,
+            )
+            anchors.append(
+                FrameAnchor(
+                    anchor_id,
+                    segment.span_id,
+                    segment.range_id,
+                    "PROGRAM",
+                    position,
+                    timestamp_ms,
+                    str(frame.resolve()),
+                )
+            )
     result = FrameAnchorDocument(tuple(anchors))
     dump_json(output_dir / "anchors.json", result)
     return result

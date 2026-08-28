@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -130,6 +131,34 @@ def test_semantic_review_schema_has_no_passed_field(tmp_path: Path) -> None:
 
     with pytest.raises(MvpError, match="artifact contract"):
         load_json(_write(tmp_path / "codex_review.json", payload), CodexSemanticReview)
+
+
+def test_engine_audit_rejects_non_codex_locked_spans() -> None:
+    spans, tts, source_anchors, final_anchors = _documents()
+    reviews = tuple(
+        SpanSemanticReview(
+            span.span_id,
+            True,
+            (),
+            tuple(
+                anchor.anchor_id
+                for anchor in (*source_anchors.anchors, *final_anchors.anchors)
+                if anchor.span_id == span.span_id
+            ),
+            "Khớp.",
+        )
+        for span in spans.spans
+    )
+
+    with pytest.raises(MvpError, match="locked narration owner must be CODEX"):
+        build_engine_audit(
+            replace(spans, owner="ANTIGRAVITY"),
+            tts,
+            CodexSemanticReview("CODEX", reviews),
+            source_anchors,
+            final_anchors,
+            RenderResult("review.mp4", 420_000, 420_000, 420_000, 0, 1, 1),
+        )
 
 
 def test_engine_audit_weights_verified_spans_by_tts_duration() -> None:

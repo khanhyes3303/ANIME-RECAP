@@ -10,6 +10,7 @@ from anime_review_mvp.errors import MvpError
 from anime_review_mvp.media import (
     detect_shots,
     extract_inspection_assets,
+    extract_program_anchors,
     extract_span_anchors,
     probe_source,
     transcribe_english,
@@ -19,6 +20,8 @@ from anime_review_mvp.models import (
     NarrationSpan,
     NarrationSpanDocument,
     Shot,
+    SpanEdlDocument,
+    SpanEdlSegment,
     SpanSourceRange,
 )
 
@@ -169,3 +172,32 @@ def test_extract_span_anchors_requests_start_middle_and_end(tmp_path: Path) -> N
         "3.920",
     ]
     assert (output_dir / "anchors.json").is_file()
+
+
+def test_extract_program_anchors_uses_edl_program_timing(tmp_path: Path) -> None:
+    video = tmp_path / "candidate.mp4"
+    video.write_bytes(b"media")
+    runner = FakeRunner()
+    edl = SpanEdlDocument(
+        (
+            SpanEdlSegment(
+                "segment-001",
+                "span-001",
+                10_000,
+                12_000,
+                2_000,
+                4_000,
+                "range-001",
+                "scene-001",
+                "beat-001",
+                ("shot-001",),
+                ("event-001",),
+                False,
+            ),
+        )
+    )
+
+    anchors = extract_program_anchors(video, edl, tmp_path / "program", runner=runner)
+
+    assert [anchor.timestamp_ms for anchor in anchors.anchors] == [2_080, 3_000, 3_920]
+    assert all(anchor.timeline == "PROGRAM" for anchor in anchors.anchors)
