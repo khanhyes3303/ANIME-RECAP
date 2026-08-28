@@ -7,6 +7,7 @@ from .errors import MvpError
 from .jsonio import dump_json, load_json
 from .models import (
     AuditReport,
+    ScenePacketDocument,
     ScriptDocument,
     Shot,
     SourceRef,
@@ -19,7 +20,10 @@ from .workspace import JobPaths
 @dataclass(frozen=True, slots=True)
 class RequiredOutputs:
     truth: str
+    scene_packets: str
     script: str
+    tts: str
+    edl: str
     audit: str
 
 
@@ -49,7 +53,10 @@ def build_operator_job(
         shots=shots,
         required_outputs=RequiredOutputs(
             truth=str(paths.truth_dir / "su_that_tap_phim.json"),
+            scene_packets=str(paths.truth_dir / "scene_packets.json"),
             script=str(paths.script_dir / "kich_ban_review.json"),
+            tts=str(paths.tts_dir / "tts_manifest.json"),
+            edl=str(paths.edl_dir / "edl.json"),
             audit=str(paths.report_dir / "kiem_dinh.json"),
         ),
     )
@@ -82,10 +89,22 @@ def load_script(path: Path) -> ScriptDocument:
     _reject_duplicate_ids(script.claims, "claim_id")
     claim_ids = {claim.claim_id for claim in script.claims}
     for cue in script.cues:
+        if not cue.scene_id:
+            raise MvpError(f"cue {cue.cue_id} requires scene_id")
+        if not cue.beat_ids:
+            raise MvpError(f"cue {cue.cue_id} requires beat_ids")
         unknown = set(cue.claim_ids) - claim_ids
         if unknown:
             raise MvpError(f"cue references unknown claim IDs: {sorted(unknown)}")
     return script
+
+
+def load_scene_packets(path: Path) -> ScenePacketDocument:
+    document = load_json(path, ScenePacketDocument)
+    scene_ids = [packet.scene_id for packet in document.packets]
+    if len(scene_ids) != len(set(scene_ids)):
+        raise MvpError("scene packet document contains duplicate scene IDs")
+    return document
 
 
 def load_audit(path: Path) -> AuditReport:

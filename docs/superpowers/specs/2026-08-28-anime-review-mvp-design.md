@@ -1,5 +1,8 @@
 # Thiết kế MVP hệ thống review anime
 
+> Bản đặc tả này đã được mở rộng với mô hình `scene → shot → beat → voice cue →
+> EDL`. Scene là đơn vị kể chuyện; shot chỉ là đơn vị cắt hình kỹ thuật.
+
 ## 1. Mục tiêu
 
 Xây một dự án clean-room tối giản trong `D:\FINAL REVIEW ANIME` để Antigravity
@@ -138,7 +141,10 @@ trọng và mức chắc chắn. Lượt này không viết joke hoặc narratio
 Chỉ dùng sổ sự thật đã tạo để chọn cốt truyện chính, thiết lập quan trọng cho phần sau,
 cảnh hành động, phản ứng, fan-service và tình huống hài có giá trị. Kịch bản tiếng Việt
 phải nằm trong ngân sách thời lượng 7–12 phút theo tốc độ thật của TTS. Mỗi cue chứa
-text, các mệnh đề nguyên tử và danh sách ID sự kiện/cảnh hỗ trợ.
+text, các mệnh đề nguyên tử và danh sách ID sự kiện/cảnh hỗ trợ. Biên kịch phải làm
+việc trên `ScenePacket`, không viết narration từ một danh sách shot rời rạc. Một scene
+có thể dài 20–60 giây hoặc hơn và chứa nhiều shot; không có quy tắc cố định kiểu “mỗi
+6 giây một câu”.
 
 ### 8.3. Kiểm định viên
 
@@ -168,6 +174,62 @@ Ngưỡng 80% không cho phép 20% sai sự thật. Mâu thuẫn cốt truyện,
 hệ, sai người nói hoặc bịa sự kiện có mức dung sai bằng 0. Phần không có hỗ trợ trực
 tiếp chỉ được là cầu nối, nhận xét hoặc joke không tạo thêm sự kiện.
 
+## 9.1. Scene packet, beat và khóa voice
+
+`ScenePacket` là hợp đồng trung gian bắt buộc giữa quan sát và dựng video. Nó giữ ngữ
+cảnh kể chuyện ở cấp scene, đồng thời bảo toàn thứ tự và ranh giới của các shot:
+
+```text
+ScenePacket
+├── scene_id, source_start_ms, source_end_ms
+├── story_purpose và event_ids
+├── shots[] theo đúng thứ tự nguồn
+│   ├── shot_id, source_start_ms, source_end_ms
+│   ├── role: MUST_KEEP | OPTIONAL | TRANSITION
+│   └── event_ids và lý do giữ/cắt
+├── beats[] theo các mốc hành động hoặc phản ứng
+│   ├── beat_id, source_start_ms, source_end_ms
+│   ├── event_ids và shot_ids bắt buộc nhìn thấy
+│   └── cue_ids liên quan
+└── cue_ids và các ràng buộc dựng
+```
+
+Các quy tắc bắt buộc:
+
+1. `MUST_KEEP` chứa hành động, kết quả, nhân vật hoặc thông tin nhân quả cần để hiểu
+   scene. Không được cắt chỉ vì cue voice ngắn.
+2. `OPTIONAL` và `TRANSITION` là vùng đầu tiên được phép cắt khi cần đạt 7–12 phút.
+3. Một cue voice trong MVP thuộc về một scene và có thể phủ nhiều shot trong scene đó;
+   không ép một shot phải có một câu thoại riêng. Khi chuyển sang scene khác thì tách
+   cue hoặc tạo beat chuyển cảnh có liên kết rõ ràng.
+4. Beat có mốc quan trọng phải được neo bằng khoảng thời gian nguồn. Câu voice mô tả
+   beat chỉ được đặt trong cue có liên kết tới beat đó.
+5. EDL phải tham chiếu ngược được `scene_id`, `shot_id`, `beat_id` và `event_ids`.
+   Validator sẽ từ chối EDL chỉ đúng thời lượng nhưng không chứng minh được nó đang
+   hiển thị scene nào.
+
+Việc khớp thời lượng diễn ra sau khi tạo TTS thật:
+
+```text
+chọn scene + shot bắt buộc
+→ viết cue/claim
+→ tạo TTS và đo duration WAV thật
+→ cắt shot tùy chọn hoặc sửa/chia cue
+→ tạo EDL
+→ render và kiểm tra lại tại thời điểm cue
+```
+
+Nếu TTS dài hơn phần hình hợp lệ, Antigravity phải rút gọn lời, chia cue hoặc bổ sung
+shot liên quan trong cùng scene. Nếu TTS ngắn hơn tổng shot `MUST_KEEP`, nó phải chia
+beat/cue hoặc rút ngắn narration; không được tăng tốc, đứng hình, lặp hình hay thêm
+cảnh vô nghĩa. Sai số chỉ dành cho làm tròn frame/audio (mặc định ±40 ms mỗi cue),
+không phải giấy phép chỉnh tốc độ.
+
+“Khớp voice” ở đây là khớp ngữ nghĩa và mốc hành động với hình ảnh. Đây là narration
+review tiếng Việt, không phải lồng tiếng thay cho nhân vật; mọi lời thoại nhân vật được
+nhắc lại phải có transcript hoặc event làm bằng chứng. Audio dub tiếng Anh luôn bị tắt
+ở đầu ra.
+
 ## 10. TTS
 
 MVP giữ đúng hành vi đã dùng trong V4:
@@ -186,7 +248,10 @@ provider hoặc nội dung.
 ## 11. EDL và render
 
 EDL là danh sách đoạn nguồn theo thứ tự cốt truyện, mỗi đoạn có source start/end,
-program start/end, cue narration và vai trò nội dung. Renderer chỉ được:
+program start/end, `scene_id`, `shot_id`, `beat_id`, `event_ids`, `cue_id` và vai trò
+nội dung. Các đoạn của cùng cue phải giữ thứ tự nguồn, và tổng thời lượng hình hợp lệ
+của cue phải khớp duration WAV thực tế trong sai số kỹ thuật cho phép. Renderer chỉ
+được:
 
 - trim cảnh đã chọn;
 - ghép theo EDL;
@@ -209,10 +274,16 @@ Các hard gate trước khi đóng gói:
 - Video giữ chuyển động 1:1, không freeze/loop/time-stretch.
 - MP4 không chứa audio nguồn, nhạc nền hoặc audio stream ngoài TTS.
 - OP/ED/credit/preview không xuất hiện nếu không có quyết định giữ kèm lý do cốt truyện.
+- Mỗi đoạn EDL truy ngược được về scene/shot/beat/event; không có cue “mồ côi” hoặc
+  shot chính bị cắt mà không có quyết định biên tập hợp lệ.
 
-Lỗi transcript hoặc quan sát thiếu bằng chứng quay lại `QUAN_SAT`. Lỗi narration quay
-lại `VIET_KICH_BAN`. Lỗi cảnh hoặc nhịp quay lại `LAP_EDL`. Lỗi TTS/render kỹ thuật
-được retry có giới hạn tại đúng bước. Không bước nào được sửa cốt truyện để né lỗi.
+Lỗi transcript hoặc quan sát thiếu bằng chứng quay lại `QUAN_SAT`. Lỗi narration hoặc
+claim quay lại `VIET_KICH_BAN`. Lỗi scene/beat/shot hoặc nhịp quay lại `LAP_EDL`. Lỗi
+TTS/render kỹ thuật được retry tại đúng bước. Antigravity tự chạy các vòng này trong
+một agent run; người dùng không phải duyệt từng vòng. MVP giữ giới hạn tối đa ba vòng
+sửa cho một tập để tránh lặp vô hạn, nhưng việc thiếu quota không phải lý do để hạ
+tiêu chuẩn. Hết giới hạn mà chưa đạt thì kết thúc `CAN_CON_NGUOI_XU_LY`, tuyệt đối
+không xuất PASS.
 
 ## 13. Đóng gói và dọn dẹp
 
@@ -232,7 +303,11 @@ phải kiểm tra đường dẫn tuyệt đối nằm trong đúng thư mục r
 MVP cần các test tự động tối thiểu:
 
 - Unit test cho hợp đồng sổ sự thật, kịch bản, cue và EDL.
+- Unit test scene packet: scene chứa nhiều shot, giữ thứ tự, bảo vệ `MUST_KEEP`, và
+  EDL phải liên kết được scene/shot/beat/event.
 - Unit test tính tỷ lệ khớp 80% và dung sai 0 cho mâu thuẫn sự thật.
+- Unit test timing-fit: dùng duration WAV thật để sửa cue/cắt shot tùy chọn; từ chối
+  speed-up, freeze, loop hoặc cắt mất shot bắt buộc.
 - Unit test TTS bằng HTTP client giả; không gọi TikTok trong test mặc định.
 - Unit test từ chối speed/freeze/loop và từ chối map audio nguồn.
 - Unit test bảo vệ ranh giới dọn file tạm.

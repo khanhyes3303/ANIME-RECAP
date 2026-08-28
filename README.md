@@ -27,8 +27,14 @@ uv run python run_episode.py start --anime "Ten Anime" --season 1 --episode 1 --
 
 Antigravity đọc [GEMINI.md](Bo_nao_Antigravity/GEMINI.md) và file
 `next_action.json` trong thư mục run được in ra. Nó tự gọi tuần tự các lệnh nội bộ
-`prepare`, `validate`, `audit`, `tts`, `render`, `package`; người dùng không phải chạy
-từng lệnh bằng tay. Không đưa nhiều tập vào cùng một run.
+`prepare`, `validate truth`, `validate scene`, `validate script`, `audit`, `tts`,
+`validate edl`, `render`, `audit video`, `package`; người dùng không phải chạy từng
+lệnh bằng tay. Không đưa nhiều tập vào cùng một run.
+
+Trong pipeline, **scene** là đơn vị kể chuyện và **shot** là các đoạn hình bên trong
+scene. Antigravity tạo `scene_packets.json`, đánh dấu shot chính/phụ và chia các beat
+hành động. Sau khi TTS được tạo, engine đo WAV thật và sinh EDL; voice cue có thể phủ
+nhiều shot nhưng luôn thuộc đúng scene. Shot `MUST_KEEP` không bị cắt chỉ vì lời ngắn.
 
 Thành phẩm nằm tại:
 

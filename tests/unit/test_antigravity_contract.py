@@ -8,6 +8,7 @@ import pytest
 from anime_review_mvp.antigravity import (
     build_operator_job,
     load_audit,
+    load_scene_packets,
     load_script,
     load_truth,
 )
@@ -65,6 +66,43 @@ def _script_payload() -> dict[str, object]:
                 "claim_ids": ["claim-001"],
                 "event_ids": ["event-001"],
                 "directly_supported": True,
+                "scene_id": "scene-001",
+                "beat_ids": ["beat-001"],
+            }
+        ]
+    }
+
+
+def _scene_packets_payload() -> dict[str, object]:
+    return {
+        "packets": [
+            {
+                "scene_id": "scene-001",
+                "start_ms": 1_000,
+                "end_ms": 3_000,
+                "story_purpose": "A chạy qua cổng.",
+                "event_ids": ["event-001"],
+                "shots": [
+                    {
+                        "shot_id": "shot-0001",
+                        "start_ms": 1_000,
+                        "end_ms": 3_000,
+                        "role": "MUST_KEEP",
+                        "event_ids": ["event-001"],
+                        "reason": "Hành động chính.",
+                    }
+                ],
+                "beats": [
+                    {
+                        "beat_id": "beat-001",
+                        "start_ms": 1_000,
+                        "end_ms": 3_000,
+                        "event_ids": ["event-001"],
+                        "shot_ids": ["shot-0001"],
+                        "cue_ids": ["cue-001"],
+                    }
+                ],
+                "cue_ids": ["cue-001"],
             }
         ]
     }
@@ -119,6 +157,29 @@ def test_script_rejects_a_cue_bound_to_an_unknown_claim(tmp_path: Path) -> None:
         load_script(_write(tmp_path / "script.json", payload))
 
 
+def test_script_requires_scene_and_beat_binding(tmp_path: Path) -> None:
+    payload = _script_payload()
+    cues = payload["cues"]
+    assert isinstance(cues, list)
+    cues[0].pop("scene_id")
+    with pytest.raises(MvpError, match="fields"):
+        load_script(_write(tmp_path / "script.json", payload))
+
+    payload = _script_payload()
+    cues = payload["cues"]
+    assert isinstance(cues, list)
+    cues[0]["scene_id"] = ""
+    with pytest.raises(MvpError, match="scene_id"):
+        load_script(_write(tmp_path / "script.json", payload))
+
+    payload = _script_payload()
+    cues = payload["cues"]
+    assert isinstance(cues, list)
+    cues[0]["beat_ids"] = []
+    with pytest.raises(MvpError, match="beat_ids"):
+        load_script(_write(tmp_path / "script.json", payload))
+
+
 def test_audit_cannot_pass_with_contradiction(tmp_path: Path) -> None:
     payload = _audit_payload()
     payload["findings"] = [
@@ -164,6 +225,18 @@ def test_operator_job_points_to_only_one_episode_and_expected_outputs(
     assert payload["source"]["path"] == str(source_video)
     assert payload["required_outputs"] == {
         "truth": str(paths.truth_dir / "su_that_tap_phim.json"),
+        "scene_packets": str(paths.truth_dir / "scene_packets.json"),
         "script": str(paths.script_dir / "kich_ban_review.json"),
+        "tts": str(paths.tts_dir / "tts_manifest.json"),
+        "edl": str(paths.edl_dir / "edl.json"),
         "audit": str(paths.report_dir / "kiem_dinh.json"),
     }
+
+
+def test_scene_packet_loader_rejects_extra_fields(tmp_path: Path) -> None:
+    payload = _scene_packets_payload()
+    packets = payload["packets"]
+    assert isinstance(packets, list)
+    packets[0]["unexpected"] = True
+    with pytest.raises(MvpError, match="fields"):
+        load_scene_packets(_write(tmp_path / "scene_packets.json", payload))

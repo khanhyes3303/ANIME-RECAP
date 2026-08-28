@@ -13,7 +13,9 @@
       "text": "Nhân vật A đứng hình suốt tám giây, bình tĩnh đến mức deadline cũng phải ngại.",
       "claim_ids": ["claim-001"],
       "event_ids": ["event-001"],
-      "directly_supported": true
+      "directly_supported": true,
+      "scene_id": "scene-001",
+      "beat_ids": ["beat-001"]
     }
   ]
 }

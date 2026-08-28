@@ -1,0 +1,32 @@
+{
+  "packets": [
+    {
+      "scene_id": "scene-001",
+      "start_ms": 1000,
+      "end_ms": 3000,
+      "story_purpose": "Một scene mẫu có hành động chính.",
+      "event_ids": ["event-001"],
+      "shots": [
+        {
+          "shot_id": "shot-0001",
+          "start_ms": 1000,
+          "end_ms": 3000,
+          "role": "MUST_KEEP",
+          "event_ids": ["event-001"],
+          "reason": "Giữ hành động chính."
+        }
+      ],
+      "beats": [
+        {
+          "beat_id": "beat-001",
+          "start_ms": 1000,
+          "end_ms": 3000,
+          "event_ids": ["event-001"],
+          "shot_ids": ["shot-0001"],
+          "cue_ids": ["cue-001"]
+        }
+      ],
+      "cue_ids": ["cue-001"]
+    }
+  ]
+}

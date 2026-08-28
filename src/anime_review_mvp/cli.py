@@ -8,6 +8,7 @@ from pathlib import Path
 from .antigravity import (
     build_operator_job,
     load_audit,
+    load_scene_packets,
     load_script,
     load_truth,
 )
@@ -19,16 +20,19 @@ from .media import (
     probe_source,
     transcribe_english,
 )
-from .models import EdlDocument, SourceRef, TtsManifest
+from .models import EdlDocument, ShotDocument, SourceRef, TtsManifest
 from .package import finalize_run
 from .render import render_review
 from .tts import synthesize_script
 from .validation import (
+    build_edl_from_scene_packets,
     coverage_ratio,
     validate_audit,
     validate_edl,
+    validate_scene_packets,
     validate_script,
     validate_truth,
+    validate_voice_lock,
 )
 from .workflow import Stage, advance, new_state, read_state, record_repair
 from .workspace import create_job
@@ -48,7 +52,9 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--run", required=True, type=Path)
     validate = subparsers.add_parser("validate")
     validate.add_argument("--run", required=True, type=Path)
-    validate.add_argument("--artifact", required=True, choices=("truth", "script", "edl"))
+    validate.add_argument(
+        "--artifact", required=True, choices=("truth", "scene", "script", "edl")
+    )
     tts = subparsers.add_parser("tts")
     tts.add_argument("--run", required=True, type=Path)
     render = subparsers.add_parser("render")
@@ -110,6 +116,7 @@ def _prepare(run_dir: Path) -> int:
         Path(state.source_video), run_dir / "transcript_english.json"
     )
     shots = detect_shots(Path(state.source_video), source.duration_ms)
+    dump_json(run_dir / "shots.json", ShotDocument(shots))
     extract_inspection_assets(
         Path(state.source_video), shots, run_dir / "inspection_frames"
     )
@@ -118,7 +125,8 @@ def _prepare(run_dir: Path) -> int:
     advance(run_dir, Stage.CHUAN_BI, Stage.QUAN_SAT)
     _write_next(
         run_dir,
-        "QUAN_SAT theo Bo_nao_Antigravity/GEMINI.md; ghi su_that_tap_phim.json. "
+        "QUAN_SAT theo Bo_nao_Antigravity/GEMINI.md; ghi su_that_tap_phim.json "
+        "và scene_packets.json. "
         f"Job: {job_path}",
     )
     print(job_path)
@@ -156,6 +164,15 @@ def _validate(run_dir: Path, artifact: str) -> int:
             source_duration_ms=source.duration_ms,
         )
         validate_truth(truth, source.duration_ms)
+        _write_next(run_dir, "Kiểm tra scene_packets.json rồi chạy validate --artifact scene.")
+    elif artifact == "scene":
+        truth = load_truth(
+            episode / "Su_that" / "su_that_tap_phim.json",
+            source_duration_ms=source.duration_ms,
+        )
+        packets = load_scene_packets(episode / "Su_that" / "scene_packets.json")
+        shots = load_json(run_dir / "shots.json", ShotDocument)
+        validate_scene_packets(packets.packets, truth, shots.shots, source.duration_ms)
         advance(run_dir, Stage.QUAN_SAT, Stage.VIET_KICH_BAN)
         _write_next(run_dir, "VIET_KICH_BAN và ghi kich_ban_review.json.")
     elif artifact == "script":
@@ -174,7 +191,10 @@ def _validate(run_dir: Path, artifact: str) -> int:
         )
         tts = load_json(episode / "TTS" / "tts_manifest.json", TtsManifest)
         edl = load_json(episode / "Ke_hoach_canh" / "edl.json", EdlDocument)
+        script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
         validate_edl(edl, source.duration_ms, tts, truth)
+        packets = load_scene_packets(episode / "Su_that" / "scene_packets.json")
+        validate_voice_lock(packets.packets, script, tts, edl)
         advance(run_dir, Stage.LAP_EDL, Stage.DUNG_VIDEO)
         _write_next(run_dir, "Chạy render để dựng video TTS-only.")
     return 0
@@ -185,9 +205,15 @@ def _tts(run_dir: Path) -> int:
     if read_state(run_dir).stage is not Stage.TAO_TTS:
         raise MvpError("tts requires TAO_TTS stage")
     script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
-    synthesize_script(script, episode / "TTS")
+    tts = synthesize_script(script, episode / "TTS")
+    packets = load_scene_packets(episode / "Su_that" / "scene_packets.json")
+    edl = build_edl_from_scene_packets(packets.packets, script, tts)
+    dump_json(episode / "Ke_hoach_canh" / "edl.json", edl)
     advance(run_dir, Stage.TAO_TTS, Stage.LAP_EDL)
-    _write_next(run_dir, "Lập edl.json khớp từng cue rồi chạy validate --artifact edl.")
+    _write_next(
+        run_dir,
+        "EDL đã tạo từ scene packet và duration TTS thật; chạy validate --artifact edl.",
+    )
     return 0
 
 
@@ -231,6 +257,9 @@ def _audit(run_dir: Path, phase: str) -> int:
     else:
         script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
         tts = load_json(episode / "TTS" / "tts_manifest.json", TtsManifest)
+        edl = load_json(episode / "Ke_hoach_canh" / "edl.json", EdlDocument)
+        packets = load_scene_packets(episode / "Su_that" / "scene_packets.json")
+        validate_voice_lock(packets.packets, script, tts, edl)
         measured = coverage_ratio(script, tts)
         validate_audit(audit, measured)
         advance(run_dir, Stage.KIEM_DINH_VIDEO, Stage.DONG_GOI)

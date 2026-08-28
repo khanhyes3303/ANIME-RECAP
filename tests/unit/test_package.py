@@ -14,6 +14,7 @@ def _completed_run(tmp_path: Path) -> tuple[Path, Path, Path]:
     episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
     files = {
         "Su_that/su_that_tap_phim.json": {"events": []},
+        "Su_that/scene_packets.json": {"packets": []},
         "Kich_ban/kich_ban_review.json": {"cues": []},
         "TTS/tts_manifest.json": {"cues": []},
         "Ke_hoach_canh/edl.json": {"segments": []},
@@ -48,6 +49,7 @@ def test_zip_contains_reports_but_no_video_bytes(tmp_path: Path) -> None:
         "bao_cao.md",
         "bao_cao.json",
         "kich_ban_review.json",
+        "scene_packets.json",
         "edl.json",
         "run_state.json",
     } <= names

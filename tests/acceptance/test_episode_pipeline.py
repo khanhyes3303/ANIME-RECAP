@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import wave
@@ -109,6 +110,7 @@ def test_one_episode_reaches_package_without_network_or_real_model(
     fixtures = Path(__file__).parents[1] / "fixtures" / "operator_artifacts"
     copies = {
         "su_that_tap_phim.json": episode / "Su_that" / "su_that_tap_phim.json",
+        "scene_packets.json": episode / "Su_that" / "scene_packets.json",
         "kich_ban_review.json": episode / "Kich_ban" / "kich_ban_review.json",
         "edl.json": episode / "Ke_hoach_canh" / "edl.json",
         "kiem_dinh.json": episode / "Bao_cao" / "kiem_dinh.json",
@@ -117,9 +119,15 @@ def test_one_episode_reaches_package_without_network_or_real_model(
         shutil.copy2(fixtures / name, destination)
 
     assert cli.main(["validate", "--run", str(run), "--artifact", "truth"]) == 0
+    assert cli.main(["validate", "--run", str(run), "--artifact", "scene"]) == 0
     assert cli.main(["validate", "--run", str(run), "--artifact", "script"]) == 0
     assert cli.main(["audit", "--run", str(run), "--phase", "script"]) == 0
     assert cli.main(["tts", "--run", str(run)]) == 0
+    generated_edl = json.loads(
+        (episode / "Ke_hoach_canh" / "edl.json").read_text(encoding="utf-8")
+    )
+    assert generated_edl["segments"][0]["scene_id"] == "scene-001"
+    assert generated_edl["segments"][0]["beat_id"] == "beat-001"
     assert cli.main(["validate", "--run", str(run), "--artifact", "edl"]) == 0
     assert cli.main(["render", "--run", str(run)]) == 0
     assert cli.main(["audit", "--run", str(run), "--phase", "video"]) == 0

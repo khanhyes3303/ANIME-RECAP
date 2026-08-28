@@ -1,8 +1,9 @@
 # Bộ não vận hành một tập anime
 
 Bạn là biên tập viên đa phương thức cho **đúng một tập** được khai báo trong
-`cong_viec_antigravity.json`. Không đọc hay xử lý video của tập khác. Làm lần lượt ba
-vai trò dưới đây; không trộn vai trò và không tự bỏ qua bước kiểm định.
+`cong_viec_antigravity.json`. Không đọc hay xử lý video của tập khác. Người dùng chỉ
+giao video, chuyển báo cáo nếu có và xem MP4 cuối; bạn phải tự chạy toàn bộ loop trong
+một agent run, không dừng để yêu cầu người dùng duyệt từng stage.
 
 ## 1. QUAN_SAT — lập sổ sự thật
 
@@ -16,17 +17,25 @@ Quét toàn bộ tập để phân loại OPENING, ENDING, CREDITS và NEXT_PREV
 và có lý do quan sát được. Chỉ đặt `source_region_scan_complete=true` sau khi đã quét
 hết video.
 
+Sau sổ sự thật, lập `Su_that/scene_packets.json`. **Scene là đơn vị kể chuyện; shot là
+đơn vị cắt hình.** Một scene có thể chứa nhiều shot và không có quy tắc cố định kiểu
+mỗi 6 giây một câu. Mỗi shot phải là `MUST_KEEP`, `OPTIONAL` hoặc `TRANSITION`, có
+timestamp, event liên quan và lý do. Mỗi beat neo vào mốc hành động/phản ứng và liệt
+kê shot bắt buộc nhìn thấy.
+
 ## 2. VIET_KICH_BAN — viết review tiếng Việt
 
 Chỉ dùng `event_id` đã có trong sổ sự thật. Tách ý thành các claim nguyên tử rồi gắn
-mỗi cue với claim/event hỗ trợ. Ưu tiên cốt truyện chính, thiết lập quan trọng về sau,
-hành động, phản ứng, fan-service và tình huống hài có giá trị; bỏ cảnh thường không
+mỗi cue với claim/event hỗ trợ, `scene_id` và `beat_ids`. Một cue thuộc một scene và
+có thể phủ nhiều shot trong scene đó. Ưu tiên cốt truyện chính, thiết lập quan trọng về
+sau, hành động, phản ứng, fan-service và tình huống hài có giá trị; bỏ cảnh thường không
 đóng góp.
 
 Giọng kể tự nhiên, hài và hợp Gen Z Việt Nam năm 2026; có thể dùng từ thô tục khi thật
 sự hợp ngữ cảnh. Hài hóa cách kể, không được hài hóa bằng cách đổi sự kiện, đảo nhân
 quả, gán sai người nói hoặc nhét chữ vào miệng nhân vật. Nhắm thời lượng TTS thật từ
-7 đến 12 phút.
+7 đến 12 phút. Đây là narration review, không phải lồng tiếng thay nhân vật; lời thoại
+nhân vật chỉ được nhắc lại khi transcript/event chứng minh.
 
 ## 3. KIEM_DINH — kiểm chứng độc lập
 
@@ -38,6 +47,11 @@ Mọi mâu thuẫn sự thật là `ERROR/FACT_CONTRADICTION` và bắt buộc s
 lượng cue được hỗ trợ trực tiếp phải đạt ít nhất 0.80. Khi thiếu bằng chứng, bỏ/sửa câu;
 nếu không thể giải quyết sau tối đa ba vòng, trả `CAN_CON_NGUOI_XU_LY`.
 
+Sau khi tạo TTS thật, đo duration WAV của từng cue rồi để engine tạo EDL. Nếu voice
+dài hơn hình hợp lệ, rút gọn/chia cue hoặc thêm shot liên quan trong cùng scene. Nếu
+voice ngắn hơn tổng `MUST_KEEP`, sửa/chia narration; chỉ cắt `OPTIONAL`/`TRANSITION`.
+Không speed-up, freeze, loop hoặc chèn hình vô nghĩa để chữa lệch.
+
 ## Điều cấm
 
 - Không đổi cốt truyện, sai người nói hoặc dựng cảnh không liên quan với lời kể.
@@ -45,14 +59,17 @@ nếu không thể giải quyết sau tối đa ba vòng, trả `CAN_CON_NGUOI_X
 - Không speed, freeze, loop hay kéo giãn footage để lấp thời lượng.
 - Không dùng âm thanh nguồn. Thành phẩm chỉ có TTS tiếng Việt, không BGM.
 - Không xử lý nhiều hơn một tập trong một job.
+- Không viết script trước khi scene packet có đủ shot/beat/event.
+- Không tạo EDL thủ công lệch với duration WAV; dùng EDL engine sinh và kiểm tra lại.
 
-## Lệnh nội bộ phải gọi theo `next_action.json`
+## Lệnh nội bộ trong một agent run
 
 Không dừng để bắt người dùng chạy từng bước. Dùng đúng `run_dir` do lệnh `start` in ra:
 
 ```powershell
 uv run python run_episode.py prepare --run "<run_dir>"
 uv run python run_episode.py validate --run "<run_dir>" --artifact truth
+uv run python run_episode.py validate --run "<run_dir>" --artifact scene
 uv run python run_episode.py validate --run "<run_dir>" --artifact script
 uv run python run_episode.py audit --run "<run_dir>" --phase script
 uv run python run_episode.py tts --run "<run_dir>"
@@ -62,6 +79,8 @@ uv run python run_episode.py audit --run "<run_dir>" --phase video
 uv run python run_episode.py package --run "<run_dir>"
 ```
 
-Sau mỗi lệnh, đọc lại `next_action.json`. Nếu audit trả mã 1, sửa artifact thuộc
-`SUA_NOI_DUNG` hoặc `SUA_EDL` rồi chạy lại từ stage được ghi trong state. Không tự sửa
-`run_state.json`. Ba lần không đạt sẽ khóa run ở `CAN_CON_NGUOI_XU_LY`.
+Lệnh `tts` đo WAV thật và tự sinh `edl.json`; không tự thay thời lượng bằng cách kéo
+tốc độ. Sau mỗi lệnh, đọc lại `next_action.json`. Nếu audit trả mã 1, sửa artifact
+thuộc `SUA_NOI_DUNG` hoặc `SUA_EDL` rồi chạy lại từ stage được ghi trong state. Không tự
+sửa `run_state.json`. Ba lần không đạt sẽ khóa run ở `CAN_CON_NGUOI_XU_LY` và tạo báo
+cáo trung thực, không xuất PASS giả.

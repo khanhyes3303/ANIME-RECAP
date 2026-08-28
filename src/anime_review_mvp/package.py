@@ -14,6 +14,7 @@ from .workspace import cleanup_run
 
 _ARTIFACTS = {
     "su_that_tap_phim.json": Path("Su_that/su_that_tap_phim.json"),
+    "scene_packets.json": Path("Su_that/scene_packets.json"),
     "kich_ban_review.json": Path("Kich_ban/kich_ban_review.json"),
     "tts_manifest.json": Path("TTS/tts_manifest.json"),
     "edl.json": Path("Ke_hoach_canh/edl.json"),

@@ -110,6 +110,15 @@ class Shot:
 
 
 @dataclass(frozen=True, slots=True)
+class ShotDocument:
+    shots: tuple[Shot, ...]
+
+    def __post_init__(self) -> None:
+        if not self.shots:
+            raise MvpError("shot document requires shots")
+
+
+@dataclass(frozen=True, slots=True)
 class Claim:
     claim_id: str
     kind: str
@@ -131,6 +140,8 @@ class NarrationCue:
     claim_ids: tuple[str, ...]
     event_ids: tuple[str, ...]
     directly_supported: bool
+    scene_id: str = ""
+    beat_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _non_empty(self.cue_id, "cue_id")
@@ -147,6 +158,75 @@ class ScriptDocument:
     def __post_init__(self) -> None:
         if not self.cues:
             raise MvpError("script requires narration cues")
+
+
+@dataclass(frozen=True, slots=True)
+class SceneShot:
+    shot_id: str
+    start_ms: int
+    end_ms: int
+    role: str
+    event_ids: tuple[str, ...]
+    reason: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.shot_id, "scene shot_id")
+        _positive_interval(self.start_ms, self.end_ms, "scene shot")
+        if self.role not in {"MUST_KEEP", "OPTIONAL", "TRANSITION"}:
+            raise MvpError("scene shot role is invalid")
+        _non_empty(self.reason, "scene shot reason")
+
+
+@dataclass(frozen=True, slots=True)
+class SceneBeat:
+    beat_id: str
+    start_ms: int
+    end_ms: int
+    event_ids: tuple[str, ...]
+    shot_ids: tuple[str, ...]
+    cue_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.beat_id, "beat_id")
+        _positive_interval(self.start_ms, self.end_ms, "beat")
+        if not self.shot_ids:
+            raise MvpError("beat requires shot IDs")
+        if not self.cue_ids:
+            raise MvpError("beat requires cue IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class ScenePacket:
+    scene_id: str
+    start_ms: int
+    end_ms: int
+    story_purpose: str
+    event_ids: tuple[str, ...]
+    shots: tuple[SceneShot, ...]
+    beats: tuple[SceneBeat, ...]
+    cue_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.scene_id, "scene_id")
+        _positive_interval(self.start_ms, self.end_ms, "scene")
+        _non_empty(self.story_purpose, "scene story purpose")
+        if not self.event_ids:
+            raise MvpError("scene requires event IDs")
+        if not self.shots:
+            raise MvpError("scene requires shots")
+        if not self.beats:
+            raise MvpError("scene requires beats")
+        if not self.cue_ids:
+            raise MvpError("scene requires cue IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class ScenePacketDocument:
+    packets: tuple[ScenePacket, ...]
+
+    def __post_init__(self) -> None:
+        if not self.packets:
+            raise MvpError("scene packet document requires packets")
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +251,13 @@ class EdlSegment:
     cue_id: str
     source_start_ms: int
     source_end_ms: int
+    scene_id: str = ""
+    shot_id: str = ""
+    beat_id: str = ""
+    event_ids: tuple[str, ...] = ()
+    role: str = ""
+    program_start_ms: int = 0
+    program_end_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)

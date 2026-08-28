@@ -1,5 +1,8 @@
 # Anime Review MVP Implementation Plan
 
+> Phần mở rộng scene/shot/beat và voice-lock được triển khai theo kế hoạch bổ sung
+> `docs/superpowers/plans/2026-08-28-anime-review-scene-voice-lock.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
 
 **Goal:** Xây CLI tối giản để Antigravity xử lý một video anime dub tiếng Anh thành video review tiếng Việt 7–12 phút, chỉ có TTS BV074_streaming, kèm kiểm định và ZIP báo cáo.

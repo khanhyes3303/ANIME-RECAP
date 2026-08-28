@@ -4,7 +4,14 @@
       "segment_id": "segment-001",
       "cue_id": "cue-001",
       "source_start_ms": 0,
-      "source_end_ms": 8000
+      "source_end_ms": 8000,
+      "scene_id": "scene-001",
+      "shot_id": "shot-0001",
+      "beat_id": "beat-001",
+      "event_ids": ["event-001"],
+      "role": "MUST_KEEP",
+      "program_start_ms": 0,
+      "program_end_ms": 8000
     }
   ]
 }
