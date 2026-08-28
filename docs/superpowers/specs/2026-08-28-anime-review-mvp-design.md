@@ -156,6 +156,12 @@ Các file hướng dẫn trong `Bo_nao_Antigravity` phải cấm rõ việc suy 
 thứ tự nhân quả, gán sai người nói, dùng cảnh không liên quan hoặc hợp thức hóa lỗi bằng
 điểm số cảm tính.
 
+Job Antigravity cũng chứa `write_policy`: các thư mục artifact của đúng tập/run là
+vùng được ghi; `Bo_nao_Antigravity`, `src`, `tests`, `docs`, Git metadata và video
+nguồn là vùng chỉ đọc. Đây là ranh giới quyền hạn của operator. Nếu operator phát hiện
+cần sửa một vùng chỉ đọc, nó phải tạo `BRAIN_CHANGE_REQUESTED` trong báo cáo và dừng,
+không tự thay đổi bộ não hoặc validator.
+
 ## 9. Định nghĩa khớp lời và cảnh
 
 Mỗi câu narration được tách thành mệnh đề nguyên tử. Một mệnh đề sự kiện chỉ đạt khi

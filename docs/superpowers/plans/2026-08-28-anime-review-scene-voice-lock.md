@@ -133,6 +133,10 @@ dùng duyệt từng stage. Giới hạn an toàn giữ tối đa ba vòng sửa
 thành. Báo cáo/ZIP phải chứa scene packet, timing decision, repair history và lỗi
 voice-lock để ChatGPT Web có đủ dữ liệu hướng dẫn vòng sau.
 
+Job phải kèm `write_policy` để operator biết rõ vùng được ghi và vùng chỉ đọc. Việc
+muốn sửa prompt, mã nguồn, spec hoặc validator phải trở thành
+`BRAIN_CHANGE_REQUESTED`, không được tự thực hiện trong agent run.
+
 ## Task 5 — Acceptance fixture cho scene nhiều shot
 
 **Files:**
@@ -186,4 +190,3 @@ git grep -n "ANIME_RECAP_TIKTOK_SESSION=" -- . ":!docs"
 Kết quả mong đợi: ruff và toàn bộ test PASS; lệnh media/secret không trả về file
 production hoặc credential. Chỉ sau khi có bằng chứng này mới được đóng gói hoặc nói
 đã hoàn thành.
-

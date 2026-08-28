@@ -231,6 +231,9 @@ def test_operator_job_points_to_only_one_episode_and_expected_outputs(
         "edl": str(paths.edl_dir / "edl.json"),
         "audit": str(paths.report_dir / "kiem_dinh.json"),
     }
+    assert str(paths.truth_dir) in payload["write_policy"]["allowed_write_roots"]
+    assert str(source_video.resolve()) in payload["write_policy"]["read_only_roots"]
+    assert str(paths.root / "Bo_nao_Antigravity") in payload["write_policy"]["read_only_roots"]
 
 
 def test_scene_packet_loader_rejects_extra_fields(tmp_path: Path) -> None:

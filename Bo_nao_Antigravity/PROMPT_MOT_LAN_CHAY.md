@@ -9,6 +9,11 @@ Bạn hãy xử lý **duy nhất một tập anime** trong file job sau:
 Đọc `D:\FINAL REVIEW ANIME\Bo_nao_Antigravity\GEMINI.md` trước khi làm. Thực hiện
 liên tục trong một agent run:
 
+`GEMINI.md`, mã nguồn, test, spec, plan, Git và video nguồn là chỉ đọc. Chỉ ghi đúng
+artifact trong `required_outputs` và file tạm trong `run_dir`. Không tự sửa bộ não,
+prompt, validator, voice/provider hoặc điều kiện PASS; nếu thấy cần thay đổi, ghi
+`BRAIN_CHANGE_REQUESTED` và dừng ở báo cáo.
+
 ```text
 prepare → QUAN_SAT truth + scene_packets
 → validate truth/scene → VIET_KICH_BAN → validate script

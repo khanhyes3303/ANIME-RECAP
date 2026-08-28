@@ -28,6 +28,12 @@ class RequiredOutputs:
 
 
 @dataclass(frozen=True, slots=True)
+class WritePolicy:
+    allowed_write_roots: tuple[str, ...]
+    read_only_roots: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class OperatorJob:
     anime: str
     season: int
@@ -36,6 +42,7 @@ class OperatorJob:
     transcript: TranscriptDocument
     shots: tuple[Shot, ...]
     required_outputs: RequiredOutputs
+    write_policy: WritePolicy
 
 
 def build_operator_job(
@@ -58,6 +65,32 @@ def build_operator_job(
             tts=str(paths.tts_dir / "tts_manifest.json"),
             edl=str(paths.edl_dir / "edl.json"),
             audit=str(paths.report_dir / "kiem_dinh.json"),
+        ),
+        write_policy=WritePolicy(
+            allowed_write_roots=tuple(
+                str(path.resolve())
+                for path in (
+                    paths.input_dir,
+                    paths.truth_dir,
+                    paths.script_dir,
+                    paths.tts_dir,
+                    paths.edl_dir,
+                    paths.final_dir,
+                    paths.report_dir,
+                    paths.temp_dir,
+                )
+            ),
+            read_only_roots=tuple(
+                str(path.resolve())
+                for path in (
+                    paths.source_video,
+                    paths.root / "Bo_nao_Antigravity",
+                    paths.root / "src",
+                    paths.root / "tests",
+                    paths.root / "docs",
+                    paths.root / ".git",
+                )
+            ),
         ),
     )
     output = paths.temp_dir / "cong_viec_antigravity.json"
