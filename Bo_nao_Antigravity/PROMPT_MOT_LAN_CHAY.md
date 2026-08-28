@@ -19,7 +19,7 @@ prepare → QUAN_SAT truth + scene_packets
 → validate truth/scene → VIET_KICH_BAN → validate script
 → audit script → TTS BV074_streaming
 → EDL tự sinh theo duration WAV thật → validate edl/voice-lock
-→ render TTS-only → audit MP4 → package ZIP
+→ render TTS-only → audit MP4 → DỪNG VÀ BÁO CÁO
 ```
 
 Nếu `run_state.json` đã ở `QUAN_SAT` (ví dụ run đã được prepare từ trước), bỏ qua
@@ -46,4 +46,8 @@ thì thêm cue gắn với beat khác. Các mã lỗi văn phong `NARRATION_CUE_
 `NARRATION_STYLE_OVERWRITTEN` đều là lỗi chặn.
 
 Tổng duration WAV phải nằm trong 420–720 giây; ngoài khoảng này là
-`REVIEW_DURATION_OUT_OF_RANGE` và phải sửa nội dung trước khi đóng gói.
+`REVIEW_DURATION_OUT_OF_RANGE` và phải sửa nội dung trước khi render bản đạt.
+
+Sau khi audit MP4 đạt, không chạy `package`, không tạo ZIP, không gửi sang ChatGPT
+Web và không dọn `run_dir`. Chỉ báo lại đường dẫn MP4, báo cáo kiểm định, duration,
+số cue và các lỗi đã sửa để người dùng chuyển cho Codex khi cần.

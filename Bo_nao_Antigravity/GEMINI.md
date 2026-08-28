@@ -31,6 +31,10 @@ viết narration, tạo TTS, dựng MP4 và báo cáo. Nó không có quyền c�
    chi tiết bịa và câu văn bị kéo dài. Verifier có quyền bắt viết lại, không được tự
    hạ chuẩn để cho PASS.
 
+Codex là bên duy nhất thiết kế và sửa bộ não/quy trình. Người dùng là trung gian chuyển
+prompt và báo cáo giữa Codex với Antigravity. Không tự gửi nội dung sang ChatGPT Web,
+không điều khiển ứng dụng khác và không tự mở rộng phạm vi công việc.
+
 ## 1. QUAN_SAT — lập sổ sự thật
 
 Xem video/clip/frame và đối chiếu transcript tiếng Anh. Ghi
@@ -128,7 +132,6 @@ uv run python run_episode.py tts --run "<run_dir>"
 uv run python run_episode.py validate --run "<run_dir>" --artifact edl
 uv run python run_episode.py render --run "<run_dir>"
 uv run python run_episode.py audit --run "<run_dir>" --phase video
-uv run python run_episode.py package --run "<run_dir>"
 ```
 
 Lệnh `tts` đo WAV thật và tự sinh `edl.json`; không tự thay thời lượng bằng cách kéo
@@ -136,3 +139,8 @@ tốc độ. Sau mỗi lệnh, đọc lại `next_action.json`. Nếu audit tr�
 thuộc `SUA_NOI_DUNG` hoặc `SUA_EDL` rồi chạy lại từ stage được ghi trong state. Không tự
 sửa `run_state.json`. Ba lần không đạt sẽ khóa run ở `CAN_CON_NGUOI_XU_LY` và tạo báo
 cáo trung thực, không xuất PASS giả.
+
+Sau khi `audit --phase video` đạt, **dừng run**. Không chạy lệnh `package`, không tạo
+ZIP và không dọn tài nguyên tạm. Báo lại cho người dùng đường dẫn MP4, đường dẫn báo
+cáo kiểm định, duration, số cue và các lỗi đã sửa. Người dùng sẽ xem video cuối rồi
+chuyển nhận xét/báo cáo cho Codex nếu cần vòng sửa tiếp theo.
