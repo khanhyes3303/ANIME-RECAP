@@ -254,3 +254,17 @@ def record_stage_metric(
     state = replace(state, stage_metrics=(*state.stage_metrics, metric))
     _write_state(state)
     return state
+
+
+def resume_beat_repair(run_dir: Path, phase: str) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.SUA_BEAT or not state.repair_history:
+        raise MvpError("only a pending beat repair can resume")
+    if phase not in {"SCRIPT", "TTS", "VIDEO"}:
+        raise MvpError("repair phase is invalid")
+    if state.repair_history[-1].phase != phase:
+        raise MvpError("repair phase does not match the latest finding")
+    target = Stage.VIET_LOI if phase == "SCRIPT" else Stage.TAO_TTS
+    state = replace(state, stage=target)
+    _write_state(state)
+    return state

@@ -1,0 +1,11 @@
+{
+  "phase": "VIDEO",
+  "producer_context_id": "producer-run-001",
+  "critic_context_id": "critic-video-run-001",
+  "beat_reviews": [{
+    "beat_id": "beat-001",
+    "finding_codes": [],
+    "evidence_refs": ["frame-1100.jpg", "frame-2200.jpg"],
+    "note": "Proxy cho thấy lời và hành động xuất hiện trong cùng beat."
+  }]
+}

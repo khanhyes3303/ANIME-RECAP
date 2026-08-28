@@ -1,33 +1,20 @@
-# Prompt giao một tập cho Antigravity
+# Prompt một lần chạy Antigravity
 
-Bạn hãy xử lý duy nhất tập anime trong job sau:
+Xử lý duy nhất tập anime trong job:
 
 ```text
 <ĐƯỜNG_DẪN_RUN>\cong_viec_antigravity.json
 ```
 
-Đọc `D:\FINAL REVIEW ANIME\Bo_nao_Antigravity\GEMINI.md` trước khi làm. Bạn là trợ
-lý phân tích, không phải editor cuối.
+Đọc toàn bộ `D:\FINAL REVIEW ANIME\Bo_nao_Antigravity\GEMINI.md`, sau đó tiếp tục từ
+stage hiện tại đến `HOAN_THANH` trong một agent run. Bạn là operator thực hiện video;
+không dừng để giao Codex biên tập.
 
-Thực hiện liên tục trong một agent run:
+Phải mở thật video/frame/clip, tạo atomic storyboard một hành động/phản ứng mỗi beat,
+dùng producer và critic context khác nhau, tạo TTS đúng `BV074_streaming`, dựng proxy,
+chỉ sửa beat lỗi, render final rồi chạy engine audit. Sau mỗi lệnh phải đọc
+`next_action.json`. Không sửa bộ não, code, test, dependency, Git hoặc video nguồn.
 
-```text
-prepare nếu cần
-→ mở thật video/frame và lập su_that_tap_phim.json
-→ lập scene_packets.json có mô tả hình cụ thể
-→ validate truth/scene
-→ viết kich_ban_review.json bản nháp
-→ validate/audit script
-→ dừng tại CODEX_BIEN_TAP và báo cáo
-```
-
-Không được tạo hoặc sửa `khoa_cau_canh.json`, TTS, EDL, video candidate, thành phẩm,
-review của Codex hay audit engine. Không chạy `lock`, `tts`, `render`, audit video,
-đóng gói hoặc dọn run. Không tự cấp PASS cho video cuối.
-
-Một cue nháp chỉ kể một hành động/phản ứng có bằng chứng; không sai người, đảo nhân
-quả, bịa nội tâm hoặc nhét chữ vào mồm. Văn Việt tự nhiên, hài vừa đủ và không sáo
-rỗng. Nếu cần thay đổi bộ não/mã nguồn, ghi `BRAIN_CHANGE_REQUESTED` và dừng.
-
-Khi hoàn tất, báo đường dẫn run, job, truth, scene packet, script nháp, audit nháp và
-những lỗi đã sửa để người dùng chuyển cho Codex.
+Khi hoàn tất, báo đường dẫn `review_anime.mp4`, tổng thời gian, cache hit/miss, beat đã
+sửa và lỗi đã loại. Nếu engine chặn sau ba vòng hoặc cần đổi kiến trúc, ghi
+`BRAIN_CHANGE_REQUESTED` với bằng chứng và dừng trung thực.

@@ -13,6 +13,7 @@ from anime_review_mvp.workflow import (
     record_repair,
     record_beat_repair,
     record_stage_metric,
+    resume_beat_repair,
 )
 
 
@@ -119,3 +120,14 @@ def test_stage_metrics_reject_negative_counters(tmp_path: Path) -> None:
     )
     assert measured.stage_metrics[-1].elapsed_ms == 125
     assert measured.stage_metrics[-1].cache_hits == 2
+
+
+def test_resume_beat_repair_returns_to_the_smallest_required_stage(tmp_path: Path) -> None:
+    state = new_state(tmp_path / "run", stage=Stage.PHAN_BIEN_VIDEO)
+    state = record_beat_repair(
+        state.run_dir, "VIDEO", ("beat-001",), ("VOICE_AHEAD",)
+    )
+
+    resumed = resume_beat_repair(state.run_dir, "VIDEO")
+
+    assert resumed.stage is Stage.TAO_TTS

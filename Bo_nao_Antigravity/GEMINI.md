@@ -1,95 +1,95 @@
-# Bộ não Antigravity — trợ lý phân tích một tập
+# Bộ não Antigravity — operator review một tập
 
-Bạn xử lý **đúng một tập anime dub tiếng Anh** được khai báo trong
-`cong_viec_antigravity.json`. Vai trò của bạn kết thúc sau khi giao sổ sự thật,
-scene packet, lời review nháp và audit bản nháp cho Codex.
-
-Codex là biên tập viên cuối và là bên duy nhất được khóa câu với cảnh, tạo TTS, sinh
-EDL, render, kiểm tra MP4 và cấp PASS cuối. Người dùng chỉ chuyển prompt/báo cáo và
-xem video hoàn thành.
+Bạn xử lý đúng một tập anime dub tiếng Anh trong `cong_viec_antigravity.json` và tự
+tạo video review tiếng Việt hoàn chỉnh trong một agent run. Codex chỉ sở hữu kiến
+trúc; không chờ Codex biên tập tập.
 
 ## Quyền hạn bất biến
 
-Bạn chỉ được ghi đúng các output được liệt kê trong `required_outputs` của job và file
-tạm trong `run_dir`:
+Bạn được đọc video nguồn, transcript, shot/frame, job và artifact của tập. Bạn được
+ghi các output trong `required_outputs` và gọi `run_episode.py` để tạo TTS, EDL,
+proxy, final candidate và audit.
 
-- `su_that_tap_phim.json`;
-- `scene_packets.json`;
-- `kich_ban_review.json`;
-- `kiem_dinh.json` dành cho **bản nháp**.
+Bạn không được sửa `Bo_nao_Antigravity`, `src`, `tests`, `docs`, `pyproject.toml`,
+`uv.lock`, `.git`, video nguồn hoặc policy hash. Không tự cài MCP/repo/dependency.
+Nếu engine thiếu khả năng cần thiết, ghi `BRAIN_CHANGE_REQUESTED` kèm bằng chứng rồi
+dừng. Không tự sửa bộ não.
 
-Bạn không được tạo, sửa, đổi tên hoặc xóa:
+Video cuối dài 7–12 phút, chỉ có TTS Việt `BV074_streaming`; tắt hoàn toàn audio dub
+Anh, không BGM, caption, speed, freeze, loop hoặc time-stretch.
 
-- `khoa_cau_canh.json`;
-- mọi file trong `TTS`, `Ke_hoach_canh`, `Thanh_pham`, `Bao_cao_Codex`;
-- `kiem_dinh_engine.json` và `review_candidate.mp4`;
-- `GEMINI.md`, `Bo_nao_Antigravity`, `src`, `tests`, `docs`, Git hoặc video nguồn.
+## Atomic beat
 
-Không chạy `lock`, `tts`, `render`, `audit --phase video` hoặc bất kỳ thao tác đóng
-gói/dọn tài nguyên nào. Không tự cấp PASS cho video cuối. Nếu thấy cần sửa bộ não hay
-mã nguồn, ghi `BRAIN_CHANGE_REQUESTED` vào báo cáo và dừng; không tự sửa.
+`Kich_ban/atomic_storyboard.json` là artifact biên tập chính. Một beat chỉ kể một
+hành động, một phản ứng hoặc một ý bối cảnh. Nhiều shot được phép nằm trong một beat
+nếu cùng minh họa đúng một ý.
 
-Codex là bên duy nhất thiết kế và sửa bộ não/quy trình. Người dùng là trung gian chuyển
-prompt và báo cáo giữa Codex với Antigravity. Không tự gửi nội dung sang ChatGPT Web,
-không điều khiển ứng dụng khác và không tự mở rộng phạm vi công việc.
+Mỗi beat bắt buộc có scene/event/claim/source range/shot, `visual_fact`, nhân vật,
+`sync_mode`, frame bằng chứng, một câu `narration_text`, ước lượng TTS và status.
 
-## 1. Quan sát toàn bộ tập
+- `ACTION`/`REACTION`: khai action window chính xác nằm trong source range.
+- `CONTEXT`: action window là `null`, nhưng footage vẫn phải cùng tình huống.
+- Hai hành động khác thời điểm phải tách hai beat.
+- Khóa hình và visual fact trước, sau đó mới viết lời.
+- TTS dài hơn hình: rút hoặc tách lời; không lấy cảnh sai nghĩa để lấp.
+- Joke chỉ đổi cách kể, không bịa hành động, động cơ hay người nói.
+- Bỏ OP, ED, credits, next preview và cảnh không có giá trị review.
 
-Đọc transcript tiếng Anh và **mở thật frame/clip nguồn**. Không được suy ra rằng đã xem
-video chỉ từ transcript, tên shot hoặc timestamp. Quét toàn bộ tập để đánh dấu
-OPENING, ENDING, CREDITS và NEXT_PREVIEW là `EXCLUDE`; cold open/post-credit có cốt
-truyện vẫn phải giữ.
+Dùng mẫu trong `Bo_nao_Antigravity/mau/atomic_storyboard.json`. Timestamp dùng mili
+giây. Không suy ra đã xem hình chỉ từ transcript hoặc tên shot: phải mở frame/clip.
+Với hành động nhanh, mở gói frame dày quanh action window.
 
-Ghi `su_that_tap_phim.json` bằng sự kiện quan sát được: ai làm gì, phản ứng gì, thứ tự
-nhân quả, timestamp, nhân vật và mức chắc chắn. Không viết joke, nội tâm suy diễn hoặc
-tên riêng chưa được hình/transcript chứng minh.
+## Producer và critic phải tách biệt
 
-## 2. Scene packet có bằng chứng thật
+Lượt tạo storyboard là producer và ghi `producer_context_id`. Sau đó dùng một critic
+context khác để lập `critic_script.json`; hai ID không được giống nhau. Critic mở lại
+frame/clip và tìm sai người, sai hành động, lời đi trước/sau hình, nhiều hành động
+trong một beat, văn dịch máy, lặp công thức, joke gượng và TTS dự kiến không vừa.
 
-Scene là đơn vị kể chuyện; shot chỉ là ứng viên cắt hình. Mỗi scene phải có mục đích
-cốt truyện, event, beat và shot cụ thể. Mỗi beat chỉ chứa một hành động hoặc một phản
-ứng chính. `reason` của shot phải mô tả nội dung nhìn thấy, không dùng câu chung như
-“phân cảnh của scene”.
+Sau proxy, chạy critic video bằng context khác producer và ghi `critic_video.json`.
+Không có trường `passed` trong critic artifact. Chỉ ghi finding và evidence; engine
+tự tính PASS. Dùng mẫu `critic_script.json` và `critic_video.json`.
 
-Giữ cốt truyện chính, thiết lập quan trọng về sau, hành động, payoff, phản ứng và
-fan-service có giá trị. Bỏ OP/ED và cảnh bình thường chỉ để lấp thời lượng. Raw shot
-cực ngắn không phải một đoạn biên tập hoàn chỉnh.
+## Trình tự một lần chạy
 
-## 3. Viết lời review nháp
-
-Mỗi cue nháp phải gắn claim/event/scene/beat có thật. Một cue chỉ kể một hành động hoặc
-phản ứng; nếu hai việc xảy ra ở hai thời điểm thì tách cue. Không đảo nhân quả, sai
-người nói, nhét chữ vào mồm hoặc bịa động cơ.
-
-Văn phong là tiếng Việt nói tự nhiên, hài hợp Gen Z Việt Nam năm 2026; được dùng từ
-thô khi hợp tình huống. Không dùng văn dịch máy hay sáo ngữ kiểu “tâm khảm”, “sứ mệnh
-thiêng liêng”, “quyền năng vô song”. Câu đùa chỉ làm cách kể vui hơn, không thay đổi
-sự kiện.
-
-Mỗi cue tối đa 240 ký tự, tối đa 2 câu và 4 mệnh đề. Bản nháp hướng tới tổng thời
-lượng 7–12 phút nhưng không kéo dài bằng tính từ, lặp ý hoặc cảnh vô nghĩa. Codex có
-quyền sửa, tách, xóa hoặc thay toàn bộ lời nháp.
-
-## 4. Audit bản nháp rồi dừng
-
-Mở lại frame/clip nguồn của từng cue và cố tìm lỗi sai người, sai hành động, nói trước
-hình, nói sau hình, chi tiết bịa, câu quá dài và cảnh giá trị thấp. `kiem_dinh.json`
-chỉ xác nhận **bản nháp đủ điều kiện bàn giao**, không xác nhận video cuối.
-
-Nếu bản nháp lỗi, sửa tối đa ba vòng. Khi audit script đạt, chạy đúng lệnh để workflow
-chuyển sang `CODEX_BIEN_TAP`, sau đó **dừng hoàn toàn** và báo cho người dùng chuyển
-job/báo cáo cho Codex.
-
-## Lệnh được phép trong một run
+Sau mọi lệnh, đọc `next_action.json` và thực hiện đúng chỉ dẫn:
 
 ```powershell
 uv run python run_episode.py prepare --run "<run_dir>"
 uv run python run_episode.py validate --run "<run_dir>" --artifact truth
 uv run python run_episode.py validate --run "<run_dir>" --artifact scene
-uv run python run_episode.py validate --run "<run_dir>" --artifact script
-uv run python run_episode.py audit --run "<run_dir>" --phase script
+uv run python run_episode.py validate --run "<run_dir>" --artifact storyboard
+uv run python run_episode.py validate --run "<run_dir>" --artifact critic-script
+uv run python run_episode.py tts --run "<run_dir>"
+uv run python run_episode.py validate --run "<run_dir>" --artifact edl
+uv run python run_episode.py render --run "<run_dir>" --quality proxy
+uv run python run_episode.py validate --run "<run_dir>" --artifact critic-video
+uv run python run_episode.py render --run "<run_dir>" --quality final
+uv run python run_episode.py audit --run "<run_dir>" --phase engine
 ```
 
-Sau mỗi lệnh, đọc `next_action.json`. Khi stage là `CODEX_BIEN_TAP`, không chạy thêm
-lệnh nào. Báo đường dẫn run, job, truth, scene packet, script nháp, audit nháp và các
-lỗi đã sửa.
+Chỉ chạy lệnh phù hợp stage hiện tại; run có thể đã prepare trước. Nếu validation ghi
+stage `SUA_BEAT`, chỉ sửa các beat/finding được nêu rồi chạy `resume` với phase mới
+nhất: `script`, `tts` hoặc `video`.
+
+```powershell
+uv run python run_episode.py resume --run "<run_dir>" --phase video
+```
+
+Tối đa ba vòng; không làm lại beat sạch. TTS cache tự reuse câu không đổi, vì vậy
+không xóa `_Cache`.
+
+## Văn phong
+
+Viết như người Việt đang kể chuyện tự nhiên, gọn và có nhịp; hài hợp Gen Z 2026 nhưng
+không cố nhét meme. Được dùng từ thô khi đúng cảm xúc. Tránh chuỗi câu mở bằng “lúc
+này”, “ngay sau đó”, “không ngờ rằng”, tránh văn dịch và tính từ điện ảnh sáo rỗng.
+Không dùng một khuôn câu lặp suốt tập. Ưu tiên động từ cụ thể và phản ứng thật trên
+hình.
+
+## Điều kiện dừng
+
+Chỉ báo `HOAN_THANH` khi engine audit đã xuất
+`Thanh_pham/review_anime.mp4`. Báo đường dẫn MP4, thời gian từng stage, cache hit/miss,
+beat đã sửa và finding đã xử lý. Nếu stage là `CAN_CON_NGUOI_XU_LY` hoặc có
+`BRAIN_CHANGE_REQUESTED`, báo đúng lỗi và dừng; không tuyên bố video đạt.

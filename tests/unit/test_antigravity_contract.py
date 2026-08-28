@@ -13,6 +13,8 @@ from anime_review_mvp.antigravity import (
     load_truth,
 )
 from anime_review_mvp.errors import MvpError
+from anime_review_mvp.jsonio import load_json
+from anime_review_mvp.models import AtomicStoryboard, CriticReviewDocument
 from anime_review_mvp.models import Shot, SourceRef, TranscriptDocument
 from anime_review_mvp.workspace import create_job
 
@@ -256,3 +258,16 @@ def test_scene_packet_loader_rejects_extra_fields(tmp_path: Path) -> None:
     packets[0]["unexpected"] = True
     with pytest.raises(MvpError, match="fields"):
         load_scene_packets(_write(tmp_path / "scene_packets.json", payload))
+
+
+def test_atomic_operator_templates_follow_strict_runtime_contract() -> None:
+    root = Path("Bo_nao_Antigravity") / "mau"
+
+    storyboard = load_json(root / "atomic_storyboard.json", AtomicStoryboard)
+    script_review = load_json(root / "critic_script.json", CriticReviewDocument)
+    video_review = load_json(root / "critic_video.json", CriticReviewDocument)
+
+    assert storyboard.owner == "ANTIGRAVITY"
+    assert script_review.phase == "SCRIPT"
+    assert video_review.phase == "VIDEO"
+    assert script_review.critic_context_id != storyboard.producer_context_id

@@ -48,7 +48,15 @@ from .validation import (
     validate_script,
     validate_truth,
 )
-from .workflow import Stage, advance, new_state, read_state, record_beat_repair, record_repair
+from .workflow import (
+    Stage,
+    advance,
+    new_state,
+    read_state,
+    record_beat_repair,
+    record_repair,
+    resume_beat_repair,
+)
 from .workspace import create_job, publish_candidate
 
 
@@ -87,6 +95,9 @@ def _parser() -> argparse.ArgumentParser:
     render = subparsers.add_parser("render")
     render.add_argument("--run", required=True, type=Path)
     render.add_argument("--quality", choices=("proxy", "final"), default="final")
+    resume = subparsers.add_parser("resume")
+    resume.add_argument("--run", required=True, type=Path)
+    resume.add_argument("--phase", required=True, choices=("script", "tts", "video"))
     audit = subparsers.add_parser("audit")
     audit.add_argument("--run", required=True, type=Path)
     audit.add_argument("--phase", required=True, choices=("script", "video", "engine"))
@@ -642,6 +653,30 @@ def _audit(run_dir: Path, phase: str, codex_review: Path | None) -> int:
     return _audit_video(run_dir, episode, codex_review)
 
 
+def _resume(run_dir: Path, phase: str) -> int:
+    state, episode = _episode(run_dir)
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    truth = load_truth(
+        episode / "Su_that" / "su_that_tap_phim.json",
+        source_duration_ms=source.duration_ms,
+    )
+    shots = load_json(run_dir / "shots.json", ShotDocument)
+    load_atomic_storyboard(
+        episode / "Kich_ban" / "atomic_storyboard.json",
+        truth,
+        shots.shots,
+        source.duration_ms,
+    )
+    resumed = resume_beat_repair(run_dir, phase.upper())
+    instruction = (
+        "Tạo lại critic_script.json bằng critic context mới."
+        if resumed.stage is Stage.VIET_LOI
+        else "Chạy tts; cache sẽ chỉ tạo lại beat đã đổi."
+    )
+    _write_next(run_dir, instruction)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -661,6 +696,8 @@ def main(argv: list[str] | None = None) -> int:
             return _tts(args.run)
         if args.command == "render":
             return _render(args.run, args.quality)
+        if args.command == "resume":
+            return _resume(args.run, args.phase)
         if args.command == "audit":
             return _audit(args.run, args.phase, args.codex_review)
     except MvpError as exc:
