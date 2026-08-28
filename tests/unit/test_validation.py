@@ -6,6 +6,8 @@ import pytest
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import (
+    AtomicBeat,
+    AtomicStoryboard,
     AuditFinding,
     AuditReport,
     Claim,
@@ -21,12 +23,14 @@ from anime_review_mvp.models import (
     TruthDocument,
     TtsCue,
     TtsManifest,
+    SpanSourceRange,
 )
 from anime_review_mvp.validation import (
     build_edl_from_scene_packets,
     coverage_ratio,
     cue_source_duration,
     narration_style_findings,
+    atomic_style_findings,
     review_duration_findings,
     validate_audit,
     validate_edl,
@@ -126,6 +130,43 @@ def test_narration_style_accepts_short_natural_cue() -> None:
     assert narration_style_findings(
         ScriptDocument((cue,), (Claim("claim-001", "ACTION", "A", ("event-001",)),))
     ) == ()
+
+
+def _atomic_texts(*texts: str) -> AtomicStoryboard:
+    claims = tuple(
+        Claim(f"claim-{index}", "ACTION", text, ("event-001",))
+        for index, text in enumerate(texts, start=1)
+    )
+    beats = tuple(
+        AtomicBeat(
+            f"beat-{index}", "scene-001", ("event-001",), (f"claim-{index}",),
+            (SpanSourceRange(f"range-{index}", index * 1_000, index * 1_000 + 900, "scene-001", f"beat-{index}", (f"shot-{index}",), ("event-001",), False),),
+            text, ("Jiro",), ("Jiro",), "ACTION", index * 1_000, index * 1_000 + 500,
+            text, (f"frame-{index}.jpg",), 900, None, "", "LOCKED", (),
+        )
+        for index, text in enumerate(texts, start=1)
+    )
+    return AtomicStoryboard("ANTIGRAVITY", "atomic-v1", "producer", claims, beats)
+
+
+def test_atomic_style_rejects_repeated_openings_across_episode() -> None:
+    board = _atomic_texts(
+        "Lúc này Jiro lao vào sân.",
+        "Lúc này ông nội quay lại.",
+        "Lúc này con quái xuất hiện.",
+    )
+
+    assert "REPEATED_OPENING" in {item.code for item in atomic_style_findings(board)}
+
+
+def test_atomic_style_accepts_varied_natural_lines() -> None:
+    board = _atomic_texts(
+        "Jiro vừa về tới sân đã bị ông nội gọi giật lại.",
+        "Trong bụi cây, con mèo đen đang nằm thoi thóp.",
+        "Thấy nó bị thương, cậu lập tức bế về chữa trị.",
+    )
+
+    assert atomic_style_findings(board) == ()
 
 
 def test_review_duration_requires_seven_to_twelve_minutes() -> None:

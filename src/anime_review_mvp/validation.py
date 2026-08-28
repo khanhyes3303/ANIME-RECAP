@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 from .errors import MvpError
 from .models import (
+    AtomicStoryboard,
     AuditFinding,
     AuditReport,
     EdlDocument,
@@ -114,6 +115,48 @@ def narration_style_findings(script: ScriptDocument) -> tuple[AuditFinding, ...]
                     (cue.scene_id, *cue.beat_ids),
                 )
             )
+    return tuple(findings)
+
+
+def atomic_style_findings(storyboard: AtomicStoryboard) -> tuple[AuditFinding, ...]:
+    findings: list[AuditFinding] = []
+    opening_to_beats: dict[str, list[str]] = defaultdict(list)
+    formulaic_connectors = {
+        "lúc này",
+        "ngay sau đó",
+        "không ngờ rằng",
+        "thế là",
+    }
+    for beat in storyboard.beats:
+        normalized = " ".join(beat.narration_text.casefold().split())
+        words = re.findall(r"\w+", normalized, flags=re.UNICODE)
+        opening = " ".join(words[:2])
+        if opening:
+            opening_to_beats[opening].append(beat.beat_id)
+        marker_count = _style_marker_count(normalized)
+        clause_count = len(re.findall(r"[,;:]", normalized)) + 1
+        if marker_count > MAX_STYLE_MARKERS_PER_CUE or clause_count > 3:
+            findings.append(
+                AuditFinding(
+                    "ERROR",
+                    "FORMULAIC_PROSE",
+                    beat.beat_id,
+                    "Atomic narration is overwritten or contains too many clauses.",
+                    beat.frame_evidence,
+                )
+            )
+    for opening, beat_ids in opening_to_beats.items():
+        if len(beat_ids) >= 3 or (opening in formulaic_connectors and len(beat_ids) >= 2):
+            for beat_id in beat_ids:
+                findings.append(
+                    AuditFinding(
+                        "ERROR",
+                        "REPEATED_OPENING",
+                        beat_id,
+                        f"Opening phrase is repeated across the episode: {opening}",
+                        tuple(beat_ids),
+                    )
+                )
     return tuple(findings)
 
 
