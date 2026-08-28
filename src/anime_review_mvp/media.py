@@ -306,6 +306,8 @@ def extract_program_anchors(
                     str(video),
                     "-frames:v",
                     "1",
+                    "-strict",
+                    "-2",
                     str(frame),
                 ],
                 runner,

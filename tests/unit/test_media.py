@@ -201,3 +201,39 @@ def test_extract_program_anchors_uses_edl_program_timing(tmp_path: Path) -> None
 
     assert [anchor.timestamp_ms for anchor in anchors.anchors] == [2_080, 3_000, 3_920]
     assert all(anchor.timeline == "PROGRAM" for anchor in anchors.anchors)
+
+
+def test_extract_program_anchors_allows_nonstandard_jpeg_pixel_format(
+    tmp_path: Path,
+) -> None:
+    video = tmp_path / "candidate.mp4"
+    video.write_bytes(b"media")
+    runner = FakeRunner()
+    edl = SpanEdlDocument(
+        (
+            SpanEdlSegment(
+                "segment-001",
+                "span-001",
+                10_000,
+                12_000,
+                2_000,
+                4_000,
+                "range-001",
+                "scene-001",
+                "beat-001",
+                ("shot-001",),
+                ("event-001",),
+                False,
+            ),
+        )
+    )
+
+    extract_program_anchors(video, edl, tmp_path / "program", runner=runner)
+
+    jpeg_commands = [command for command in runner.commands if "-frames:v" in command]
+    assert jpeg_commands
+    assert any(
+        command[command.index("-strict") + 1] == "-2"
+        for command in jpeg_commands
+        if "-strict" in command
+    )
