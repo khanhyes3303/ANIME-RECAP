@@ -192,6 +192,94 @@ class NarrationSpanDocument:
 
 
 @dataclass(frozen=True, slots=True)
+class AtomicBeat:
+    beat_id: str
+    scene_id: str
+    event_ids: tuple[str, ...]
+    claim_ids: tuple[str, ...]
+    source_ranges: tuple[SpanSourceRange, ...]
+    visual_fact: str
+    characters_visible: tuple[str, ...]
+    characters_spoken_about: tuple[str, ...]
+    sync_mode: str
+    action_window_start_ms: int | None
+    action_window_end_ms: int | None
+    narration_text: str
+    frame_evidence: tuple[str, ...]
+    estimated_tts_ms: int
+    actual_tts_ms: int | None
+    tts_cache_key: str
+    status: str
+    finding_codes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.beat_id, "atomic beat_id")
+        _non_empty(self.scene_id, "atomic scene_id")
+        _non_empty(self.visual_fact, "atomic visual_fact")
+        _non_empty(self.narration_text, "atomic narration_text")
+        if not self.event_ids or not self.claim_ids or not self.source_ranges:
+            raise MvpError("atomic beat requires event, claim, and source bindings")
+        if not self.characters_spoken_about:
+            raise MvpError("atomic beat requires characters_spoken_about")
+        if not self.frame_evidence:
+            raise MvpError("atomic beat requires frame evidence")
+        if self.sync_mode not in {"ACTION", "REACTION", "CONTEXT"}:
+            raise MvpError("atomic sync_mode is invalid")
+        if self.status not in {"DRAFT", "NEEDS_REPAIR", "LOCKED", "REJECTED"}:
+            raise MvpError("atomic beat status is invalid")
+        if self.estimated_tts_ms <= 0:
+            raise MvpError("estimated TTS duration must be positive")
+        if self.actual_tts_ms is not None and self.actual_tts_ms <= 0:
+            raise MvpError("actual TTS duration must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class AtomicStoryboard:
+    owner: str
+    policy_version: str
+    producer_context_id: str
+    claims: tuple[Claim, ...]
+    beats: tuple[AtomicBeat, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.owner, "atomic storyboard owner")
+        _non_empty(self.policy_version, "atomic policy_version")
+        _non_empty(self.producer_context_id, "producer context")
+        if not self.claims or not self.beats:
+            raise MvpError("atomic storyboard requires claims and beats")
+
+
+@dataclass(frozen=True, slots=True)
+class CriticBeatReview:
+    beat_id: str
+    finding_codes: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    note: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.beat_id, "critic beat_id")
+        if not self.evidence_refs:
+            raise MvpError("critic review requires evidence")
+        _non_empty(self.note, "critic note")
+
+
+@dataclass(frozen=True, slots=True)
+class CriticReviewDocument:
+    phase: str
+    producer_context_id: str
+    critic_context_id: str
+    beat_reviews: tuple[CriticBeatReview, ...]
+
+    def __post_init__(self) -> None:
+        if self.phase not in {"SCRIPT", "VIDEO"}:
+            raise MvpError("critic phase is invalid")
+        _non_empty(self.producer_context_id, "producer context")
+        _non_empty(self.critic_context_id, "critic context")
+        if not self.beat_reviews:
+            raise MvpError("critic review requires beat reviews")
+
+
+@dataclass(frozen=True, slots=True)
 class FrameAnchor:
     anchor_id: str
     span_id: str
