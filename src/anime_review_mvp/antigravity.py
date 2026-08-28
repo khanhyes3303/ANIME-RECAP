@@ -89,6 +89,7 @@ def build_operator_job(
                     paths.root / "tests",
                     paths.root / "docs",
                     paths.root / ".git",
+                    paths.script_dir / "khoa_cau_canh.json",
                 )
             ),
         ),

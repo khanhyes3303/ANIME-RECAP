@@ -134,6 +134,64 @@ class Claim:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanSourceRange:
+    range_id: str
+    source_start_ms: int
+    source_end_ms: int
+    scene_id: str
+    beat_id: str
+    shot_ids: tuple[str, ...]
+    event_ids: tuple[str, ...]
+    short_action_exception: bool = False
+
+    def __post_init__(self) -> None:
+        _non_empty(self.range_id, "range_id")
+        _positive_interval(self.source_start_ms, self.source_end_ms, "span source range")
+        _non_empty(self.scene_id, "scene_id")
+        _non_empty(self.beat_id, "beat_id")
+        if not self.shot_ids:
+            raise MvpError("span source range requires shot IDs")
+        if not self.event_ids:
+            raise MvpError("span source range requires event IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class NarrationSpan:
+    span_id: str
+    text: str
+    claim_ids: tuple[str, ...]
+    event_ids: tuple[str, ...]
+    characters: tuple[str, ...]
+    visible_action: str
+    source_ranges: tuple[SpanSourceRange, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.span_id, "span_id")
+        _non_empty(self.text, "narration span text")
+        _non_empty(self.visible_action, "visible_action")
+        if not self.claim_ids or not self.event_ids:
+            raise MvpError("narration span requires claim and event bindings")
+        if not self.characters:
+            raise MvpError("narration span requires visible characters")
+        if not self.source_ranges:
+            raise MvpError("narration span requires source ranges")
+
+
+@dataclass(frozen=True, slots=True)
+class NarrationSpanDocument:
+    spans: tuple[NarrationSpan, ...]
+    claims: tuple[Claim, ...]
+    owner: str
+
+    def __post_init__(self) -> None:
+        if not self.spans:
+            raise MvpError("locked narration requires spans")
+        if not self.claims:
+            raise MvpError("locked narration requires claims")
+        _non_empty(self.owner, "locked narration owner")
+
+
+@dataclass(frozen=True, slots=True)
 class NarrationCue:
     cue_id: str
     text: str
