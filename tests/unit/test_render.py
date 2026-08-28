@@ -41,6 +41,21 @@ def test_ffmpeg_maps_only_rendered_video_and_tts_audio() -> None:
     assert "-shortest" not in command
 
 
+def test_proxy_render_uses_360p_fast_preset_without_changing_timeline() -> None:
+    command = build_render_command(
+        Path("source.mp4"),
+        Path("narration.wav"),
+        _edl(),
+        Path("proxy.mp4"),
+        quality="proxy",
+    )
+
+    graph = command[command.index("-filter_complex") + 1]
+    assert "scale=-2:360" in graph
+    assert command[command.index("-preset") + 1] == "ultrafast"
+    assert "trim=start=0.000:end=1.000" in graph
+
+
 def test_probe_render_rejects_stream_drift_over_80_ms(tmp_path: Path) -> None:
     output = tmp_path / "review.mp4"
     output.write_bytes(b"media")

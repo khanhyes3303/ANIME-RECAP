@@ -75,6 +75,16 @@ _NEXT_STAGE = {
     Stage.KIEM_DINH_VIDEO: Stage.HOAN_THANH,
 }
 
+_LEGACY_TRANSITIONS = {
+    (Stage.QUAN_SAT, Stage.VIET_KICH_BAN),
+    (Stage.VIET_KICH_BAN, Stage.KIEM_DINH_KICH_BAN),
+    (Stage.KIEM_DINH_KICH_BAN, Stage.CODEX_BIEN_TAP),
+    (Stage.CODEX_BIEN_TAP, Stage.TAO_TTS),
+    (Stage.TAO_TTS, Stage.LAP_EDL),
+    (Stage.LAP_EDL, Stage.DUNG_VIDEO),
+    (Stage.DUNG_VIDEO, Stage.KIEM_DINH_VIDEO),
+}
+
 
 def _state_path(run_dir: Path) -> Path:
     return run_dir / "run_state.json"
@@ -180,7 +190,7 @@ def advance(
         raise MvpError(
             f"persisted stage is {state.stage}; expected {expected} before advancing"
         )
-    if _NEXT_STAGE.get(expected) is not target:
+    if _NEXT_STAGE.get(expected) is not target and (expected, target) not in _LEGACY_TRANSITIONS:
         raise MvpError(f"forbidden workflow transition: {expected} -> {target}")
     if target is Stage.HOAN_THANH and not _engine_audit_passed:
         raise MvpError("only a successful engine audit may mark a run complete")

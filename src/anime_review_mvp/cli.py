@@ -5,16 +5,18 @@ import json
 import sys
 from pathlib import Path
 
+from .atomic import load_atomic_storyboard, load_critic_review
 from .antigravity import (
     build_operator_job,
+    calculate_policy_sha256,
     load_audit,
     load_scene_packets,
     load_script,
     load_truth,
 )
-from .audit import build_engine_audit
+from .audit import build_atomic_engine_audit, build_engine_audit
 from .editorial import load_locked_spans
-from .edl import build_edl_from_locked_spans
+from .edl import build_atomic_edl, build_edl_from_locked_spans
 from .errors import MvpError
 from .jsonio import dump_json, load_json
 from .media import (
@@ -26,7 +28,10 @@ from .media import (
     transcribe_english,
 )
 from .models import (
+    AtomicStoryboard,
+    AtomicTtsManifest,
     CodexSemanticReview,
+    CriticReviewDocument,
     FrameAnchorDocument,
     NarrationSpanDocument,
     ShotDocument,
@@ -35,14 +40,15 @@ from .models import (
     SpanTtsManifest,
 )
 from .render import RenderResult, render_review
-from .tts import synthesize_spans
+from .tts import synthesize_atomic_beats, synthesize_spans
 from .validation import (
     narration_style_findings,
+    atomic_style_findings,
     validate_scene_packets,
     validate_script,
     validate_truth,
 )
-from .workflow import Stage, advance, new_state, read_state, record_repair
+from .workflow import Stage, advance, new_state, read_state, record_beat_repair, record_repair
 from .workspace import create_job, publish_candidate
 
 
@@ -62,7 +68,17 @@ def _parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate")
     validate.add_argument("--run", required=True, type=Path)
     validate.add_argument(
-        "--artifact", required=True, choices=("truth", "scene", "script", "edl")
+        "--artifact",
+        required=True,
+        choices=(
+            "truth",
+            "scene",
+            "storyboard",
+            "critic-script",
+            "critic-video",
+            "script",
+            "edl",
+        ),
     )
     lock = subparsers.add_parser("lock")
     lock.add_argument("--run", required=True, type=Path)
@@ -70,9 +86,10 @@ def _parser() -> argparse.ArgumentParser:
     tts.add_argument("--run", required=True, type=Path)
     render = subparsers.add_parser("render")
     render.add_argument("--run", required=True, type=Path)
+    render.add_argument("--quality", choices=("proxy", "final"), default="final")
     audit = subparsers.add_parser("audit")
     audit.add_argument("--run", required=True, type=Path)
-    audit.add_argument("--phase", required=True, choices=("script", "video"))
+    audit.add_argument("--phase", required=True, choices=("script", "video", "engine"))
     audit.add_argument("--codex-review", type=Path)
     return parser
 
@@ -196,8 +213,110 @@ def _validate(run_dir: Path, artifact: str) -> int:
             shots = ShotDocument(detect_shots(Path(state.source_video), source.duration_ms))
             dump_json(shots_path, shots)
         validate_scene_packets(packets.packets, truth, shots.shots, source.duration_ms)
-        advance(run_dir, Stage.QUAN_SAT, Stage.VIET_KICH_BAN)
-        _write_next(run_dir, "VIET_KICH_BAN và ghi kich_ban_review.json.")
+        advance(run_dir, Stage.QUAN_SAT, Stage.LAP_STORYBOARD)
+        _write_next(
+            run_dir,
+            "Antigravity lập atomic_storyboard.json từ scene, shot và frame bằng chứng.",
+        )
+    elif artifact == "storyboard":
+        if state.stage is not Stage.LAP_STORYBOARD:
+            raise MvpError("storyboard validation requires LAP_STORYBOARD stage")
+        truth = load_truth(
+            episode / "Su_that" / "su_that_tap_phim.json",
+            source_duration_ms=source.duration_ms,
+        )
+        shots = load_json(run_dir / "shots.json", ShotDocument)
+        load_atomic_storyboard(
+            episode / "Kich_ban" / "atomic_storyboard.json",
+            truth,
+            shots.shots,
+            source.duration_ms,
+        )
+        advance(run_dir, Stage.LAP_STORYBOARD, Stage.VIET_LOI)
+        _write_next(
+            run_dir,
+            "Antigravity hoàn thiện lời theo atomic beat rồi tạo critic-script độc lập.",
+        )
+    elif artifact == "critic-script":
+        if state.stage is not Stage.VIET_LOI:
+            raise MvpError("critic-script validation requires VIET_LOI stage")
+        truth = load_truth(
+            episode / "Su_that" / "su_that_tap_phim.json",
+            source_duration_ms=source.duration_ms,
+        )
+        shots = load_json(run_dir / "shots.json", ShotDocument)
+        storyboard = load_atomic_storyboard(
+            episode / "Kich_ban" / "atomic_storyboard.json",
+            truth,
+            shots.shots,
+            source.duration_ms,
+        )
+        review = load_critic_review(
+            episode / "Bao_cao" / "critic_script.json",
+            storyboard,
+            "SCRIPT",
+        )
+        codes_by_beat = {
+            item.beat_id: item.finding_codes
+            for item in review.beat_reviews
+            if item.finding_codes
+        }
+        style_findings = atomic_style_findings(storyboard)
+        for finding in style_findings:
+            if finding.cue_id:
+                codes_by_beat.setdefault(finding.cue_id, ())
+                codes_by_beat[finding.cue_id] = (
+                    *codes_by_beat[finding.cue_id],
+                    finding.code,
+                )
+        if codes_by_beat:
+            beat_ids = tuple(codes_by_beat)
+            codes = tuple(dict.fromkeys(code for values in codes_by_beat.values() for code in values))
+            repaired = record_beat_repair(run_dir, "SCRIPT", beat_ids, codes)
+            _write_next(
+                run_dir,
+                f"Antigravity chỉ sửa beat lỗi {', '.join(beat_ids)}; vòng "
+                f"{len(repaired.repair_history)}/3.",
+            )
+            return 1
+        advance(run_dir, Stage.VIET_LOI, Stage.PHAN_BIEN_KICH_BAN)
+        advance(run_dir, Stage.PHAN_BIEN_KICH_BAN, Stage.TAO_TTS)
+        _write_next(run_dir, "Critic script sạch; Antigravity chạy tts.")
+    elif artifact == "critic-video":
+        if state.stage is not Stage.PHAN_BIEN_VIDEO:
+            raise MvpError("critic-video validation requires PHAN_BIEN_VIDEO stage")
+        truth = load_truth(
+            episode / "Su_that" / "su_that_tap_phim.json",
+            source_duration_ms=source.duration_ms,
+        )
+        shots = load_json(run_dir / "shots.json", ShotDocument)
+        storyboard = load_atomic_storyboard(
+            episode / "Kich_ban" / "atomic_storyboard.json",
+            truth,
+            shots.shots,
+            source.duration_ms,
+        )
+        review = load_critic_review(
+            episode / "Bao_cao" / "critic_video.json",
+            storyboard,
+            "VIDEO",
+        )
+        failed = tuple(item for item in review.beat_reviews if item.finding_codes)
+        if failed:
+            repaired = record_beat_repair(
+                run_dir,
+                "VIDEO",
+                tuple(item.beat_id for item in failed),
+                tuple(dict.fromkeys(code for item in failed for code in item.finding_codes)),
+            )
+            _write_next(
+                run_dir,
+                f"Antigravity chỉ sửa {len(failed)} beat lỗi; vòng "
+                f"{len(repaired.repair_history)}/3.",
+            )
+            return 1
+        advance(run_dir, Stage.PHAN_BIEN_VIDEO, Stage.DUNG_VIDEO_CUOI)
+        _write_next(run_dir, "Critic video sạch; render --quality final.")
     elif artifact == "script":
         truth = load_truth(
             episode / "Su_that" / "su_that_tap_phim.json",
@@ -208,6 +327,21 @@ def _validate(run_dir: Path, artifact: str) -> int:
         advance(run_dir, Stage.VIET_KICH_BAN, Stage.KIEM_DINH_KICH_BAN)
         _write_next(run_dir, "KIEM_DINH kịch bản và ghi kiem_dinh.json.")
     else:
+        if state.stage is Stage.CAN_TTS:
+            storyboard = load_json(
+                episode / "Kich_ban" / "atomic_storyboard.json", AtomicStoryboard
+            )
+            tts = load_json(
+                episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest
+            )
+            edl = load_json(
+                episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument
+            )
+            if edl != build_atomic_edl(storyboard, tts):
+                raise MvpError("persisted atomic EDL does not match storyboard and TTS")
+            advance(run_dir, Stage.CAN_TTS, Stage.DUNG_PROXY)
+            _write_next(run_dir, "Atomic EDL đạt; render --quality proxy.")
+            return 0
         truth = load_truth(
             episode / "Su_that" / "su_that_tap_phim.json",
             source_duration_ms=source.duration_ms,
@@ -255,6 +389,34 @@ def _tts(run_dir: Path) -> int:
     state, episode = _episode(run_dir)
     if state.stage is not Stage.TAO_TTS:
         raise MvpError("tts requires TAO_TTS stage")
+    atomic_path = episode / "Kich_ban" / "atomic_storyboard.json"
+    if atomic_path.is_file():
+        source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+        truth = load_truth(
+            episode / "Su_that" / "su_that_tap_phim.json",
+            source_duration_ms=source.duration_ms,
+        )
+        shots = load_json(run_dir / "shots.json", ShotDocument)
+        storyboard = load_atomic_storyboard(
+            atomic_path,
+            truth,
+            shots.shots,
+            source.duration_ms,
+        )
+        tts = synthesize_atomic_beats(
+            storyboard,
+            episode / "TTS",
+            episode / "_Cache" / "tts",
+        )
+        edl = build_atomic_edl(storyboard, tts)
+        dump_json(episode / "Ke_hoach_canh" / "atomic_edl.json", edl)
+        advance(run_dir, Stage.TAO_TTS, Stage.CAN_TTS)
+        _write_next(
+            run_dir,
+            f"TTS cache: {tts.cache_stats.hits} hit, {tts.cache_stats.misses} miss; "
+            "chạy validate --artifact edl.",
+        )
+        return 0
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     truth = load_truth(
         episode / "Su_that" / "su_that_tap_phim.json",
@@ -276,14 +438,60 @@ def _tts(run_dir: Path) -> int:
     return 0
 
 
-def _render(run_dir: Path) -> int:
+def _render(run_dir: Path, quality: str = "final") -> int:
     state, episode = _episode(run_dir)
+    if quality == "proxy" and state.stage is Stage.DUNG_PROXY:
+        edl = load_json(
+            episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument
+        )
+        tts = load_json(
+            episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest
+        )
+        output = run_dir / "proxy" / "review_proxy.mp4"
+        result = render_review(
+            Path(state.source_video),
+            Path(tts.narration_wav_path),
+            edl,
+            output,
+            quality="proxy",
+        )
+        dump_json(run_dir / "proxy" / "render_result.json", result)
+        extract_program_anchors(output, edl, run_dir / "atomic_evidence" / "program")
+        advance(run_dir, Stage.DUNG_PROXY, Stage.PHAN_BIEN_VIDEO)
+        _write_next(
+            run_dir,
+            "Antigravity mở proxy và evidence, ghi critic_video.json bằng critic context khác.",
+        )
+        print(output)
+        return 0
+    if quality == "final" and state.stage is Stage.DUNG_VIDEO_CUOI:
+        edl = load_json(
+            episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument
+        )
+        tts = load_json(
+            episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest
+        )
+        output = run_dir / "final_candidate.mp4"
+        result = render_review(
+            Path(state.source_video),
+            Path(tts.narration_wav_path),
+            edl,
+            output,
+            quality="final",
+        )
+        dump_json(run_dir / "final_render_result.json", result)
+        advance(run_dir, Stage.DUNG_VIDEO_CUOI, Stage.KIEM_DINH_ENGINE)
+        _write_next(run_dir, "Final candidate đã dựng; chạy audit --phase engine.")
+        print(output)
+        return 0
     if state.stage is not Stage.DUNG_VIDEO:
-        raise MvpError("render requires DUNG_VIDEO stage")
+        raise MvpError("render stage does not match requested quality")
     edl = load_json(episode / "Ke_hoach_canh" / "edl.json", SpanEdlDocument)
     tts = load_json(episode / "TTS" / "span_tts_manifest.json", SpanTtsManifest)
     output = run_dir / "review_candidate.mp4"
-    result = render_review(Path(state.source_video), Path(tts.narration_wav_path), edl, output)
+    result = render_review(
+        Path(state.source_video), Path(tts.narration_wav_path), edl, output
+    )
     dump_json(run_dir / "render_result.json", result)
     extract_program_anchors(output, edl, run_dir / "codex_evidence" / "program")
     advance(run_dir, Stage.DUNG_VIDEO, Stage.KIEM_DINH_VIDEO)
@@ -362,10 +570,75 @@ def _audit_video(run_dir: Path, episode: Path, codex_review: Path | None) -> int
     return 0
 
 
+def _audit_atomic_engine(run_dir: Path, episode: Path) -> int:
+    state = read_state(run_dir)
+    if state.stage is not Stage.KIEM_DINH_ENGINE:
+        raise MvpError("engine audit requires KIEM_DINH_ENGINE stage")
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    truth = load_truth(
+        episode / "Su_that" / "su_that_tap_phim.json",
+        source_duration_ms=source.duration_ms,
+    )
+    shots = load_json(run_dir / "shots.json", ShotDocument)
+    storyboard = load_atomic_storyboard(
+        episode / "Kich_ban" / "atomic_storyboard.json",
+        truth,
+        shots.shots,
+        source.duration_ms,
+    )
+    critic = load_critic_review(
+        episode / "Bao_cao" / "critic_video.json",
+        storyboard,
+        "VIDEO",
+    )
+    tts = load_json(episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest)
+    render = load_json(run_dir / "final_render_result.json", RenderResult)
+    job_payload = json.loads((run_dir / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
+    expected_hash = job_payload["policy_sha256"]
+    actual_hash = calculate_policy_sha256(episode.parents[3])
+    report = build_atomic_engine_audit(
+        storyboard,
+        tts,
+        critic,
+        render,
+        expected_policy_sha256=expected_hash,
+        actual_policy_sha256=actual_hash,
+    )
+    dump_json(episode / "Bao_cao" / "kiem_dinh_engine.json", report)
+    if not report.passed:
+        errors = tuple(item for item in report.findings if item.severity == "ERROR")
+        beat_ids = tuple(
+            dict.fromkeys(item.cue_id for item in errors if item.cue_id is not None)
+        ) or tuple(beat.beat_id for beat in storyboard.beats)
+        codes = tuple(dict.fromkeys(item.code for item in errors))
+        repaired = record_beat_repair(run_dir, "VIDEO", beat_ids, codes)
+        _write_next(
+            run_dir,
+            f"Engine chặn {', '.join(codes)}; chỉ sửa beat liên quan, vòng "
+            f"{len(repaired.repair_history)}/3.",
+        )
+        return 1
+    publish_candidate(
+        run_dir / "final_candidate.mp4",
+        episode / "Thanh_pham" / "review_anime.mp4",
+        episode / "Bao_cao" / "phien_ban_cu",
+    )
+    advance(
+        run_dir,
+        Stage.KIEM_DINH_ENGINE,
+        Stage.HOAN_THANH,
+        _engine_audit_passed=True,
+    )
+    _write_next(run_dir, "HOAN_THANH; giao review_anime.mp4 cho người dùng xem.")
+    return 0
+
+
 def _audit(run_dir: Path, phase: str, codex_review: Path | None) -> int:
     _, episode = _episode(run_dir)
     if phase == "script":
         return _audit_script(run_dir, episode)
+    if phase == "engine":
+        return _audit_atomic_engine(run_dir, episode)
     return _audit_video(run_dir, episode, codex_review)
 
 
@@ -387,7 +660,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "tts":
             return _tts(args.run)
         if args.command == "render":
-            return _render(args.run)
+            return _render(args.run, args.quality)
         if args.command == "audit":
             return _audit(args.run, args.phase, args.codex_review)
     except MvpError as exc:

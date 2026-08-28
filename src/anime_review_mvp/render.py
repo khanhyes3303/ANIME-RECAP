@@ -24,7 +24,11 @@ class RenderResult:
     audio_stream_count: int
 
 
-def build_filter_graph(edl: EdlDocument | SpanEdlDocument) -> str:
+def build_filter_graph(
+    edl: EdlDocument | SpanEdlDocument,
+    *,
+    quality: str = "final",
+) -> str:
     if not edl.segments:
         raise MvpError("cannot render an empty EDL")
     filters: list[str] = []
@@ -38,9 +42,13 @@ def build_filter_graph(edl: EdlDocument | SpanEdlDocument) -> str:
             f"setpts=PTS-STARTPTS[{label}]"
         )
         labels.append(f"[{label}]")
-    filters.append(
-        f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[video]"
-    )
+    if quality == "proxy":
+        filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[joined]")
+        filters.append("[joined]scale=-2:360[video]")
+    elif quality == "final":
+        filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[video]")
+    else:
+        raise MvpError("render quality must be proxy or final")
     return ";".join(filters)
 
 
@@ -49,8 +57,10 @@ def build_render_command(
     narration_wav: Path,
     edl: EdlDocument | SpanEdlDocument,
     output: Path,
+    *,
+    quality: str = "final",
 ) -> list[str]:
-    return [
+    command = [
         "ffmpeg",
         "-y",
         "-v",
@@ -60,13 +70,17 @@ def build_render_command(
         "-i",
         str(narration_wav),
         "-filter_complex",
-        build_filter_graph(edl),
+        build_filter_graph(edl, quality=quality),
         "-map",
         "[video]",
         "-map",
         "1:a:0",
         "-c:v",
         "libx264",
+    ]
+    if quality == "proxy":
+        command.extend(("-preset", "ultrafast", "-crf", "30"))
+    command.extend([
         "-pix_fmt",
         "yuv420p",
         "-c:a",
@@ -74,7 +88,8 @@ def build_render_command(
         "-movflags",
         "+faststart",
         str(output),
-    ]
+    ])
+    return command
 
 
 def _run(command: list[str], runner: Runner) -> Any:
@@ -148,11 +163,12 @@ def render_review(
     *,
     allow_short_fixture: bool = False,
     runner: Runner = subprocess.run,
+    quality: str = "final",
 ) -> RenderResult:
     if not source.is_file() or not narration_wav.is_file():
         raise MvpError("render inputs must exist")
     output.parent.mkdir(parents=True, exist_ok=True)
-    _run(build_render_command(source, narration_wav, edl, output), runner)
+    _run(build_render_command(source, narration_wav, edl, output, quality=quality), runner)
     return probe_render(
         output, allow_short_fixture=allow_short_fixture, runner=runner
     )

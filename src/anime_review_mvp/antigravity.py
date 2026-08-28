@@ -46,7 +46,7 @@ class OperatorJob:
     policy_sha256: str
 
 
-def _policy_sha256(root: Path) -> str:
+def calculate_policy_sha256(root: Path) -> str:
     digest = hashlib.sha256()
     relative_paths = (
         Path("Bo_nao_Antigravity/GEMINI.md"),
@@ -111,7 +111,7 @@ def build_operator_job(
                 )
             ),
         ),
-        policy_sha256=_policy_sha256(paths.root),
+        policy_sha256=calculate_policy_sha256(paths.root),
     )
     output = paths.temp_dir / "cong_viec_antigravity.json"
     dump_json(output, job)
