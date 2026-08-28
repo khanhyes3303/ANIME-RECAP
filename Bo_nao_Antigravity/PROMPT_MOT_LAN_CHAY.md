@@ -17,6 +17,9 @@ prepare → QUAN_SAT truth + scene_packets
 → render TTS-only → audit MP4 → package ZIP
 ```
 
+Nếu `run_state.json` đã ở `QUAN_SAT` (ví dụ run đã được prepare từ trước), bỏ qua
+`prepare` và bắt đầu từ việc tạo `su_that_tap_phim.json` cùng `scene_packets.json`.
+
 Không hỏi người dùng duyệt giữa các bước. Scene là đơn vị kể chuyện, shot là đơn vị
 cắt hình. Giữ shot `MUST_KEEP`, chỉ cắt `OPTIONAL`/`TRANSITION`. Không đổi cốt truyện,
 không nhét chữ vào miệng nhân vật, không speed/freeze/loop, không dùng audio tiếng Anh
