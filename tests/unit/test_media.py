@@ -10,10 +10,17 @@ from anime_review_mvp.errors import MvpError
 from anime_review_mvp.media import (
     detect_shots,
     extract_inspection_assets,
+    extract_span_anchors,
     probe_source,
     transcribe_english,
 )
-from anime_review_mvp.models import Shot
+from anime_review_mvp.models import (
+    Claim,
+    NarrationSpan,
+    NarrationSpanDocument,
+    Shot,
+    SpanSourceRange,
+)
 
 
 class FakeRunner:
@@ -112,3 +119,53 @@ def test_extract_inspection_assets_writes_one_midpoint_frame_per_shot(
     )
     assert "1.000" in runner.commands[0]
     assert "3.500" in runner.commands[1]
+
+
+def test_extract_span_anchors_requests_start_middle_and_end(tmp_path: Path) -> None:
+    source = tmp_path / "episode.mp4"
+    source.write_bytes(b"media")
+    output_dir = tmp_path / "anchors"
+    runner = FakeRunner()
+    document = NarrationSpanDocument(
+        spans=(
+            NarrationSpan(
+                "span-001",
+                "Jiro lao qua cổng.",
+                ("claim-001",),
+                ("event-001",),
+                ("Jiro",),
+                "Jiro chạy qua cổng.",
+                (
+                    SpanSourceRange(
+                        "range-001",
+                        1_000,
+                        4_000,
+                        "scene-001",
+                        "beat-001",
+                        ("shot-0001",),
+                        ("event-001",),
+                    ),
+                ),
+            ),
+        ),
+        claims=(Claim("claim-001", "ACTION", "Jiro runs.", ("event-001",)),),
+        owner="CODEX",
+    )
+
+    anchors = extract_span_anchors(
+        source,
+        document,
+        output_dir,
+        timeline="SOURCE",
+        runner=runner,
+    )
+
+    assert [anchor.position for anchor in anchors.anchors] == ["START", "MIDDLE", "END"]
+    assert [anchor.timestamp_ms for anchor in anchors.anchors] == [1_080, 2_500, 3_920]
+    assert all(anchor.timeline == "SOURCE" for anchor in anchors.anchors)
+    assert [command[command.index("-ss") + 1] for command in runner.commands] == [
+        "1.080",
+        "2.500",
+        "3.920",
+    ]
+    assert (output_dir / "anchors.json").is_file()

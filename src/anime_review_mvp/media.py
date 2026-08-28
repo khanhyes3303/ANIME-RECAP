@@ -11,6 +11,9 @@ from typing import Any
 from .errors import MvpError
 from .jsonio import dump_json
 from .models import (
+    FrameAnchor,
+    FrameAnchorDocument,
+    NarrationSpanDocument,
     Shot,
     SourceRef,
     TranscriptDocument,
@@ -198,3 +201,74 @@ def extract_inspection_assets(
         )
         frames.append(frame)
     return tuple(frames)
+
+
+def _anchor_timestamps(start_ms: int, end_ms: int) -> tuple[int, int, int]:
+    duration_ms = end_ms - start_ms
+    if duration_ms <= 160:
+        return (
+            start_ms + duration_ms // 4,
+            start_ms + duration_ms // 2,
+            start_ms + (duration_ms * 3) // 4,
+        )
+    return start_ms + 80, start_ms + duration_ms // 2, end_ms - 80
+
+
+def extract_span_anchors(
+    video: Path,
+    document: NarrationSpanDocument,
+    output_dir: Path,
+    *,
+    timeline: str,
+    runner: Runner = subprocess.run,
+) -> FrameAnchorDocument:
+    if not video.is_file():
+        raise MvpError(f"anchor video does not exist: {video}")
+    if timeline != "SOURCE":
+        raise MvpError("locked span ranges can only produce SOURCE anchors")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    anchors: list[FrameAnchor] = []
+    for span in document.spans:
+        for source_range in span.source_ranges:
+            for position, timestamp_ms in zip(
+                ("START", "MIDDLE", "END"),
+                _anchor_timestamps(
+                    source_range.source_start_ms,
+                    source_range.source_end_ms,
+                ),
+                strict=True,
+            ):
+                anchor_id = (
+                    f"{span.span_id}-{source_range.range_id}-{position.lower()}"
+                )
+                frame = output_dir / f"{anchor_id}.jpg"
+                _run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-v",
+                        "error",
+                        "-ss",
+                        f"{timestamp_ms / 1_000:.3f}",
+                        "-i",
+                        str(video),
+                        "-frames:v",
+                        "1",
+                        str(frame),
+                    ],
+                    runner,
+                )
+                anchors.append(
+                    FrameAnchor(
+                        anchor_id,
+                        span.span_id,
+                        source_range.range_id,
+                        timeline,
+                        position,
+                        timestamp_ms,
+                        str(frame.resolve()),
+                    )
+                )
+    result = FrameAnchorDocument(tuple(anchors))
+    dump_json(output_dir / "anchors.json", result)
+    return result

@@ -192,6 +192,38 @@ class NarrationSpanDocument:
 
 
 @dataclass(frozen=True, slots=True)
+class FrameAnchor:
+    anchor_id: str
+    span_id: str
+    range_id: str
+    timeline: str
+    position: str
+    timestamp_ms: int
+    path: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.anchor_id, "anchor_id")
+        _non_empty(self.span_id, "anchor span_id")
+        _non_empty(self.range_id, "anchor range_id")
+        if self.timeline not in {"SOURCE", "PROGRAM"}:
+            raise MvpError("anchor timeline is invalid")
+        if self.position not in {"START", "MIDDLE", "END"}:
+            raise MvpError("anchor position is invalid")
+        if self.timestamp_ms < 0:
+            raise MvpError("anchor timestamp must not be negative")
+        _non_empty(self.path, "anchor path")
+
+
+@dataclass(frozen=True, slots=True)
+class FrameAnchorDocument:
+    anchors: tuple[FrameAnchor, ...]
+
+    def __post_init__(self) -> None:
+        if not self.anchors:
+            raise MvpError("anchor document requires frames")
+
+
+@dataclass(frozen=True, slots=True)
 class NarrationCue:
     cue_id: str
     text: str
