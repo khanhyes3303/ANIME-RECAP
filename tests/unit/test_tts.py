@@ -8,7 +8,14 @@ import httpx
 import pytest
 
 from anime_review_mvp.errors import MvpError
-from anime_review_mvp.models import NarrationCue, ScriptDocument
+from anime_review_mvp.models import (
+    Claim,
+    NarrationCue,
+    NarrationSpan,
+    NarrationSpanDocument,
+    ScriptDocument,
+    SpanSourceRange,
+)
 from anime_review_mvp.tts import (
     ProviderChunkResult,
     ProviderSynthesisResult,
@@ -18,6 +25,7 @@ from anime_review_mvp.tts import (
     normalize_speech_text,
     plan_chunks,
     synthesize_script,
+    synthesize_spans,
 )
 
 
@@ -96,3 +104,44 @@ def test_synthesize_script_creates_cue_audio_and_gapless_manifest(tmp_path: Path
         assert narration.getnframes() == 4_800
         assert narration.getframerate() == 24_000
     assert (tmp_path / "tts_manifest.json").exists()
+
+
+def test_synthesize_spans_creates_one_wav_per_locked_span(tmp_path: Path) -> None:
+    document = NarrationSpanDocument(
+        spans=(
+            NarrationSpan(
+                "span-001",
+                "Jiro lao qua cổng.",
+                ("claim-001",),
+                ("event-001",),
+                ("Jiro",),
+                "Jiro chạy qua cổng.",
+                (
+                    SpanSourceRange(
+                        "range-001",
+                        0,
+                        100,
+                        "scene-001",
+                        "beat-001",
+                        ("shot-001",),
+                        ("event-001",),
+                        True,
+                    ),
+                ),
+            ),
+        ),
+        claims=(Claim("claim-001", "ACTION", "Jiro runs.", ("event-001",)),),
+        owner="CODEX",
+    )
+
+    manifest = synthesize_spans(
+        document,
+        tmp_path,
+        provider=FakeProvider(),
+        converter=_fake_converter,
+    )
+
+    assert [item.span_id for item in manifest.spans] == ["span-001"]
+    assert Path(manifest.spans[0].wav_path).name == "span-001.wav"
+    assert manifest.spans[0].duration_ms == 100
+    assert (tmp_path / "span_tts_manifest.json").is_file()

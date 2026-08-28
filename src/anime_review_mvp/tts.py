@@ -16,7 +16,14 @@ import httpx
 
 from .errors import MvpError
 from .jsonio import dump_json
-from .models import ScriptDocument, TtsCue, TtsManifest
+from .models import (
+    NarrationSpanDocument,
+    ScriptDocument,
+    SpanTts,
+    SpanTtsManifest,
+    TtsCue,
+    TtsManifest,
+)
 
 ENDPOINT = "https://api16-normal-v6.tiktokv.com/media/api/text/speech/invoke/"
 USER_AGENT = "com.zhiliaoapp.musically/2022600030 (Linux; U; Android 13; vi_VN)"
@@ -319,4 +326,43 @@ def synthesize_script(
         voice_id=profile.voice_id,
     )
     dump_json(output_dir / "tts_manifest.json", manifest)
+    return manifest
+
+
+def synthesize_spans(
+    document: NarrationSpanDocument,
+    output_dir: Path,
+    *,
+    provider: TtsProvider | None = None,
+    converter: Converter = _convert_mp3_to_wav,
+) -> SpanTtsManifest:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    profile = default_profile()
+    policy = default_policy()
+    engine = provider or TikTokCapCutProvider()
+    results: list[SpanTts] = []
+    wav_paths: list[Path] = []
+    for span in document.spans:
+        synthesis = engine.synthesize(
+            plan_chunks(span.text, character_ceiling=policy.character_ceiling),
+            profile,
+            policy,
+        )
+        mp3_path = output_dir / f"{span.span_id}.mp3"
+        wav_path = output_dir / f"{span.span_id}.wav"
+        mp3_path.write_bytes(b"".join(chunk.audio for chunk in synthesis.chunks))
+        converter(mp3_path, wav_path)
+        duration_ms = _wav_duration_ms(wav_path)
+        results.append(SpanTts(span.span_id, str(mp3_path), str(wav_path), duration_ms))
+        wav_paths.append(wav_path)
+
+    narration_path = output_dir / "narration.wav"
+    _concatenate_wavs(wav_paths, narration_path)
+    manifest = SpanTtsManifest(
+        spans=tuple(results),
+        narration_wav_path=str(narration_path),
+        provider=profile.provider,
+        voice_id=profile.voice_id,
+    )
+    dump_json(output_dir / "span_tts_manifest.json", manifest)
     return manifest

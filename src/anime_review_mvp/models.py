@@ -336,6 +336,36 @@ class TtsManifest:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanTts:
+    span_id: str
+    mp3_path: str
+    wav_path: str
+    duration_ms: int
+
+    def __post_init__(self) -> None:
+        _non_empty(self.span_id, "TTS span_id")
+        _non_empty(self.mp3_path, "TTS span MP3 path")
+        _non_empty(self.wav_path, "TTS span WAV path")
+        if self.duration_ms <= 0:
+            raise MvpError("TTS span duration must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class SpanTtsManifest:
+    spans: tuple[SpanTts, ...]
+    narration_wav_path: str
+    provider: str
+    voice_id: str
+
+    def __post_init__(self) -> None:
+        if not self.spans:
+            raise MvpError("span TTS manifest requires audio")
+        _non_empty(self.narration_wav_path, "narration WAV path")
+        _non_empty(self.provider, "TTS provider")
+        _non_empty(self.voice_id, "TTS voice_id")
+
+
+@dataclass(frozen=True, slots=True)
 class EdlSegment:
     segment_id: str
     cue_id: str
@@ -353,6 +383,31 @@ class EdlSegment:
 @dataclass(frozen=True, slots=True)
 class EdlDocument:
     segments: tuple[EdlSegment, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SpanEdlSegment:
+    segment_id: str
+    span_id: str
+    source_start_ms: int
+    source_end_ms: int
+    program_start_ms: int
+    program_end_ms: int
+    range_id: str
+    scene_id: str
+    beat_id: str
+    shot_ids: tuple[str, ...]
+    event_ids: tuple[str, ...]
+    short_action_exception: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SpanEdlDocument:
+    segments: tuple[SpanEdlSegment, ...]
+
+    def __post_init__(self) -> None:
+        if not self.segments:
+            raise MvpError("span EDL requires segments")
 
 
 @dataclass(frozen=True, slots=True)
