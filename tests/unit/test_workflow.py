@@ -11,6 +11,8 @@ from anime_review_mvp.workflow import (
     new_state,
     read_state,
     record_repair,
+    record_beat_repair,
+    record_stage_metric,
 )
 
 
@@ -65,3 +67,55 @@ def test_content_repair_returns_to_codex_editor(tmp_path: Path) -> None:
     repaired = record_repair(state.run_dir, "SUA_NOI_DUNG", ("SCENE_MISMATCH",))
 
     assert repaired.stage is Stage.CODEX_BIEN_TAP
+
+
+def test_antigravity_first_path_does_not_require_codex_editor(tmp_path: Path) -> None:
+    path = (
+        Stage.CHUAN_BI,
+        Stage.QUAN_SAT,
+        Stage.LAP_STORYBOARD,
+        Stage.VIET_LOI,
+        Stage.PHAN_BIEN_KICH_BAN,
+        Stage.TAO_TTS,
+        Stage.CAN_TTS,
+        Stage.DUNG_PROXY,
+        Stage.PHAN_BIEN_VIDEO,
+        Stage.DUNG_VIDEO_CUOI,
+        Stage.KIEM_DINH_ENGINE,
+        Stage.HOAN_THANH,
+    )
+
+    assert Stage.CODEX_BIEN_TAP not in path
+    assert new_state(tmp_path / "run").stage is path[0]
+
+
+def test_beat_repair_records_only_failed_beats(tmp_path: Path) -> None:
+    state = new_state(tmp_path / "run", stage=Stage.PHAN_BIEN_VIDEO)
+
+    repaired = record_beat_repair(
+        state.run_dir,
+        "VIDEO",
+        ("beat-003",),
+        ("VOICE_AHEAD",),
+    )
+
+    assert repaired.stage is Stage.SUA_BEAT
+    assert repaired.repair_history[-1].beat_ids == ("beat-003",)
+    assert repaired.repair_history[-1].phase == "VIDEO"
+
+
+def test_stage_metrics_reject_negative_counters(tmp_path: Path) -> None:
+    state = new_state(tmp_path / "run")
+    with pytest.raises(MvpError, match="negative"):
+        record_stage_metric(state.run_dir, Stage.CHUAN_BI, 1, -1, 0, ())
+
+    measured = record_stage_metric(
+        state.run_dir,
+        Stage.CHUAN_BI,
+        125,
+        2,
+        1,
+        ("beat-001",),
+    )
+    assert measured.stage_metrics[-1].elapsed_ms == 125
+    assert measured.stage_metrics[-1].cache_hits == 2
