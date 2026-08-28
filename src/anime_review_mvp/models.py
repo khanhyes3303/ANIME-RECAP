@@ -67,6 +67,49 @@ class TruthDocument:
 
 
 @dataclass(frozen=True, slots=True)
+class SourceRef:
+    path: str
+    sha256: str
+    duration_ms: int
+    width: int
+    height: int
+    time_base: str
+    audio_stream_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptWord:
+    start_ms: int
+    end_ms: int
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptSegment:
+    start_ms: int
+    end_ms: int
+    text: str
+    words: tuple[TranscriptWord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TranscriptDocument:
+    language: str
+    segments: tuple[TranscriptSegment, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Shot:
+    shot_id: str
+    start_ms: int
+    end_ms: int
+
+    def __post_init__(self) -> None:
+        _non_empty(self.shot_id, "shot_id")
+        _positive_interval(self.start_ms, self.end_ms, "shot")
+
+
+@dataclass(frozen=True, slots=True)
 class Claim:
     claim_id: str
     kind: str
