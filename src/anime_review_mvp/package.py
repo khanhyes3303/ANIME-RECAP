@@ -58,13 +58,14 @@ def build_report(run_dir: Path) -> tuple[Path, Path]:
         raise MvpError("run state lacks episode or source path")
     episode = Path(state.episode_dir)
     finals = sorted((episode / "Thanh_pham").glob("*.mp4"))
-    if len(finals) != 1:
+    if len(finals) > 1 or (state.stage is not Stage.CAN_CON_NGUOI_XU_LY and not finals):
         raise MvpError("report requires exactly one final MP4")
     status = "PASS" if state.stage in {Stage.DONG_GOI, Stage.HOAN_THANH} else state.stage.value
+    final_reference = _media_reference(finals[0]) if finals else None
     report = {
         "status": status,
         "source": _media_reference(Path(state.source_video)),
-        "final": _media_reference(finals[0]),
+        "final": final_reference,
         "tools": {"python": platform.python_version(), "ffmpeg": _ffmpeg_version()},
         "repair_history": [asdict(record) for record in state.repair_history],
     }
@@ -75,13 +76,18 @@ def build_report(run_dir: Path) -> tuple[Path, Path]:
     json_path.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+    final_lines = (
+        f"- Thành phẩm: `{final_reference['path']}`\n"
+        f"- SHA-256 thành phẩm: `{final_reference['sha256']}`\n"
+        if final_reference
+        else "- Thành phẩm: chưa tạo do cần con người xử lý\n"
+    )
     markdown_path.write_text(
         "# Báo cáo tập anime\n\n"
         f"- Trạng thái: {status}\n"
         f"- Video nguồn: `{report['source']['path']}`\n"
         f"- SHA-256 nguồn: `{report['source']['sha256']}`\n"
-        f"- Thành phẩm: `{report['final']['path']}`\n"
-        f"- SHA-256 thành phẩm: `{report['final']['sha256']}`\n"
+        f"{final_lines}"
         f"- Số vòng sửa: {len(state.repair_history)}\n",
         encoding="utf-8",
     )

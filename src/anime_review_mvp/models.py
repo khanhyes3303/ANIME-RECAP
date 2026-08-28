@@ -142,6 +142,7 @@ class NarrationCue:
 @dataclass(frozen=True, slots=True)
 class ScriptDocument:
     cues: tuple[NarrationCue, ...]
+    claims: tuple[Claim, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.cues:

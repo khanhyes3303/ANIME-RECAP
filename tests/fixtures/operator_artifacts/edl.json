@@ -1,0 +1,10 @@
+{
+  "segments": [
+    {
+      "segment_id": "segment-001",
+      "cue_id": "cue-001",
+      "source_start_ms": 0,
+      "source_end_ms": 8000
+    }
+  ]
+}

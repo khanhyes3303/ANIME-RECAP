@@ -47,6 +47,25 @@ def validate_script(script: ScriptDocument, truth: TruthDocument) -> None:
         unknown = set(cue.event_ids) - event_ids
         if unknown:
             raise MvpError(f"cue references unknown event IDs: {sorted(unknown)}")
+    claim_ids = [claim.claim_id for claim in script.claims]
+    if _duplicates(claim_ids):
+        raise MvpError("script contains duplicate claim IDs")
+    claims = {claim.claim_id: claim for claim in script.claims}
+    for claim in script.claims:
+        unknown = set(claim.evidence_event_ids) - event_ids
+        if unknown:
+            raise MvpError(f"claim references unknown event IDs: {sorted(unknown)}")
+    for cue in script.cues:
+        unknown_claims = set(cue.claim_ids) - set(claims)
+        if unknown_claims:
+            raise MvpError(f"cue references unknown claim IDs: {sorted(unknown_claims)}")
+        required_evidence = {
+            event_id
+            for claim_id in cue.claim_ids
+            for event_id in claims[claim_id].evidence_event_ids
+        }
+        if not required_evidence <= set(cue.event_ids):
+            raise MvpError("cue event binding does not include all claim evidence")
 
 
 def coverage_ratio(script: ScriptDocument, tts: TtsManifest) -> Decimal:

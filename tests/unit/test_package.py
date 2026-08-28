@@ -66,3 +66,25 @@ def test_finalize_preserves_source_and_episode_artifacts(tmp_path: Path) -> None
     assert result.archive.exists()
     assert result.status == "PASS"
     assert not run.exists()
+
+
+def test_human_required_run_packages_without_a_final_video(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"source")
+    episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_002"
+    (episode / "Bao_cao").mkdir(parents=True)
+    run = tmp_path / "Tam_dang_xu_ly" / "run-002"
+    new_state(
+        run,
+        stage=Stage.CAN_CON_NGUOI_XU_LY,
+        episode_dir=episode,
+        source_video=source,
+    )
+
+    result = finalize_run(run, passed=False)
+
+    with ZipFile(result.archive) as zipped:
+        report = json.loads(zipped.read("bao_cao.json"))
+    assert result.status == "CAN_CON_NGUOI_XU_LY"
+    assert report["final"] is None
+    assert not run.exists()

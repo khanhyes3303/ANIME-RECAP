@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -8,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from anime_review_mvp.cli import main
+from anime_review_mvp.workflow import Stage, new_state, read_state
 
 
 def test_cli_start_accepts_exactly_one_video(
@@ -66,3 +68,32 @@ def test_cli_help_is_printable_on_the_windows_cp1258_console() -> None:
     )
 
     assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+
+
+def test_video_audit_routes_scene_errors_back_to_edl(tmp_path: Path) -> None:
+    episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
+    report = episode / "Bao_cao" / "kiem_dinh.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(
+        json.dumps(
+            {
+                "passed": False,
+                "coverage_ratio": "1",
+                "findings": [
+                    {
+                        "severity": "ERROR",
+                        "code": "SCENE_MISMATCH",
+                        "cue_id": "cue-001",
+                        "message": "Wrong scene",
+                        "evidence_refs": ["event-001"],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    run = tmp_path / "Tam_dang_xu_ly" / "run"
+    new_state(run, stage=Stage.KIEM_DINH_VIDEO, episode_dir=episode)
+
+    assert main(["audit", "--run", str(run), "--phase", "video"]) == 1
+    assert read_state(run).stage is Stage.LAP_EDL

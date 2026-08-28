@@ -8,6 +8,7 @@ from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import (
     AuditFinding,
     AuditReport,
+    Claim,
     EdlDocument,
     EdlSegment,
     Event,
@@ -112,8 +113,25 @@ def test_edl_rejects_excluded_opening_or_ending_region() -> None:
 
 def test_script_rejects_event_ids_absent_from_truth() -> None:
     cue = NarrationCue("cue-001", "Sai canh", ("claim-001",), ("missing",), True)
+    claim = Claim("claim-001", "ACTION", "Sai canh", ("missing",))
     with pytest.raises(MvpError, match="unknown event"):
-        validate_script(ScriptDocument((cue,)), _truth())
+        validate_script(ScriptDocument((cue,), (claim,)), _truth())
+
+
+def test_script_rejects_claim_evidence_not_bound_to_its_cue() -> None:
+    claim = Claim("claim-001", "ACTION", "A runs", ("event-001",))
+    cue = NarrationCue("cue-001", "A chay", ("claim-001",), ("event-002",), True)
+    truth = TruthDocument(
+        events=(
+            *_truth().events,
+            Event("event-002", 10_000, 11_000, ("B",), "B waits.", "SIDE", 1.0),
+        ),
+        source_regions=(),
+        source_region_scan_complete=True,
+    )
+
+    with pytest.raises(MvpError, match="claim evidence"):
+        validate_script(ScriptDocument((cue,), (claim,)), truth)
 
 
 def test_truth_rejects_overlapping_source_regions() -> None:

@@ -50,6 +50,14 @@ def _truth_payload() -> dict[str, object]:
 
 def _script_payload() -> dict[str, object]:
     return {
+        "claims": [
+            {
+                "claim_id": "claim-001",
+                "kind": "ACTION",
+                "text": "A runs through the gate.",
+                "evidence_event_ids": ["event-001"],
+            }
+        ],
         "cues": [
             {
                 "cue_id": "cue-001",
@@ -98,6 +106,16 @@ def test_script_requires_claim_and_event_binding(tmp_path: Path) -> None:
     cues[0]["event_ids"] = []
 
     with pytest.raises(MvpError, match="claim and event"):
+        load_script(_write(tmp_path / "script.json", payload))
+
+
+def test_script_rejects_a_cue_bound_to_an_unknown_claim(tmp_path: Path) -> None:
+    payload = _script_payload()
+    cues = payload["cues"]
+    assert isinstance(cues, list)
+    cues[0]["claim_ids"] = ["claim-missing"]
+
+    with pytest.raises(MvpError, match="unknown claim"):
         load_script(_write(tmp_path / "script.json", payload))
 
 

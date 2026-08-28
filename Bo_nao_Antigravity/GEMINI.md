@@ -45,3 +45,23 @@ nếu không thể giải quyết sau tối đa ba vòng, trả `CAN_CON_NGUOI_X
 - Không speed, freeze, loop hay kéo giãn footage để lấp thời lượng.
 - Không dùng âm thanh nguồn. Thành phẩm chỉ có TTS tiếng Việt, không BGM.
 - Không xử lý nhiều hơn một tập trong một job.
+
+## Lệnh nội bộ phải gọi theo `next_action.json`
+
+Không dừng để bắt người dùng chạy từng bước. Dùng đúng `run_dir` do lệnh `start` in ra:
+
+```powershell
+uv run python run_episode.py prepare --run "<run_dir>"
+uv run python run_episode.py validate --run "<run_dir>" --artifact truth
+uv run python run_episode.py validate --run "<run_dir>" --artifact script
+uv run python run_episode.py audit --run "<run_dir>" --phase script
+uv run python run_episode.py tts --run "<run_dir>"
+uv run python run_episode.py validate --run "<run_dir>" --artifact edl
+uv run python run_episode.py render --run "<run_dir>"
+uv run python run_episode.py audit --run "<run_dir>" --phase video
+uv run python run_episode.py package --run "<run_dir>"
+```
+
+Sau mỗi lệnh, đọc lại `next_action.json`. Nếu audit trả mã 1, sửa artifact thuộc
+`SUA_NOI_DUNG` hoặc `SUA_EDL` rồi chạy lại từ stage được ghi trong state. Không tự sửa
+`run_state.json`. Ba lần không đạt sẽ khóa run ở `CAN_CON_NGUOI_XU_LY`.

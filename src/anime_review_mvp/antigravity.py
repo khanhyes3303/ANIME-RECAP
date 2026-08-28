@@ -77,6 +77,14 @@ def load_truth(path: Path, *, source_duration_ms: int) -> TruthDocument:
 def load_script(path: Path) -> ScriptDocument:
     script = load_json(path, ScriptDocument)
     _reject_duplicate_ids(script.cues, "cue_id")
+    if not script.claims:
+        raise MvpError("script requires atomic claims")
+    _reject_duplicate_ids(script.claims, "claim_id")
+    claim_ids = {claim.claim_id for claim in script.claims}
+    for cue in script.cues:
+        unknown = set(cue.claim_ids) - claim_ids
+        if unknown:
+            raise MvpError(f"cue references unknown claim IDs: {sorted(unknown)}")
     return script
 
 
