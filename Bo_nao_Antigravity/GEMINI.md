@@ -88,10 +88,6 @@ uv run python run_episode.py validate --run "<run_dir>" --artifact truth
 uv run python run_episode.py validate --run "<run_dir>" --artifact scene
 uv run python run_episode.py validate --run "<run_dir>" --artifact script
 uv run python run_episode.py audit --run "<run_dir>" --phase script
-uv run python run_episode.py tts --run "<run_dir>"
-uv run python run_episode.py validate --run "<run_dir>" --artifact edl
-uv run python run_episode.py render --run "<run_dir>"
-uv run python run_episode.py audit --run "<run_dir>" --phase video
 ```
 
 Sau mỗi lệnh, đọc `next_action.json`. Khi stage là `CODEX_BIEN_TAP`, không chạy thêm
