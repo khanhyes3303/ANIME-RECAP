@@ -1,0 +1,14 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+
+# Runtime-only artifacts and real media never belong in Git.
+Tam_dang_xu_ly/
+.cache/
+*.env
+*.mp4
+*.mkv
+*.mp3
+*.wav
