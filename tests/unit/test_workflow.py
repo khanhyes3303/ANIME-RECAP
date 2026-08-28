@@ -45,7 +45,23 @@ def test_third_failed_repair_becomes_human_required(tmp_path: Path) -> None:
         )
 
 
-def test_operator_cannot_directly_mark_run_complete(tmp_path: Path) -> None:
-    state = new_state(tmp_path / "run", stage=Stage.DONG_GOI)
-    with pytest.raises(MvpError, match="package"):
-        advance(state.run_dir, Stage.DONG_GOI, Stage.HOAN_THANH)
+def test_only_engine_audit_can_mark_run_complete(tmp_path: Path) -> None:
+    state = new_state(tmp_path / "run", stage=Stage.KIEM_DINH_VIDEO)
+    with pytest.raises(MvpError, match="engine audit"):
+        advance(state.run_dir, Stage.KIEM_DINH_VIDEO, Stage.HOAN_THANH)
+
+    completed = advance(
+        state.run_dir,
+        Stage.KIEM_DINH_VIDEO,
+        Stage.HOAN_THANH,
+        _engine_audit_passed=True,
+    )
+    assert completed.stage is Stage.HOAN_THANH
+
+
+def test_content_repair_returns_to_codex_editor(tmp_path: Path) -> None:
+    state = new_state(tmp_path / "run", stage=Stage.KIEM_DINH_VIDEO)
+
+    repaired = record_repair(state.run_dir, "SUA_NOI_DUNG", ("SCENE_MISMATCH",))
+
+    assert repaired.stage is Stage.CODEX_BIEN_TAP

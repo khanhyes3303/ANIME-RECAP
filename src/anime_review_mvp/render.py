@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import MvpError
-from .models import EdlDocument
+from .models import EdlDocument, SpanEdlDocument
 
 Runner = Callable[..., Any]
 
@@ -17,11 +17,14 @@ Runner = Callable[..., Any]
 class RenderResult:
     path: str
     duration_ms: int
+    video_duration_ms: int
+    audio_duration_ms: int
+    drift_ms: int
     video_stream_count: int
     audio_stream_count: int
 
 
-def build_filter_graph(edl: EdlDocument) -> str:
+def build_filter_graph(edl: EdlDocument | SpanEdlDocument) -> str:
     if not edl.segments:
         raise MvpError("cannot render an empty EDL")
     filters: list[str] = []
@@ -44,7 +47,7 @@ def build_filter_graph(edl: EdlDocument) -> str:
 def build_render_command(
     source: Path,
     narration_wav: Path,
-    edl: EdlDocument,
+    edl: EdlDocument | SpanEdlDocument,
     output: Path,
 ) -> list[str]:
     return [
@@ -70,7 +73,6 @@ def build_render_command(
         "aac",
         "-movflags",
         "+faststart",
-        "-shortest",
         str(output),
     ]
 
@@ -86,6 +88,7 @@ def probe_render(
     output: Path,
     *,
     allow_short_fixture: bool = False,
+    max_av_drift_ms: int = 80,
     runner: Runner = subprocess.run,
 ) -> RenderResult:
     if not output.is_file():
@@ -106,24 +109,41 @@ def probe_render(
     try:
         payload = json.loads(result.stdout)
         streams = payload["streams"]
-        video_count = sum(stream.get("codec_type") == "video" for stream in streams)
-        audio_count = sum(stream.get("codec_type") == "audio" for stream in streams)
+        video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
+        audio_streams = [stream for stream in streams if stream.get("codec_type") == "audio"]
+        video_count = len(video_streams)
+        audio_count = len(audio_streams)
         duration_ms = round(float(payload["format"]["duration"]) * 1_000)
+        if video_count != 1 or audio_count != 1:
+            raise MvpError("final review must contain exactly one video and one audio stream")
+        video_duration_ms = round(float(video_streams[0]["duration"]) * 1_000)
+        audio_duration_ms = round(float(audio_streams[0]["duration"]) * 1_000)
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise MvpError("ffprobe returned an invalid render description") from exc
-    if video_count != 1 or audio_count != 1:
-        raise MvpError("final review must contain exactly one video and one audio stream")
     if duration_ms <= 0:
         raise MvpError("render duration must be positive")
+    if max_av_drift_ms < 0:
+        raise MvpError("maximum A/V drift must not be negative")
+    drift_ms = abs(video_duration_ms - audio_duration_ms)
+    if drift_ms > max_av_drift_ms:
+        raise MvpError(f"render audio/video drift exceeds {max_av_drift_ms} ms")
     if not allow_short_fixture and not 420_000 <= duration_ms <= 720_000:
         raise MvpError("production review duration must be between 7 and 12 minutes")
-    return RenderResult(str(output.resolve()), duration_ms, video_count, audio_count)
+    return RenderResult(
+        str(output.resolve()),
+        duration_ms,
+        video_duration_ms,
+        audio_duration_ms,
+        drift_ms,
+        video_count,
+        audio_count,
+    )
 
 
 def render_review(
     source: Path,
     narration_wav: Path,
-    edl: EdlDocument,
+    edl: EdlDocument | SpanEdlDocument,
     output: Path,
     *,
     allow_short_fixture: bool = False,

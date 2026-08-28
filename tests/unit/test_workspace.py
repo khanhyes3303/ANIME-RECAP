@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from anime_review_mvp.errors import MvpError
-from anime_review_mvp.workspace import assert_inside_run, cleanup_run, create_job
+from anime_review_mvp.workspace import (
+    assert_inside_run,
+    cleanup_run,
+    create_job,
+    publish_candidate,
+)
 
 
 def test_create_job_uses_anime_season_episode_hierarchy(tmp_path: Path) -> None:
@@ -29,6 +34,36 @@ def test_create_job_refuses_to_overwrite_an_existing_final(tmp_path: Path) -> No
 
     with pytest.raises(MvpError, match="refuses to overwrite"):
         create_job(tmp_path, "Frieren", 1, 2, video)
+
+
+def test_revision_job_preserves_existing_final(tmp_path: Path) -> None:
+    video = tmp_path / "episode.mp4"
+    video.write_bytes(b"source")
+    paths = create_job(tmp_path, "Frieren", 1, 2, video)
+    final = paths.final_dir / "review_anime.mp4"
+    final.write_bytes(b"old")
+
+    revision = create_job(tmp_path, "Frieren", 1, 2, video, revision=True)
+
+    assert revision.final_dir == paths.final_dir
+    assert final.read_bytes() == b"old"
+
+
+def test_publish_candidate_backs_up_old_final_then_replaces_it(tmp_path: Path) -> None:
+    candidate = tmp_path / "Tam_dang_xu_ly" / "run" / "review_candidate.mp4"
+    candidate.parent.mkdir(parents=True)
+    candidate.write_bytes(b"new")
+    final = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001" / "Thanh_pham" / "review_anime.mp4"
+    final.parent.mkdir(parents=True)
+    final.write_bytes(b"old")
+    backup_dir = final.parent.parent / "Bao_cao" / "phien_ban_cu"
+
+    result = publish_candidate(candidate, final, backup_dir)
+
+    assert final.read_bytes() == b"new"
+    assert not candidate.exists()
+    assert result.backup_path is not None
+    assert Path(result.backup_path).read_bytes() == b"old"
 
 
 def test_cleanup_rejects_any_target_outside_exact_run(tmp_path: Path) -> None:

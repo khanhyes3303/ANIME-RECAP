@@ -227,13 +227,24 @@ def test_operator_job_points_to_only_one_episode_and_expected_outputs(
         "truth": str(paths.truth_dir / "su_that_tap_phim.json"),
         "scene_packets": str(paths.truth_dir / "scene_packets.json"),
         "script": str(paths.script_dir / "kich_ban_review.json"),
-        "tts": str(paths.tts_dir / "tts_manifest.json"),
-        "edl": str(paths.edl_dir / "edl.json"),
         "audit": str(paths.report_dir / "kiem_dinh.json"),
     }
     assert str(paths.truth_dir) in payload["write_policy"]["allowed_write_roots"]
+    assert str(paths.tts_dir.resolve()) not in payload["write_policy"]["allowed_write_roots"]
+    assert str(paths.edl_dir.resolve()) not in payload["write_policy"]["allowed_write_roots"]
+    assert str(paths.final_dir.resolve()) not in payload["write_policy"]["allowed_write_roots"]
     assert str(source_video.resolve()) in payload["write_policy"]["read_only_roots"]
     assert str(paths.root / "Bo_nao_Antigravity") in payload["write_policy"]["read_only_roots"]
+    assert "codex_locked_spans" not in payload["required_outputs"]
+    assert str(paths.script_dir / "khoa_cau_canh.json") in payload["write_policy"][
+        "read_only_roots"
+    ]
+    assert str(paths.tts_dir.resolve()) in payload["write_policy"]["read_only_roots"]
+    assert str(paths.edl_dir.resolve()) in payload["write_policy"]["read_only_roots"]
+    assert str(paths.final_dir.resolve()) in payload["write_policy"]["read_only_roots"]
+    assert str(paths.episode_dir / "Bao_cao_Codex") in payload["write_policy"][
+        "read_only_roots"
+    ]
 
 
 def test_scene_packet_loader_rejects_extra_fields(tmp_path: Path) -> None:

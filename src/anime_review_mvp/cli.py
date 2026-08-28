@@ -12,32 +12,38 @@ from .antigravity import (
     load_script,
     load_truth,
 )
+from .audit import build_engine_audit
+from .editorial import load_locked_spans
+from .edl import build_edl_from_locked_spans
 from .errors import MvpError
 from .jsonio import dump_json, load_json
 from .media import (
     detect_shots,
     extract_inspection_assets,
+    extract_program_anchors,
+    extract_span_anchors,
     probe_source,
     transcribe_english,
 )
-from .models import EdlDocument, ShotDocument, SourceRef, TtsManifest
-from .package import finalize_run
-from .render import render_review
-from .tts import synthesize_script
+from .models import (
+    CodexSemanticReview,
+    FrameAnchorDocument,
+    NarrationSpanDocument,
+    ShotDocument,
+    SourceRef,
+    SpanEdlDocument,
+    SpanTtsManifest,
+)
+from .render import RenderResult, render_review
+from .tts import synthesize_spans
 from .validation import (
-    build_edl_from_scene_packets,
-    coverage_ratio,
     narration_style_findings,
-    review_duration_findings,
-    validate_audit,
-    validate_edl,
     validate_scene_packets,
     validate_script,
     validate_truth,
-    validate_voice_lock,
 )
 from .workflow import Stage, advance, new_state, read_state, record_repair
-from .workspace import create_job
+from .workspace import create_job, publish_candidate
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -50,6 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--season", required=True, type=int)
     start.add_argument("--episode", required=True, type=int)
     start.add_argument("--video", required=True, type=Path)
+    start.add_argument("--revision", action="store_true")
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--run", required=True, type=Path)
     validate = subparsers.add_parser("validate")
@@ -57,6 +64,8 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument(
         "--artifact", required=True, choices=("truth", "scene", "script", "edl")
     )
+    lock = subparsers.add_parser("lock")
+    lock.add_argument("--run", required=True, type=Path)
     tts = subparsers.add_parser("tts")
     tts.add_argument("--run", required=True, type=Path)
     render = subparsers.add_parser("render")
@@ -64,14 +73,20 @@ def _parser() -> argparse.ArgumentParser:
     audit = subparsers.add_parser("audit")
     audit.add_argument("--run", required=True, type=Path)
     audit.add_argument("--phase", required=True, choices=("script", "video"))
-    package = subparsers.add_parser("package")
-    package.add_argument("--run", required=True, type=Path)
+    audit.add_argument("--codex-review", type=Path)
     return parser
 
 
 def _start(args: argparse.Namespace) -> int:
     root = Path.cwd()
-    paths = create_job(root, args.anime, args.season, args.episode, args.video)
+    paths = create_job(
+        root,
+        args.anime,
+        args.season,
+        args.episode,
+        args.video,
+        revision=args.revision,
+    )
     state = new_state(
         paths.temp_dir,
         episode_dir=paths.episode_dir,
@@ -197,30 +212,66 @@ def _validate(run_dir: Path, artifact: str) -> int:
             episode / "Su_that" / "su_that_tap_phim.json",
             source_duration_ms=source.duration_ms,
         )
-        tts = load_json(episode / "TTS" / "tts_manifest.json", TtsManifest)
-        edl = load_json(episode / "Ke_hoach_canh" / "edl.json", EdlDocument)
-        script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
-        validate_edl(edl, source.duration_ms, tts, truth)
-        packets = load_scene_packets(episode / "Su_that" / "scene_packets.json")
-        validate_voice_lock(packets.packets, script, tts, edl)
+        locked = load_locked_spans(
+            episode / "Kich_ban" / "khoa_cau_canh.json",
+            truth,
+            source.duration_ms,
+        )
+        tts = load_json(episode / "TTS" / "span_tts_manifest.json", SpanTtsManifest)
+        edl = load_json(episode / "Ke_hoach_canh" / "edl.json", SpanEdlDocument)
+        if edl != build_edl_from_locked_spans(locked, tts):
+            raise MvpError("persisted EDL does not match Codex locked spans")
         advance(run_dir, Stage.LAP_EDL, Stage.DUNG_VIDEO)
-        _write_next(run_dir, "Chạy render để dựng video TTS-only.")
+        _write_next(run_dir, "Codex chạy render để dựng candidate TTS-only.")
+    return 0
+
+
+def _lock(run_dir: Path) -> int:
+    state, episode = _episode(run_dir)
+    if state.stage is not Stage.CODEX_BIEN_TAP:
+        raise MvpError("lock requires CODEX_BIEN_TAP stage")
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    truth = load_truth(
+        episode / "Su_that" / "su_that_tap_phim.json",
+        source_duration_ms=source.duration_ms,
+    )
+    locked = load_locked_spans(
+        episode / "Kich_ban" / "khoa_cau_canh.json",
+        truth,
+        source.duration_ms,
+    )
+    extract_span_anchors(
+        Path(state.source_video),
+        locked,
+        run_dir / "codex_evidence" / "source",
+        timeline="SOURCE",
+    )
+    advance(run_dir, Stage.CODEX_BIEN_TAP, Stage.TAO_TTS)
+    _write_next(run_dir, "Khóa câu-cảnh đạt; Codex chạy TTS theo span.")
     return 0
 
 
 def _tts(run_dir: Path) -> int:
-    _, episode = _episode(run_dir)
-    if read_state(run_dir).stage is not Stage.TAO_TTS:
+    state, episode = _episode(run_dir)
+    if state.stage is not Stage.TAO_TTS:
         raise MvpError("tts requires TAO_TTS stage")
-    script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
-    tts = synthesize_script(script, episode / "TTS")
-    packets = load_scene_packets(episode / "Su_that" / "scene_packets.json")
-    edl = build_edl_from_scene_packets(packets.packets, script, tts)
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    truth = load_truth(
+        episode / "Su_that" / "su_that_tap_phim.json",
+        source_duration_ms=source.duration_ms,
+    )
+    locked = load_locked_spans(
+        episode / "Kich_ban" / "khoa_cau_canh.json",
+        truth,
+        source.duration_ms,
+    )
+    tts = synthesize_spans(locked, episode / "TTS")
+    edl = build_edl_from_locked_spans(locked, tts)
     dump_json(episode / "Ke_hoach_canh" / "edl.json", edl)
     advance(run_dir, Stage.TAO_TTS, Stage.LAP_EDL)
     _write_next(
         run_dir,
-        "EDL đã tạo từ scene packet và duration TTS thật; chạy validate --artifact edl.",
+        "EDL giữ nguyên range Codex và duration TTS thật; chạy validate --artifact edl.",
     )
     return 0
 
@@ -229,92 +280,93 @@ def _render(run_dir: Path) -> int:
     state, episode = _episode(run_dir)
     if state.stage is not Stage.DUNG_VIDEO:
         raise MvpError("render requires DUNG_VIDEO stage")
-    edl = load_json(episode / "Ke_hoach_canh" / "edl.json", EdlDocument)
-    tts = load_json(episode / "TTS" / "tts_manifest.json", TtsManifest)
-    output = episode / "Thanh_pham" / "review_anime.mp4"
-    render_review(Path(state.source_video), Path(tts.narration_wav_path), edl, output)
+    edl = load_json(episode / "Ke_hoach_canh" / "edl.json", SpanEdlDocument)
+    tts = load_json(episode / "TTS" / "span_tts_manifest.json", SpanTtsManifest)
+    output = run_dir / "review_candidate.mp4"
+    result = render_review(Path(state.source_video), Path(tts.narration_wav_path), edl, output)
+    dump_json(run_dir / "render_result.json", result)
+    extract_program_anchors(output, edl, run_dir / "codex_evidence" / "program")
     advance(run_dir, Stage.DUNG_VIDEO, Stage.KIEM_DINH_VIDEO)
-    _write_next(run_dir, "Xem MP4 cuối, cập nhật kiem_dinh.json rồi chạy audit --phase video.")
+    _write_next(
+        run_dir,
+        "Codex xem anchor candidate, ghi codex_semantic_review.json rồi chạy audit video.",
+    )
     print(output)
     return 0
 
 
-def _audit(run_dir: Path, phase: str) -> int:
-    _, episode = _episode(run_dir)
+def _audit_script(run_dir: Path, episode: Path) -> int:
     audit = load_audit(episode / "Bao_cao" / "kiem_dinh.json")
-    style_findings = ()
-    script_path = episode / "Kich_ban" / "kich_ban_review.json"
-    if phase in {"script", "video"} and script_path.is_file():
-        script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
-        style_findings = narration_style_findings(script)
-    duration_findings = ()
-    tts_path = episode / "TTS" / "tts_manifest.json"
-    if phase == "video" and tts_path.is_file():
-        duration_findings = review_duration_findings(
-            load_json(tts_path, TtsManifest)
-        )
-    quality_findings = (*style_findings, *duration_findings)
-    if quality_findings:
-        (episode / "Bao_cao").mkdir(parents=True, exist_ok=True)
-        (episode / "Bao_cao" / "kiem_dinh_chat_luong.json").write_text(
-            json.dumps(
-                {
-                    "passed": False,
-                    "findings": [
-                        {
-                            "severity": finding.severity,
-                            "code": finding.code,
-                            "cue_id": finding.cue_id,
-                            "message": finding.message,
-                            "evidence_refs": list(finding.evidence_refs),
-                        }
-                        for finding in quality_findings
-                    ],
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-    blocking_codes = tuple(
-        finding.code for finding in audit.findings if finding.severity == "ERROR"
+    script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
+    findings = narration_style_findings(script)
+    blocking = tuple(finding.code for finding in audit.findings if finding.severity == "ERROR")
+    blocking += tuple(finding.code for finding in findings)
+    if not audit.passed or blocking:
+        codes = blocking or ("AUDIT_NOT_PASSED",)
+        state = record_repair(run_dir, "SUA_NOI_DUNG", codes)
+        _write_next(run_dir, f"Antigravity sửa bản nháp; vòng {len(state.repair_history)}/3.")
+        return 1
+    advance(run_dir, Stage.KIEM_DINH_KICH_BAN, Stage.CODEX_BIEN_TAP)
+    _write_next(run_dir, "Antigravity dừng; chuyển job và bản nháp cho Codex biên tập.")
+    return 0
+
+
+def _audit_video(run_dir: Path, episode: Path, codex_review: Path | None) -> int:
+    if codex_review is None:
+        raise MvpError("video audit requires --codex-review")
+    expected_review = (episode / "Bao_cao_Codex" / "codex_semantic_review.json").resolve()
+    if codex_review.resolve() != expected_review:
+        raise MvpError("Codex review path must belong to this episode")
+    locked = load_json(episode / "Kich_ban" / "khoa_cau_canh.json", NarrationSpanDocument)
+    tts = load_json(episode / "TTS" / "span_tts_manifest.json", SpanTtsManifest)
+    review = load_json(codex_review, CodexSemanticReview)
+    source_anchors = load_json(
+        run_dir / "codex_evidence" / "source" / "anchors.json", FrameAnchorDocument
     )
-    blocking_codes += tuple(finding.code for finding in quality_findings)
-    if not audit.passed or blocking_codes:
-        codes = blocking_codes or ("AUDIT_NOT_PASSED",)
-        scene_markers = ("SCENE", "EDL", "FOOTAGE", "SYNC")
+    program_anchors = load_json(
+        run_dir / "codex_evidence" / "program" / "anchors.json", FrameAnchorDocument
+    )
+    render = load_json(run_dir / "render_result.json", RenderResult)
+    report = build_engine_audit(
+        locked, tts, review, source_anchors, program_anchors, render
+    )
+    dump_json(episode / "Bao_cao" / "kiem_dinh_engine.json", report)
+    if not report.passed:
+        codes = tuple(
+            finding.code for finding in report.findings if finding.severity == "ERROR"
+        )
+        scene_markers = ("SCENE", "EDL", "FOOTAGE", "DRIFT", "VOICE")
         owner = (
             "SUA_EDL"
             if any(marker in code for code in codes for marker in scene_markers)
             else "SUA_NOI_DUNG"
         )
         state = record_repair(run_dir, owner, codes)
-        repair_count = len(state.repair_history)
         _write_next(
-            run_dir, f"{owner}: sửa lỗi {', '.join(codes)}; vòng {repair_count}/3."
+            run_dir,
+            f"{owner}: sửa {', '.join(codes)}; vòng {len(state.repair_history)}/3.",
         )
         return 1
+    publish_candidate(
+        run_dir / "review_candidate.mp4",
+        episode / "Thanh_pham" / "review_anime.mp4",
+        episode / "Bao_cao" / "phien_ban_cu",
+    )
+    advance(
+        run_dir,
+        Stage.KIEM_DINH_VIDEO,
+        Stage.HOAN_THANH,
+        _engine_audit_passed=True,
+    )
+    _write_next(run_dir, "HOAN_THANH; giữ nguyên run và giao MP4 cho người dùng xem.")
+    return 0
+
+
+def _audit(run_dir: Path, phase: str, codex_review: Path | None) -> int:
+    _, episode = _episode(run_dir)
     if phase == "script":
-        advance(run_dir, Stage.KIEM_DINH_KICH_BAN, Stage.TAO_TTS)
-        _write_next(run_dir, "Chạy TTS giọng BV074_streaming.")
-    else:
-        script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
-        tts = load_json(episode / "TTS" / "tts_manifest.json", TtsManifest)
-        edl = load_json(episode / "Ke_hoach_canh" / "edl.json", EdlDocument)
-        packets = load_scene_packets(episode / "Su_that" / "scene_packets.json")
-        validate_voice_lock(packets.packets, script, tts, edl)
-        measured = coverage_ratio(script, tts)
-        validate_audit(audit, measured)
-        advance(run_dir, Stage.KIEM_DINH_VIDEO, Stage.DONG_GOI)
-        _write_next(run_dir, "Kiểm định đạt; chạy package.")
-    return 0
-
-
-def _package(run_dir: Path) -> int:
-    result = finalize_run(run_dir, passed=True)
-    print(result.archive)
-    return 0
+        return _audit_script(run_dir, episode)
+    return _audit_video(run_dir, episode, codex_review)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -330,14 +382,14 @@ def main(argv: list[str] | None = None) -> int:
             return _prepare(args.run)
         if args.command == "validate":
             return _validate(args.run, args.artifact)
+        if args.command == "lock":
+            return _lock(args.run)
         if args.command == "tts":
             return _tts(args.run)
         if args.command == "render":
             return _render(args.run)
         if args.command == "audit":
-            return _audit(args.run, args.phase)
-        if args.command == "package":
-            return _package(args.run)
+            return _audit(args.run, args.phase, args.codex_review)
     except MvpError as exc:
         parser.error(str(exc))
     return 2

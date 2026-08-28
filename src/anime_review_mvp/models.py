@@ -134,6 +134,96 @@ class Claim:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanSourceRange:
+    range_id: str
+    source_start_ms: int
+    source_end_ms: int
+    scene_id: str
+    beat_id: str
+    shot_ids: tuple[str, ...]
+    event_ids: tuple[str, ...]
+    short_action_exception: bool = False
+
+    def __post_init__(self) -> None:
+        _non_empty(self.range_id, "range_id")
+        _positive_interval(self.source_start_ms, self.source_end_ms, "span source range")
+        _non_empty(self.scene_id, "scene_id")
+        _non_empty(self.beat_id, "beat_id")
+        if not self.shot_ids:
+            raise MvpError("span source range requires shot IDs")
+        if not self.event_ids:
+            raise MvpError("span source range requires event IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class NarrationSpan:
+    span_id: str
+    text: str
+    claim_ids: tuple[str, ...]
+    event_ids: tuple[str, ...]
+    characters: tuple[str, ...]
+    visible_action: str
+    source_ranges: tuple[SpanSourceRange, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.span_id, "span_id")
+        _non_empty(self.text, "narration span text")
+        _non_empty(self.visible_action, "visible_action")
+        if not self.claim_ids or not self.event_ids:
+            raise MvpError("narration span requires claim and event bindings")
+        if not self.characters:
+            raise MvpError("narration span requires visible characters")
+        if not self.source_ranges:
+            raise MvpError("narration span requires source ranges")
+
+
+@dataclass(frozen=True, slots=True)
+class NarrationSpanDocument:
+    spans: tuple[NarrationSpan, ...]
+    claims: tuple[Claim, ...]
+    owner: str
+
+    def __post_init__(self) -> None:
+        if not self.spans:
+            raise MvpError("locked narration requires spans")
+        if not self.claims:
+            raise MvpError("locked narration requires claims")
+        _non_empty(self.owner, "locked narration owner")
+
+
+@dataclass(frozen=True, slots=True)
+class FrameAnchor:
+    anchor_id: str
+    span_id: str
+    range_id: str
+    timeline: str
+    position: str
+    timestamp_ms: int
+    path: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.anchor_id, "anchor_id")
+        _non_empty(self.span_id, "anchor span_id")
+        _non_empty(self.range_id, "anchor range_id")
+        if self.timeline not in {"SOURCE", "PROGRAM"}:
+            raise MvpError("anchor timeline is invalid")
+        if self.position not in {"START", "MIDDLE", "END"}:
+            raise MvpError("anchor position is invalid")
+        if self.timestamp_ms < 0:
+            raise MvpError("anchor timestamp must not be negative")
+        _non_empty(self.path, "anchor path")
+
+
+@dataclass(frozen=True, slots=True)
+class FrameAnchorDocument:
+    anchors: tuple[FrameAnchor, ...]
+
+    def __post_init__(self) -> None:
+        if not self.anchors:
+            raise MvpError("anchor document requires frames")
+
+
+@dataclass(frozen=True, slots=True)
 class NarrationCue:
     cue_id: str
     text: str
@@ -246,6 +336,36 @@ class TtsManifest:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanTts:
+    span_id: str
+    mp3_path: str
+    wav_path: str
+    duration_ms: int
+
+    def __post_init__(self) -> None:
+        _non_empty(self.span_id, "TTS span_id")
+        _non_empty(self.mp3_path, "TTS span MP3 path")
+        _non_empty(self.wav_path, "TTS span WAV path")
+        if self.duration_ms <= 0:
+            raise MvpError("TTS span duration must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class SpanTtsManifest:
+    spans: tuple[SpanTts, ...]
+    narration_wav_path: str
+    provider: str
+    voice_id: str
+
+    def __post_init__(self) -> None:
+        if not self.spans:
+            raise MvpError("span TTS manifest requires audio")
+        _non_empty(self.narration_wav_path, "narration WAV path")
+        _non_empty(self.provider, "TTS provider")
+        _non_empty(self.voice_id, "TTS voice_id")
+
+
+@dataclass(frozen=True, slots=True)
 class EdlSegment:
     segment_id: str
     cue_id: str
@@ -266,6 +386,31 @@ class EdlDocument:
 
 
 @dataclass(frozen=True, slots=True)
+class SpanEdlSegment:
+    segment_id: str
+    span_id: str
+    source_start_ms: int
+    source_end_ms: int
+    program_start_ms: int
+    program_end_ms: int
+    range_id: str
+    scene_id: str
+    beat_id: str
+    shot_ids: tuple[str, ...]
+    event_ids: tuple[str, ...]
+    short_action_exception: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SpanEdlDocument:
+    segments: tuple[SpanEdlSegment, ...]
+
+    def __post_init__(self) -> None:
+        if not self.segments:
+            raise MvpError("span EDL requires segments")
+
+
+@dataclass(frozen=True, slots=True)
 class AuditFinding:
     severity: str
     code: str
@@ -276,6 +421,41 @@ class AuditFinding:
 
 @dataclass(frozen=True, slots=True)
 class AuditReport:
+    passed: bool
+    coverage_ratio: str
+    findings: tuple[AuditFinding, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SpanSemanticReview:
+    span_id: str
+    supported: bool
+    finding_codes: tuple[str, ...]
+    evidence_anchor_ids: tuple[str, ...]
+    note: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.span_id, "semantic review span_id")
+        if not self.evidence_anchor_ids:
+            raise MvpError("semantic review requires anchor evidence")
+        if not self.supported and not self.finding_codes:
+            raise MvpError("unsupported span requires a finding code")
+        _non_empty(self.note, "semantic review note")
+
+
+@dataclass(frozen=True, slots=True)
+class CodexSemanticReview:
+    owner: str
+    spans: tuple[SpanSemanticReview, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.owner, "semantic review owner")
+        if not self.spans:
+            raise MvpError("semantic review requires spans")
+
+
+@dataclass(frozen=True, slots=True)
+class EngineAuditReport:
     passed: bool
     coverage_ratio: str
     findings: tuple[AuditFinding, ...]

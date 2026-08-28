@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import uuid
@@ -46,7 +47,21 @@ class JobPaths:
         )
 
 
-def create_job(root: Path, anime: str, season: int, episode: int, video: Path) -> JobPaths:
+@dataclass(frozen=True, slots=True)
+class PublishResult:
+    final_path: str
+    backup_path: str | None
+
+
+def create_job(
+    root: Path,
+    anime: str,
+    season: int,
+    episode: int,
+    video: Path,
+    *,
+    revision: bool = False,
+) -> JobPaths:
     if season < 1 or episode < 1:
         raise MvpError("season and episode must be positive")
     source = video.resolve(strict=True)
@@ -62,7 +77,7 @@ def create_job(root: Path, anime: str, season: int, episode: int, video: Path) -
         / f"Tap_{episode:03d}"
     )
     final_dir = episode_dir / "Thanh_pham"
-    if final_dir.is_dir() and any(
+    if not revision and final_dir.is_dir() and any(
         item.is_file() and item.suffix.lower() == ".mp4" for item in final_dir.iterdir()
     ):
         raise MvpError("MVP refuses to overwrite an existing final MP4")
@@ -83,6 +98,34 @@ def create_job(root: Path, anime: str, season: int, episode: int, video: Path) -
     for directory in (*paths.episode_artifact_dirs, paths.temp_dir):
         directory.mkdir(parents=True, exist_ok=True)
     return paths
+
+
+def publish_candidate(
+    candidate: Path,
+    final: Path,
+    backup_dir: Path,
+) -> PublishResult:
+    candidate_path = candidate.resolve(strict=True)
+    if not candidate_path.is_file() or candidate_path.suffix.lower() != ".mp4":
+        raise MvpError("review candidate must be an MP4 file")
+    final_path = final.resolve(strict=False)
+    if final_path.suffix.lower() != ".mp4":
+        raise MvpError("final review path must be an MP4 file")
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+
+    backup_path: Path | None = None
+    if final_path.is_file():
+        backup_root = backup_dir.resolve(strict=False)
+        backup_root.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_root / "review_anime_previous.mp4"
+        if backup_path.exists():
+            backup_path = backup_root / f"review_anime_previous_{uuid.uuid4().hex}.mp4"
+        shutil.copy2(final_path, backup_path)
+    os.replace(candidate_path, final_path)
+    return PublishResult(
+        str(final_path),
+        str(backup_path) if backup_path is not None else None,
+    )
 
 
 def assert_inside_run(path: Path, run_root: Path) -> Path:
