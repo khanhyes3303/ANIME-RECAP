@@ -9,6 +9,8 @@ import pytest
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import (
+    AtomicBeat,
+    AtomicStoryboard,
     Claim,
     NarrationCue,
     NarrationSpan,
@@ -26,6 +28,7 @@ from anime_review_mvp.tts import (
     plan_chunks,
     synthesize_script,
     synthesize_spans,
+    synthesize_atomic_beats,
 )
 
 
@@ -145,3 +148,101 @@ def test_synthesize_spans_creates_one_wav_per_locked_span(tmp_path: Path) -> Non
     assert Path(manifest.spans[0].wav_path).name == "span-001.wav"
     assert manifest.spans[0].duration_ms == 100
     assert (tmp_path / "span_tts_manifest.json").is_file()
+
+
+class CountingProvider(FakeProvider):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def synthesize(
+        self, chunks: tuple[str, ...], profile: object, policy: object
+    ) -> ProviderSynthesisResult:
+        self.calls += 1
+        return super().synthesize(chunks, profile, policy)
+
+
+def _atomic_storyboard(*texts: str) -> AtomicStoryboard:
+    claims = tuple(
+        Claim(f"claim-{index:03d}", "ACTION", text, (f"event-{index:03d}",))
+        for index, text in enumerate(texts, start=1)
+    )
+    beats = tuple(
+        AtomicBeat(
+            f"beat-{index:03d}",
+            "scene-001",
+            (f"event-{index:03d}",),
+            (f"claim-{index:03d}",),
+            (
+                SpanSourceRange(
+                    f"range-{index:03d}",
+                    index * 1_000,
+                    index * 1_000 + 100,
+                    "scene-001",
+                    f"beat-{index:03d}",
+                    (f"shot-{index:03d}",),
+                    (f"event-{index:03d}",),
+                    True,
+                ),
+            ),
+            text,
+            ("Jiro",),
+            ("Jiro",),
+            "ACTION",
+            index * 1_000,
+            index * 1_000 + 100,
+            text,
+            (f"frame-{index:03d}.jpg",),
+            100,
+            None,
+            "",
+            "LOCKED",
+            (),
+        )
+        for index, text in enumerate(texts, start=1)
+    )
+    return AtomicStoryboard("ANTIGRAVITY", "atomic-v1", "producer-01", claims, beats)
+
+
+def test_atomic_tts_reuses_unchanged_beat(tmp_path: Path) -> None:
+    provider = CountingProvider()
+    first = synthesize_atomic_beats(
+        _atomic_storyboard("Jiro lao vào sân."),
+        tmp_path / "out-1",
+        tmp_path / "cache",
+        provider=provider,
+        converter=_fake_converter,
+    )
+    second = synthesize_atomic_beats(
+        _atomic_storyboard("Jiro lao vào sân."),
+        tmp_path / "out-2",
+        tmp_path / "cache",
+        provider=provider,
+        converter=_fake_converter,
+    )
+
+    assert provider.calls == 1
+    assert first.beats[0].cache_key == second.beats[0].cache_key
+    assert second.cache_stats.hits == 1
+    assert second.cache_stats.misses == 0
+
+
+def test_atomic_tts_invalidates_only_changed_beat(tmp_path: Path) -> None:
+    provider = CountingProvider()
+    synthesize_atomic_beats(
+        _atomic_storyboard("Câu một.", "Câu hai."),
+        tmp_path / "out-1",
+        tmp_path / "cache",
+        provider=provider,
+        converter=_fake_converter,
+    )
+    result = synthesize_atomic_beats(
+        _atomic_storyboard("Câu một.", "Câu hai đã sửa."),
+        tmp_path / "out-2",
+        tmp_path / "cache",
+        provider=provider,
+        converter=_fake_converter,
+    )
+
+    assert provider.calls == 3
+    assert result.cache_stats.hits == 1
+    assert result.cache_stats.misses == 1

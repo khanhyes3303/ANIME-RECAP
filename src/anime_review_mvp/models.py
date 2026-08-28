@@ -454,6 +454,51 @@ class SpanTtsManifest:
 
 
 @dataclass(frozen=True, slots=True)
+class AtomicTtsBeat:
+    beat_id: str
+    mp3_path: str
+    wav_path: str
+    duration_ms: int
+    cache_key: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.beat_id, "atomic TTS beat_id")
+        _non_empty(self.mp3_path, "atomic TTS MP3 path")
+        _non_empty(self.wav_path, "atomic TTS WAV path")
+        _non_empty(self.cache_key, "atomic TTS cache_key")
+        if self.duration_ms <= 0:
+            raise MvpError("atomic TTS duration must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class TtsCacheStats:
+    hits: int
+    misses: int
+
+    def __post_init__(self) -> None:
+        if self.hits < 0 or self.misses < 0:
+            raise MvpError("TTS cache counters cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class AtomicTtsManifest:
+    beats: tuple[AtomicTtsBeat, ...]
+    narration_wav_path: str
+    provider: str
+    voice_id: str
+    policy_version: str
+    cache_stats: TtsCacheStats
+
+    def __post_init__(self) -> None:
+        if not self.beats:
+            raise MvpError("atomic TTS manifest requires beats")
+        _non_empty(self.narration_wav_path, "atomic narration WAV path")
+        _non_empty(self.provider, "atomic TTS provider")
+        _non_empty(self.voice_id, "atomic TTS voice_id")
+        _non_empty(self.policy_version, "atomic TTS policy_version")
+
+
+@dataclass(frozen=True, slots=True)
 class EdlSegment:
     segment_id: str
     cue_id: str

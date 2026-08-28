@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import os
 import re
+import shutil
 import subprocess
 import unicodedata
 import wave
@@ -17,12 +19,16 @@ import httpx
 from .errors import MvpError
 from .jsonio import dump_json
 from .models import (
+    AtomicStoryboard,
+    AtomicTtsBeat,
+    AtomicTtsManifest,
     NarrationSpanDocument,
     ScriptDocument,
     SpanTts,
     SpanTtsManifest,
     TtsCue,
     TtsManifest,
+    TtsCacheStats,
 )
 
 ENDPOINT = "https://api16-normal-v6.tiktokv.com/media/api/text/speech/invoke/"
@@ -365,4 +371,86 @@ def synthesize_spans(
         voice_id=profile.voice_id,
     )
     dump_json(output_dir / "span_tts_manifest.json", manifest)
+    return manifest
+
+
+def _atomic_tts_cache_key(text: str, profile: VoiceProfile, policy_version: str) -> str:
+    normalized = normalize_speech_text(text)
+    raw = "\0".join((normalized, profile.provider, profile.voice_id, policy_version))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def synthesize_atomic_beats(
+    storyboard: AtomicStoryboard,
+    output_dir: Path,
+    cache_dir: Path,
+    *,
+    provider: TtsProvider | None = None,
+    converter: Converter = _convert_mp3_to_wav,
+) -> AtomicTtsManifest:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    profile = default_profile()
+    policy = default_policy()
+    engine = provider or TikTokCapCutProvider()
+    results: list[AtomicTtsBeat] = []
+    wav_paths: list[Path] = []
+    hits = 0
+    misses = 0
+
+    for beat in storyboard.beats:
+        if beat.status != "LOCKED":
+            raise MvpError(f"atomic TTS requires LOCKED beat: {beat.beat_id}")
+        cache_key = _atomic_tts_cache_key(
+            beat.narration_text,
+            profile,
+            storyboard.policy_version,
+        )
+        entry = cache_dir / cache_key
+        cached_mp3 = entry / "audio.mp3"
+        cached_wav = entry / "audio.wav"
+        output_mp3 = output_dir / f"{beat.beat_id}.mp3"
+        output_wav = output_dir / f"{beat.beat_id}.wav"
+        if cached_mp3.is_file() and cached_wav.is_file():
+            duration_ms = _wav_duration_ms(cached_wav)
+            hits += 1
+        else:
+            entry.mkdir(parents=True, exist_ok=True)
+            synthesis = engine.synthesize(
+                plan_chunks(beat.narration_text, character_ceiling=policy.character_ceiling),
+                profile,
+                policy,
+            )
+            temp_mp3 = entry / "audio.tmp.mp3"
+            temp_wav = entry / "audio.tmp.wav"
+            temp_mp3.write_bytes(b"".join(chunk.audio for chunk in synthesis.chunks))
+            converter(temp_mp3, temp_wav)
+            duration_ms = _wav_duration_ms(temp_wav)
+            os.replace(temp_mp3, cached_mp3)
+            os.replace(temp_wav, cached_wav)
+            misses += 1
+        shutil.copy2(cached_mp3, output_mp3)
+        shutil.copy2(cached_wav, output_wav)
+        results.append(
+            AtomicTtsBeat(
+                beat.beat_id,
+                str(output_mp3),
+                str(output_wav),
+                duration_ms,
+                cache_key,
+            )
+        )
+        wav_paths.append(output_wav)
+
+    narration_path = output_dir / "narration.wav"
+    _concatenate_wavs(wav_paths, narration_path)
+    manifest = AtomicTtsManifest(
+        tuple(results),
+        str(narration_path),
+        profile.provider,
+        profile.voice_id,
+        storyboard.policy_version,
+        TtsCacheStats(hits, misses),
+    )
+    dump_json(output_dir / "atomic_tts_manifest.json", manifest)
     return manifest
