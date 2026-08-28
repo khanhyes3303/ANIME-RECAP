@@ -156,7 +156,7 @@ def _job_paths_from_state(state: object, episode: Path):
 
 
 def _validate(run_dir: Path, artifact: str) -> int:
-    _, episode = _episode(run_dir)
+    state, episode = _episode(run_dir)
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     if artifact == "truth":
         truth = load_truth(
@@ -171,7 +171,13 @@ def _validate(run_dir: Path, artifact: str) -> int:
             source_duration_ms=source.duration_ms,
         )
         packets = load_scene_packets(episode / "Su_that" / "scene_packets.json")
-        shots = load_json(run_dir / "shots.json", ShotDocument)
+        shots_path = run_dir / "shots.json"
+        if shots_path.is_file():
+            shots = load_json(shots_path, ShotDocument)
+        else:
+            # Runs prepared by the pre-scene contract can still be resumed safely.
+            shots = ShotDocument(detect_shots(Path(state.source_video), source.duration_ms))
+            dump_json(shots_path, shots)
         validate_scene_packets(packets.packets, truth, shots.shots, source.duration_ms)
         advance(run_dir, Stage.QUAN_SAT, Stage.VIET_KICH_BAN)
         _write_next(run_dir, "VIET_KICH_BAN và ghi kich_ban_review.json.")
