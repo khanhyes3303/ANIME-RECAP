@@ -26,6 +26,8 @@ from anime_review_mvp.validation import (
     build_edl_from_scene_packets,
     coverage_ratio,
     cue_source_duration,
+    narration_style_findings,
+    review_duration_findings,
     validate_audit,
     validate_edl,
     validate_scene_packets,
@@ -83,6 +85,53 @@ def test_coverage_is_weighted_by_real_tts_duration() -> None:
 def test_coverage_below_threshold_fails() -> None:
     with pytest.raises(MvpError, match="0.80"):
         validate_audit(_clean_audit(), Decimal("0.799"))
+
+
+def test_narration_style_rejects_padding_even_when_cue_is_supported() -> None:
+    cue = NarrationCue(
+        "cue-001",
+        (
+            "Jiro trượng nghĩa lao vào chiến đấu, tung đòn ảo diệu, "
+            "gục ngã la liệt, trong khoảnh khắc ngàn cân treo sợi tóc, "
+            "bằng quyền năng vô song và sức mạnh kinh thiên động địa "
+            "để bảo vệ người bạn nhỏ khỏi tai họa khốc liệt, "
+            "khiến cả khu rừng rung chuyển và đối thủ không kịp trở tay."
+        ),
+        ("claim-001",),
+        ("event-001",),
+        True,
+        "scene-001",
+        ("beat-001",),
+    )
+    findings = narration_style_findings(
+        ScriptDocument((cue,), (Claim("claim-001", "ACTION", "A", ("event-001",)),))
+    )
+    assert {finding.code for finding in findings} >= {
+        "NARRATION_CUE_TOO_LONG",
+        "NARRATION_TOO_MANY_CLAUSES",
+        "NARRATION_STYLE_OVERWRITTEN",
+    }
+
+
+def test_narration_style_accepts_short_natural_cue() -> None:
+    cue = NarrationCue(
+        "cue-001",
+        "Jiro thấy con mèo bị thương nên bế nó về nhà cứu chữa.",
+        ("claim-001",),
+        ("event-001",),
+        True,
+        "scene-001",
+        ("beat-001",),
+    )
+    assert narration_style_findings(
+        ScriptDocument((cue,), (Claim("claim-001", "ACTION", "A", ("event-001",)),))
+    ) == ()
+
+
+def test_review_duration_requires_seven_to_twelve_minutes() -> None:
+    assert review_duration_findings(_tts([420_000])) == ()
+    findings = review_duration_findings(_tts([419_999]))
+    assert [finding.code for finding in findings] == ["REVIEW_DURATION_OUT_OF_RANGE"]
 
 
 def test_one_fact_contradiction_fails_even_with_full_coverage() -> None:

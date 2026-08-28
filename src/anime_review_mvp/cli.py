@@ -27,6 +27,8 @@ from .tts import synthesize_script
 from .validation import (
     build_edl_from_scene_packets,
     coverage_ratio,
+    narration_style_findings,
+    review_duration_findings,
     validate_audit,
     validate_edl,
     validate_scene_packets,
@@ -240,9 +242,45 @@ def _render(run_dir: Path) -> int:
 def _audit(run_dir: Path, phase: str) -> int:
     _, episode = _episode(run_dir)
     audit = load_audit(episode / "Bao_cao" / "kiem_dinh.json")
+    style_findings = ()
+    script_path = episode / "Kich_ban" / "kich_ban_review.json"
+    if phase in {"script", "video"} and script_path.is_file():
+        script = load_script(episode / "Kich_ban" / "kich_ban_review.json")
+        style_findings = narration_style_findings(script)
+    duration_findings = ()
+    tts_path = episode / "TTS" / "tts_manifest.json"
+    if phase == "video" and tts_path.is_file():
+        duration_findings = review_duration_findings(
+            load_json(tts_path, TtsManifest)
+        )
+    quality_findings = (*style_findings, *duration_findings)
+    if quality_findings:
+        (episode / "Bao_cao").mkdir(parents=True, exist_ok=True)
+        (episode / "Bao_cao" / "kiem_dinh_chat_luong.json").write_text(
+            json.dumps(
+                {
+                    "passed": False,
+                    "findings": [
+                        {
+                            "severity": finding.severity,
+                            "code": finding.code,
+                            "cue_id": finding.cue_id,
+                            "message": finding.message,
+                            "evidence_refs": list(finding.evidence_refs),
+                        }
+                        for finding in quality_findings
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     blocking_codes = tuple(
         finding.code for finding in audit.findings if finding.severity == "ERROR"
     )
+    blocking_codes += tuple(finding.code for finding in quality_findings)
     if not audit.passed or blocking_codes:
         codes = blocking_codes or ("AUDIT_NOT_PASSED",)
         scene_markers = ("SCENE", "EDL", "FOOTAGE", "SYNC")

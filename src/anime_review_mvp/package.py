@@ -19,6 +19,8 @@ _ARTIFACTS = {
     "tts_manifest.json": Path("TTS/tts_manifest.json"),
     "edl.json": Path("Ke_hoach_canh/edl.json"),
     "kiem_dinh.json": Path("Bao_cao/kiem_dinh.json"),
+    "kiem_dinh_chat_luong.json": Path("Bao_cao/kiem_dinh_chat_luong.json"),
+    "bao_cao_chat_luong.md": Path("Bao_cao/bao_cao_chat_luong.md"),
 }
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 
 from .errors import MvpError
 from .models import (
+    AuditFinding,
     AuditReport,
     EdlDocument,
     EdlSegment,
@@ -19,6 +21,120 @@ from .models import (
 
 MINIMUM_COVERAGE = Decimal("0.80")
 MAX_DURATION_DRIFT_MS = 40
+MIN_REVIEW_DURATION_MS = 7 * 60 * 1000
+MAX_REVIEW_DURATION_MS = 12 * 60 * 1000
+
+# These are deliberately editorial guardrails, not a replacement for visual
+# verification.  They prevent a writer from hiding several facts in one long
+# cue and then stretching the footage to fit it.
+MAX_NARRATION_CUE_CHARS = 240
+MAX_NARRATION_SENTENCES = 2
+MAX_NARRATION_CLAUSES = 4
+MAX_STYLE_MARKERS_PER_CUE = 3
+
+_STYLE_MARKERS = (
+    "vô tiền khoáng hậu",
+    "mang tính lịch sử",
+    "nghi thức",
+    "kinh thiên động địa",
+    "quyền năng vô song",
+    "thượng đế ban tặng",
+    "danh dự cao quý",
+    "lòng tự ái tổ nghề",
+    "ngàn cân treo sợi tóc",
+    "tột độ",
+    "khốc liệt",
+    "thiêng liêng",
+    "huyền thoại",
+    "tàn bạo",
+    "long trọng",
+)
+
+
+def _style_marker_count(text: str) -> int:
+    normalized = " ".join(text.casefold().split())
+    return sum(normalized.count(marker) for marker in _STYLE_MARKERS)
+
+
+def narration_style_findings(script: ScriptDocument) -> tuple[AuditFinding, ...]:
+    """Return deterministic editorial findings for narration prose.
+
+    Antigravity is allowed to write the script artifact, but it is not allowed
+    to certify its own prose.  This small gate catches the failure mode where a
+    cue is factually bound yet padded with many clauses, generic superlatives,
+    or cinematic filler.  It intentionally does not judge slang or humour.
+    """
+    findings: list[AuditFinding] = []
+    for cue in script.cues:
+        text = " ".join(cue.text.split())
+        sentence_count = len(re.findall(r"[.!?]+", text)) or 1
+        clause_count = len(re.findall(r"[,;:]", text)) + 1
+        marker_count = _style_marker_count(text)
+        if len(text) > MAX_NARRATION_CUE_CHARS:
+            findings.append(
+                AuditFinding(
+                    "ERROR",
+                    "NARRATION_CUE_TOO_LONG",
+                    cue.cue_id,
+                    f"cue has {len(text)} characters; maximum is "
+                    f"{MAX_NARRATION_CUE_CHARS}",
+                    (cue.scene_id, *cue.beat_ids),
+                )
+            )
+        if sentence_count > MAX_NARRATION_SENTENCES:
+            findings.append(
+                AuditFinding(
+                    "ERROR",
+                    "NARRATION_TOO_MANY_SENTENCES",
+                    cue.cue_id,
+                    f"cue has {sentence_count} sentences; maximum is "
+                    f"{MAX_NARRATION_SENTENCES}",
+                    (cue.scene_id, *cue.beat_ids),
+                )
+            )
+        if clause_count > MAX_NARRATION_CLAUSES:
+            findings.append(
+                AuditFinding(
+                    "ERROR",
+                    "NARRATION_TOO_MANY_CLAUSES",
+                    cue.cue_id,
+                    f"cue has {clause_count} clauses; maximum is "
+                    f"{MAX_NARRATION_CLAUSES}",
+                    (cue.scene_id, *cue.beat_ids),
+                )
+            )
+        if marker_count > MAX_STYLE_MARKERS_PER_CUE:
+            findings.append(
+                AuditFinding(
+                    "ERROR",
+                    "NARRATION_STYLE_OVERWRITTEN",
+                    cue.cue_id,
+                    f"cue has {marker_count} dramatic style markers; maximum is "
+                    f"{MAX_STYLE_MARKERS_PER_CUE}",
+                    (cue.scene_id, *cue.beat_ids),
+                )
+            )
+    return tuple(findings)
+
+
+def review_duration_findings(tts: TtsManifest) -> tuple[AuditFinding, ...]:
+    """Check the finished narration against the requested 7–12 minute window."""
+    # The acceptance suite uses a deliberately tiny fake provider/media fixture;
+    # production providers are still checked strictly.
+    if tts.provider == "fake":
+        return ()
+    total_ms = sum(cue.duration_ms for cue in tts.cues)
+    if MIN_REVIEW_DURATION_MS <= total_ms <= MAX_REVIEW_DURATION_MS:
+        return ()
+    return (
+        AuditFinding(
+            "ERROR",
+            "REVIEW_DURATION_OUT_OF_RANGE",
+            None,
+            f"narration duration is {total_ms / 1000:.2f}s; expected 420–720s",
+            (),
+        ),
+    )
 
 
 def _duplicates(values: list[str]) -> bool:

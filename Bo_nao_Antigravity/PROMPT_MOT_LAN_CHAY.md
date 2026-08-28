@@ -30,3 +30,20 @@ cắt hình. Giữ shot `MUST_KEEP`, chỉ cắt `OPTIONAL`/`TRANSITION`. Không
 không nhét chữ vào miệng nhân vật, không speed/freeze/loop, không dùng audio tiếng Anh
 hoặc BGM. Nếu lỗi, sửa artifact đúng owner và lặp lại; sau ba vòng chưa đạt thì tạo
 `CAN_CON_NGUOI_XU_LY`, không xuất PASS giả.
+
+Các loop nội bộ bắt buộc trong cùng agent run:
+
+1. OBSERVER: mở video theo từng đoạn, lập event/shot có timestamp và bằng chứng.
+2. WRITER: chọn cảnh có giá trị và viết cue từ đúng beat; cảnh thường chỉ để lấp thời
+   lượng phải bỏ.
+3. ADVERSARIAL_VERIFIER: mở lại từng clip nguồn và MP4 cuối, đối chiếu từng câu với
+   hình; câu nào kể thêm việc không xuất hiện phải viết lại hoặc tách beat.
+
+Cổng văn phong cứng: mỗi cue ≤ 240 ký tự, ≤ 2 câu, ≤ 4 mệnh đề (dấu phẩy/chấm
+phẩy/hai chấm), ≤ 3 cụm cường điệu. Không kéo dài bằng sáo ngữ; muốn đủ thời lượng
+thì thêm cue gắn với beat khác. Các mã lỗi văn phong `NARRATION_CUE_TOO_LONG`,
+`NARRATION_TOO_MANY_SENTENCES`, `NARRATION_TOO_MANY_CLAUSES` và
+`NARRATION_STYLE_OVERWRITTEN` đều là lỗi chặn.
+
+Tổng duration WAV phải nằm trong 420–720 giây; ngoài khoảng này là
+`REVIEW_DURATION_OUT_OF_RANGE` và phải sửa nội dung trước khi đóng gói.

@@ -20,6 +20,8 @@ quan sát–viết–sửa–render trong một agent run; engine không tự b�
 - Shot `MUST_KEEP` không được cắt chỉ vì cue ngắn; chỉ shot `OPTIONAL`/`TRANSITION`
   được ưu tiên cắt.
 - Vẫn dùng JSON/dataclass hiện có, không thêm database, UI, batch hoặc API Gemini.
+- Cổng văn phong độc lập: mỗi cue tối đa 240 ký tự, 2 câu, 4 mệnh đề; không tin cờ
+  `directly_supported` do operator tự khai báo.
 
 ## Task 1 — Mở rộng hợp đồng dữ liệu
 
@@ -102,6 +104,12 @@ Nếu duration không khớp, validator phải trả lỗi có owner rõ ràng:
 - narration ngắn hơn tổng `MUST_KEEP` → chia beat/cue hoặc sửa narration;
 - chỉ thiếu thời lượng ở shot tùy chọn → `SUA_EDL` được cắt shot tùy chọn.
 
+Thêm kiểm tra duration toàn tập 420–720 giây (`REVIEW_DURATION_OUT_OF_RANGE`) và
+kiểm tra văn phong độc lập (`NARRATION_CUE_TOO_LONG`,
+`NARRATION_TOO_MANY_SENTENCES`, `NARRATION_TOO_MANY_CLAUSES`,
+`NARRATION_STYLE_OVERWRITTEN`). Các lỗi này được ghi vào
+`Bao_cao/kiem_dinh_chat_luong.json` và route về `SUA_NOI_DUNG`.
+
 Không đưa `atempo`, freeze, loop hoặc frame tĩnh vào filter graph. EDL phải giữ thứ tự
 shot nguồn và tính được `program_start_ms/program_end_ms` từ duration đã đo.
 
@@ -131,7 +139,10 @@ dùng duyệt từng stage. Giới hạn an toàn giữ tối đa ba vòng sửa
 
 `build_operator_job` phải liệt kê artifact mới, thứ tự lệnh nội bộ và tiêu chí hoàn
 thành. Báo cáo/ZIP phải chứa scene packet, timing decision, repair history và lỗi
-voice-lock để ChatGPT Web có đủ dữ liệu hướng dẫn vòng sau.
+voice-lock/văn phong để ChatGPT Web có đủ dữ liệu hướng dẫn vòng sau. Antigravity
+phải chạy thêm vai trò `ADVERSARIAL_VERIFIER`: mở lại clip nguồn và MP4 cuối, đối
+chiếu từng câu với shot đang phát; một cue đúng event nhưng có câu không được hình
+chứng minh vẫn là lỗi.
 
 Job phải kèm `write_policy` để operator biết rõ vùng được ghi và vùng chỉ đọc. Việc
 muốn sửa prompt, mã nguồn, spec hoặc validator phải trở thành

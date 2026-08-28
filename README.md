@@ -36,6 +36,13 @@ scene. Antigravity tạo `scene_packets.json`, đánh dấu shot chính/phụ v�
 hành động. Sau khi TTS được tạo, engine đo WAV thật và sinh EDL; voice cue có thể phủ
 nhiều shot nhưng luôn thuộc đúng scene. Shot `MUST_KEEP` không bị cắt chỉ vì lời ngắn.
 
+Ngoài kiểm tra kỹ thuật, engine có cổng văn phong độc lập không tin cờ
+`directly_supported` do Antigravity tự khai báo: mỗi cue tối đa 240 ký tự, 2 câu và 4
+mệnh đề; cue vượt chuẩn sẽ bị trả về `SUA_NOI_DUNG`. Antigravity phải mở lại clip
+nguồn và MP4 cuối để đối chiếu từng câu. Các file trong `Bo_nao_Antigravity`, `src`,
+`tests`, `docs`, Git và video nguồn là chỉ đọc; nếu cần thay đổi, nó chỉ được ghi
+`BRAIN_CHANGE_REQUESTED` để Codex xem xét, không tự sửa.
+
 Thành phẩm nằm tại:
 
 ```text
