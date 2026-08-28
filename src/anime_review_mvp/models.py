@@ -424,3 +424,38 @@ class AuditReport:
     passed: bool
     coverage_ratio: str
     findings: tuple[AuditFinding, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SpanSemanticReview:
+    span_id: str
+    supported: bool
+    finding_codes: tuple[str, ...]
+    evidence_anchor_ids: tuple[str, ...]
+    note: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.span_id, "semantic review span_id")
+        if not self.evidence_anchor_ids:
+            raise MvpError("semantic review requires anchor evidence")
+        if not self.supported and not self.finding_codes:
+            raise MvpError("unsupported span requires a finding code")
+        _non_empty(self.note, "semantic review note")
+
+
+@dataclass(frozen=True, slots=True)
+class CodexSemanticReview:
+    owner: str
+    spans: tuple[SpanSemanticReview, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.owner, "semantic review owner")
+        if not self.spans:
+            raise MvpError("semantic review requires spans")
+
+
+@dataclass(frozen=True, slots=True)
+class EngineAuditReport:
+    passed: bool
+    coverage_ratio: str
+    findings: tuple[AuditFinding, ...]
