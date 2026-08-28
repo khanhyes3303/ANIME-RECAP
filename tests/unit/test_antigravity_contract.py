@@ -226,16 +226,18 @@ def test_operator_job_points_to_only_one_episode_and_expected_outputs(
     assert payload["required_outputs"] == {
         "truth": str(paths.truth_dir / "su_that_tap_phim.json"),
         "scene_packets": str(paths.truth_dir / "scene_packets.json"),
-        "script": str(paths.script_dir / "kich_ban_review.json"),
-        "audit": str(paths.report_dir / "kiem_dinh.json"),
+        "storyboard": str(paths.script_dir / "atomic_storyboard.json"),
+        "critic_script": str(paths.report_dir / "critic_script.json"),
+        "critic_video": str(paths.report_dir / "critic_video.json"),
     }
+    assert len(payload["policy_sha256"]) == 64
     assert str(paths.truth_dir) in payload["write_policy"]["allowed_write_roots"]
     assert str(paths.tts_dir.resolve()) not in payload["write_policy"]["allowed_write_roots"]
     assert str(paths.edl_dir.resolve()) not in payload["write_policy"]["allowed_write_roots"]
     assert str(paths.final_dir.resolve()) not in payload["write_policy"]["allowed_write_roots"]
     assert str(source_video.resolve()) in payload["write_policy"]["read_only_roots"]
     assert str(paths.root / "Bo_nao_Antigravity") in payload["write_policy"]["read_only_roots"]
-    assert "codex_locked_spans" not in payload["required_outputs"]
+    assert "script" not in payload["required_outputs"]
     assert str(paths.script_dir / "khoa_cau_canh.json") in payload["write_policy"][
         "read_only_roots"
     ]

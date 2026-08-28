@@ -35,6 +35,10 @@ class JobPaths:
     temp_dir: Path
 
     @property
+    def cache_dir(self) -> Path:
+        return self.episode_dir / "_Cache"
+
+    @property
     def episode_artifact_dirs(self) -> tuple[Path, ...]:
         return (
             self.input_dir,
@@ -44,6 +48,7 @@ class JobPaths:
             self.edl_dir,
             self.final_dir,
             self.report_dir,
+            self.cache_dir,
         )
 
 
@@ -97,6 +102,8 @@ def create_job(
     )
     for directory in (*paths.episode_artifact_dirs, paths.temp_dir):
         directory.mkdir(parents=True, exist_ok=True)
+    for name in ("source", "tts", "clips", "qa"):
+        (paths.cache_dir / name).mkdir(parents=True, exist_ok=True)
     return paths
 
 

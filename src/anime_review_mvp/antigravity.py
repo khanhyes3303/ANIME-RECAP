@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 
 from .errors import MvpError
@@ -21,8 +22,9 @@ from .workspace import JobPaths
 class RequiredOutputs:
     truth: str
     scene_packets: str
-    script: str
-    audit: str
+    storyboard: str
+    critic_script: str
+    critic_video: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +43,24 @@ class OperatorJob:
     shots: tuple[Shot, ...]
     required_outputs: RequiredOutputs
     write_policy: WritePolicy
+    policy_sha256: str
+
+
+def _policy_sha256(root: Path) -> str:
+    digest = hashlib.sha256()
+    relative_paths = (
+        Path("Bo_nao_Antigravity/GEMINI.md"),
+        Path("Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md"),
+        Path("pyproject.toml"),
+        Path("src/anime_review_mvp/atomic.py"),
+        Path("src/anime_review_mvp/audit.py"),
+        Path("src/anime_review_mvp/validation.py"),
+    )
+    for relative in relative_paths:
+        path = root / relative
+        digest.update(relative.as_posix().encode("utf-8"))
+        digest.update(path.read_bytes() if path.is_file() else b"<missing>")
+    return digest.hexdigest()
 
 
 def build_operator_job(
@@ -59,8 +79,9 @@ def build_operator_job(
         required_outputs=RequiredOutputs(
             truth=str(paths.truth_dir / "su_that_tap_phim.json"),
             scene_packets=str(paths.truth_dir / "scene_packets.json"),
-            script=str(paths.script_dir / "kich_ban_review.json"),
-            audit=str(paths.report_dir / "kiem_dinh.json"),
+            storyboard=str(paths.script_dir / "atomic_storyboard.json"),
+            critic_script=str(paths.report_dir / "critic_script.json"),
+            critic_video=str(paths.report_dir / "critic_video.json"),
         ),
         write_policy=WritePolicy(
             allowed_write_roots=tuple(
@@ -90,6 +111,7 @@ def build_operator_job(
                 )
             ),
         ),
+        policy_sha256=_policy_sha256(paths.root),
     )
     output = paths.temp_dir / "cong_viec_antigravity.json"
     dump_json(output, job)

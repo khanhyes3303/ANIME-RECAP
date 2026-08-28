@@ -86,3 +86,18 @@ def test_cleanup_removes_only_run_and_preserves_source(tmp_path: Path) -> None:
 
     assert not run.exists()
     assert source.read_bytes() == b"source"
+
+
+def test_job_creates_persistent_episode_cache(tmp_path: Path) -> None:
+    source = tmp_path / "episode.mp4"
+    source.write_bytes(b"video")
+
+    paths = create_job(tmp_path, "Anime A", 1, 1, source)
+
+    assert paths.cache_dir == paths.episode_dir / "_Cache"
+    assert {item.name for item in paths.cache_dir.iterdir()} == {
+        "source",
+        "tts",
+        "clips",
+        "qa",
+    }
