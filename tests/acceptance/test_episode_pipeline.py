@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 
 import pytest
@@ -21,8 +20,6 @@ from anime_review_mvp.models import (
     Claim,
     CriticBeatReview,
     CriticReviewDocument,
-    DenseEvidenceDocument,
-    DenseFrame,
     Event,
     FrameAnchor,
     FrameAnchorDocument,
@@ -260,37 +257,6 @@ def test_one_antigravity_run_reaches_final_without_codex_artifact(
     monkeypatch.setattr(cli, "extract_atomic_source_anchors", _fake_anchors)
     monkeypatch.setattr(cli, "extract_program_anchors", _fake_anchors)
 
-    def fake_dense(
-        video: Path,
-        storyboard: AtomicStoryboard | None,
-        edl: object,
-        output_dir: Path,
-        timeline: str,
-        **_: object,
-    ) -> DenseEvidenceDocument:
-        del video, storyboard, edl
-        frame_path = output_dir / f"beat-001-{timeline.casefold()}-00001000.jpg"
-        frame_path.parent.mkdir(parents=True, exist_ok=True)
-        frame_path.write_bytes(b"frame")
-        result = DenseEvidenceDocument(
-            timeline,
-            (
-                DenseFrame(
-                    "dense-001", "beat-001", "range-001", timeline, 1_000,
-                    str(frame_path), hashlib.sha256(b"frame").hexdigest(),
-                ),
-            ),
-        )
-        dump_json(output_dir / "manifest.json", result)
-        return result
-
-    def fake_sheets(evidence: DenseEvidenceDocument, output_dir: Path, **_: object) -> None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / f"beat-001-{evidence.timeline.casefold()}-001.jpg").write_bytes(b"sheet")
-
-    monkeypatch.setattr(cli, "extract_dense_beat_evidence", fake_dense)
-    monkeypatch.setattr(cli, "build_contact_sheets", fake_sheets)
-
     assert (
         cli.main(
             [
@@ -348,19 +314,25 @@ def test_one_antigravity_run_reaches_final_without_codex_artifact(
     binding = GeminiUltraProfileBinding("a" * 64, "a***@example.com")
     (tmp_path / ".local").mkdir()
     dump_json(tmp_path / ".local" / "gemini_ultra_profile.json", binding)
-    assert cli.main(["web-verify", "prepare", "--run", str(run), "--phase", "script"]) == 0
-    _write_web_result(run, "script", _critic("SCRIPT"), binding)
-    assert cli.main(["web-verify", "accept", "--run", str(run), "--phase", "script"]) == 0
+    monkeypatch.setattr(
+        cli,
+        "run_operator_phase",
+        lambda _run, phase: _critic("SCRIPT" if phase == "SCRIPT" else "VIDEO"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_load_verified_critic",
+        lambda _run, phase, _storyboard: _critic(
+            "SCRIPT" if phase.casefold() == "script" else "VIDEO"
+        ),
+    )
+    assert cli.main(["gemini-web", "run", "--run", str(run), "--phase", "script"]) == 0
     assert cli.main(["tts", "--run", str(run)]) == 0
     assert cli.main(["validate", "--run", str(run), "--artifact", "edl"]) == 0
     assert cli.main(["render", "--run", str(run), "--quality", "proxy"]) == 0
-    assert cli.main(["web-verify", "prepare", "--run", str(run), "--phase", "proxy"]) == 0
-    _write_web_result(run, "proxy", _critic("VIDEO"), binding)
-    assert cli.main(["web-verify", "accept", "--run", str(run), "--phase", "proxy"]) == 0
+    assert cli.main(["gemini-web", "run", "--run", str(run), "--phase", "proxy"]) == 0
     assert cli.main(["render", "--run", str(run), "--quality", "final"]) == 0
-    assert cli.main(["web-verify", "prepare", "--run", str(run), "--phase", "final"]) == 0
-    _write_web_result(run, "final", _critic("VIDEO"), binding)
-    assert cli.main(["web-verify", "accept", "--run", str(run), "--phase", "final"]) == 0
+    assert cli.main(["gemini-web", "run", "--run", str(run), "--phase", "final"]) == 0
     assert cli.main(["audit", "--run", str(run), "--phase", "engine"]) == 0
 
     assert read_state(run).stage is Stage.HOAN_THANH

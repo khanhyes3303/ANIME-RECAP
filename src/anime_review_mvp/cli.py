@@ -20,20 +20,31 @@ from .audit import build_atomic_engine_audit, build_engine_audit
 from .editorial import load_locked_spans
 from .edl import build_atomic_edl, build_edl_from_locked_spans
 from .errors import MvpError
+from .gemini_operator import (
+    GeminiWebOperator,
+    OperatorLedger,
+    OperatorPolicy,
+    issue_request,
+    load_or_create_ledger_key,
+)
+from .gemini_packets import build_browser_packet
+from .gemini_selenium import (
+    GeminiBrowserError,
+    launch_managed_chrome,
+    run_gemini_session,
+)
 from .gemini_web import (
     GeminiUltraProfileBinding,
     account_sha256,
-    load_verified_web_review,
-    reset_web_phase,
+    load_operator_verified_review,
+    load_profile_binding,
+    sha256_file,
     write_profile_binding,
-    write_web_request,
 )
 from .jsonio import dump_json, load_json
 from .media import (
-    build_contact_sheets,
     detect_shots,
     extract_atomic_source_anchors,
-    extract_dense_beat_evidence,
     extract_inspection_assets,
     extract_program_anchors,
     extract_span_anchors,
@@ -45,7 +56,6 @@ from .models import (
     AtomicTtsManifest,
     CodexSemanticReview,
     CriticReviewDocument,
-    DenseEvidenceDocument,
     FrameAnchorDocument,
     NarrationSpanDocument,
     ShotDocument,
@@ -104,8 +114,6 @@ def _parser() -> argparse.ArgumentParser:
             "truth",
             "scene",
             "storyboard",
-            "critic-script",
-            "critic-video",
             "script",
             "edl",
         ),
@@ -124,13 +132,13 @@ def _parser() -> argparse.ArgumentParser:
     audit.add_argument("--run", required=True, type=Path)
     audit.add_argument("--phase", required=True, choices=("script", "video", "engine"))
     audit.add_argument("--codex-review", type=Path)
-    web_verify = subparsers.add_parser(
-        "web-verify", help="Chuẩn bị/nhận kiểm định Gemini Ultra Web"
+    gemini_web = subparsers.add_parser(
+        "gemini-web", help="Vận hành Gemini Ultra Web bằng Chrome do engine sở hữu"
     )
-    web_verify.add_argument("action", choices=("enroll", "prepare", "accept"))
-    web_verify.add_argument("--run", required=True, type=Path)
-    web_verify.add_argument("--phase", choices=("script", "proxy", "final"))
-    web_verify.add_argument("--account-hint")
+    gemini_web.add_argument("action", choices=("enroll", "smoke", "run"))
+    gemini_web.add_argument("--run", required=True, type=Path)
+    gemini_web.add_argument("--phase", choices=("script", "proxy", "final"))
+    gemini_web.add_argument("--account-hint")
     return parser
 
 
@@ -168,13 +176,15 @@ def _episode(run_dir: Path) -> tuple[object, Path]:
     return state, Path(state.episode_dir)
 
 
-def _write_next(run_dir: Path, instruction: str) -> None:
+def _write_next(run_dir: Path, instruction: str, *, code: str | None = None) -> None:
     state = read_state(run_dir)
     payload = {
         "stage": state.stage.value,
         "instruction": instruction,
         "run_dir": str(state.run_dir),
     }
+    if code is not None:
+        payload["code"] = code
     (run_dir / "next_action.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -301,14 +311,6 @@ def _validate(run_dir: Path, artifact: str) -> int:
             run_dir,
             "Antigravity hoàn thiện lời theo atomic beat rồi tạo critic-script độc lập.",
         )
-    elif artifact == "critic-script":
-        if state.stage is Stage.VIET_LOI:
-            raise MvpError("chạy web-verify prepare --phase script trước khi nhận critic")
-        return _web_verify_accept(run_dir, "script")
-    elif artifact == "critic-video":
-        if state.stage is Stage.PHAN_BIEN_VIDEO:
-            raise MvpError("chạy web-verify prepare --phase proxy trước khi nhận critic")
-        return _web_verify_accept(run_dir, "proxy")
     elif artifact == "script":
         truth = load_truth(
             episode / "Su_that" / "su_that_tap_phim.json",
@@ -668,133 +670,15 @@ def _gemini_profile_path(run_dir: Path) -> Path:
 
 def _web_verify_enroll(run_dir: Path, account_hint: str | None) -> int:
     if not account_hint:
-        raise MvpError("web-verify enroll requires --account-hint")
+        raise MvpError("gemini-web enroll requires --account-hint")
     print("Nhập email của tài khoản Gemini Ultra đang hiển thị trong profile Chrome:")
     email = sys.stdin.readline().strip()
     if not email:
-        raise MvpError("web-verify enroll requires the signed-in email on stdin")
+        raise MvpError("gemini-web enroll requires the signed-in email on stdin")
     binding = GeminiUltraProfileBinding(account_sha256(email), account_hint)
     output = _gemini_profile_path(run_dir)
     write_profile_binding(output, binding)
     print(output.resolve())
-    return 0
-
-
-def _web_phase_paths(run_dir: Path, phase: str) -> tuple[Path, Path, Path, Path]:
-    state, episode = _episode(run_dir)
-    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
-    truth = load_truth(
-        episode / "Su_that" / "su_that_tap_phim.json",
-        source_duration_ms=source.duration_ms,
-    )
-    shots = load_json(run_dir / "shots.json", ShotDocument)
-    storyboard_path = episode / "Kich_ban" / "atomic_storyboard.json"
-    storyboard = load_atomic_storyboard(storyboard_path, truth, shots.shots, source.duration_ms)
-    phase_dir = reset_web_phase(run_dir, phase)
-    evidence_dir = phase_dir / "evidence"
-    if phase == "SCRIPT":
-        extract_dense_beat_evidence(
-            Path(state.source_video), storyboard, None, evidence_dir / "source", "SOURCE"
-        )
-        build_contact_sheets(
-            load_json(evidence_dir / "source" / "manifest.json", DenseEvidenceDocument),
-            evidence_dir / "source" / "sheets",
-        )
-        artifact = storyboard_path
-    else:
-        edl = load_json(episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument)
-        candidate = (
-            run_dir / "proxy" / "review_proxy.mp4"
-            if phase == "PROXY"
-            else run_dir / "final_candidate.mp4"
-        )
-        if not candidate.is_file():
-            raise MvpError(f"Gemini Web {phase.casefold()} candidate is missing: {candidate}")
-        extract_dense_beat_evidence(
-            Path(state.source_video), storyboard, None, evidence_dir / "source", "SOURCE"
-        )
-        extract_dense_beat_evidence(
-            candidate, None, edl, evidence_dir / "program", "PROGRAM"
-        )
-        for timeline in ("source", "program"):
-            build_contact_sheets(
-                load_json(
-                    evidence_dir / timeline / "manifest.json", DenseEvidenceDocument
-                ),
-                evidence_dir / timeline / "sheets",
-            )
-        artifact = candidate
-    sheet_paths = tuple(
-        path
-        for path in evidence_dir.rglob("*.jpg")
-        if path.is_file()
-    )
-    if not sheet_paths:
-        raise MvpError("Gemini Web request has no contact sheets")
-    prompt_path = phase_dir / "prompt.txt"
-    return storyboard_path, artifact, phase_dir, prompt_path
-
-
-def _web_verify_prepare(run_dir: Path, phase: str) -> int:
-    phase_upper = phase.upper()
-    state, _ = _episode(run_dir)
-    expected_stage = {
-        "SCRIPT": Stage.VIET_LOI,
-        "PROXY": Stage.PHAN_BIEN_VIDEO,
-        "FINAL": Stage.CHO_GEMINI_FINAL,
-    }[phase_upper]
-    if state.stage is not expected_stage:
-        raise MvpError(f"Gemini Web {phase.casefold()} prepare stage does not match")
-    storyboard_path, artifact, phase_dir, _ = _web_phase_paths(run_dir, phase_upper)
-    storyboard = load_json(storyboard_path, AtomicStoryboard)
-    evidence_paths = tuple(sorted(path for path in (phase_dir / "evidence").rglob("*.jpg")))
-    critic_path = phase_dir / f"critic_{phase.casefold()}.json"
-    prompt = (
-        f"Bạn là kiểm định viên Gemini Web Ultra cho phase {phase_upper}. Đọc request.json, "
-        "artifact_path và TOÀN BỘ evidence_paths được liệt kê; chỉ dùng đúng các file đó. "
-        "Tạo JSON-only theo schema CriticReviewDocument, một beat_reviews cho từng beat, "
-        "không markdown và không tự bỏ beat. Chỉ MATCH khi hình, thứ tự hành động và lời "
-        "Việt cùng khớp. Nhãn phân tích tương đương VOICE_EARLY/VOICE_LATE/WRONG_VISUAL/"
-        "EXCLUDED_CONTENT/UNCERTAIN phải được ánh xạ vào schema nội bộ: VOICE_AHEAD, "
-        "VOICE_BEHIND, SCENE_MISMATCH hoặc ACTION_MISMATCH; mọi verdict khác MATCH phải "
-        "đưa chính sync_verdict vào finding_codes. Script dùng NOT_APPLICABLE. "
-        f"Lưu JSON chuẩn vào {critic_path}; không đổi tên hoặc ghi đè artifact khác."
-    )
-    anchor_paths = [
-        run_dir / "atomic_evidence" / "source" / "anchors.json",
-        run_dir / "atomic_evidence" / "program" / "anchors.json",
-    ]
-    anchor_ids: list[str] = []
-    for anchor_path in anchor_paths:
-        if anchor_path.is_file():
-            anchors = load_json(anchor_path, FrameAnchorDocument)
-            anchor_ids.extend(anchor.anchor_id for anchor in anchors.anchors)
-    prompt += (
-        " evidence_refs phải dùng đúng ID anchor engine sau đây, không tự chế: "
-        + ", ".join(anchor_ids)
-        + "."
-    )
-    prompt += (
-        f" Lưu nguyên văn câu trả lời Gemini vào {phase_dir / 'response.txt'}, ảnh chụp "
-        f"phiên vào {phase_dir / 'screenshots' / 'session.png'}, rồi ghi receipt.json "
-        "với hash SHA-256 của request, response.txt và critic JSON; session phải có đúng "
-        "account hint đã binding, plan Ultra, model mạnh nhất và browser_status READY."
-    )
-    # The request hash must cover the final upload/receipt instructions as well.
-    request, request_path = write_web_request(
-        phase_dir,
-        Path(run_dir).resolve().name,
-        phase_upper,
-        artifact,
-        evidence_paths,
-        tuple(beat.beat_id for beat in storyboard.beats),
-        prompt,
-    )
-    if phase_upper == "SCRIPT":
-        advance(run_dir, Stage.VIET_LOI, Stage.CHO_GEMINI_SCRIPT)
-    elif phase_upper == "PROXY":
-        advance(run_dir, Stage.PHAN_BIEN_VIDEO, Stage.CHO_GEMINI_PROXY)
-    print(request_path.resolve())
     return 0
 
 
@@ -803,7 +687,12 @@ def _load_verified_critic(
 ) -> CriticReviewDocument:
     phase_lower = phase.casefold()
     review_path = run_dir / "gemini_web" / phase_lower / f"critic_{phase_lower}.json"
-    load_verified_web_review(run_dir, phase_lower, CriticReviewDocument)
+    load_operator_verified_review(
+        run_dir,
+        phase_lower,
+        CriticReviewDocument,
+        ledger=_operator_ledger(run_dir),
+    )
     expected_phase = "SCRIPT" if phase.upper() == "SCRIPT" else "VIDEO"
     return load_critic_review(
         review_path,
@@ -812,7 +701,11 @@ def _load_verified_critic(
     )
 
 
-def _web_verify_accept(run_dir: Path, phase: str) -> int:
+def _accept_operator_review(
+    run_dir: Path,
+    phase: str,
+    operator_review: CriticReviewDocument | None = None,
+) -> int:
     started = time.perf_counter()
     phase_upper = phase.upper()
     state, episode = _episode(run_dir)
@@ -832,7 +725,7 @@ def _web_verify_accept(run_dir: Path, phase: str) -> int:
         if state.stage is not Stage.CHO_GEMINI_SCRIPT:
             raise MvpError("Gemini Web script accept requires CHO_GEMINI_SCRIPT stage")
         try:
-            review = _load_verified_critic(run_dir, "script", storyboard)
+            review = operator_review or _load_verified_critic(run_dir, "script", storyboard)
             source_anchors = load_json(
                 run_dir / "atomic_evidence" / "source" / "anchors.json", FrameAnchorDocument
             )
@@ -866,7 +759,9 @@ def _web_verify_accept(run_dir: Path, phase: str) -> int:
         if state.stage is not expected_stage:
             raise MvpError(f"Gemini Web {phase.casefold()} accept stage does not match")
         try:
-            review = _load_verified_critic(run_dir, phase.casefold(), storyboard)
+            review = operator_review or _load_verified_critic(
+                run_dir, phase.casefold(), storyboard
+            )
             source_anchors = load_json(
                 run_dir / "atomic_evidence" / "source" / "anchors.json", FrameAnchorDocument
             )
@@ -906,14 +801,160 @@ def _web_verify_accept(run_dir: Path, phase: str) -> int:
     return 0
 
 
-def _web_verify(args: argparse.Namespace) -> int:
+_BROWSER_HUMAN_CODES = {
+    "LOGIN_REQUIRED": "CAN_DANG_NHAP_GEMINI_ULTRA",
+    "ACCOUNT_MISMATCH": "SAI_TAI_KHOAN_GEMINI",
+    "MODEL_NOT_FOUND": "KHONG_THAY_MODEL_3_7_FLASH",
+    "UPLOAD_FAILED": "GEMINI_UPLOAD_THAT_BAI",
+    "INVALID_RESPONSE": "GEMINI_RESPONSE_KHONG_HOP_LE",
+    "INVALID_EVIDENCE": "BANG_CHUNG_BROWSER_KHONG_HOP_LE",
+    "BROWSER_START_FAILED": "KHONG_MO_DUOC_CHROME_GEMINI",
+}
+
+
+def _operator_root(run_dir: Path) -> Path:
+    return run_dir.resolve().parent.parent
+
+
+def _operator_ledger(run_dir: Path) -> OperatorLedger:
+    local = _operator_root(run_dir) / ".local"
+    key = load_or_create_ledger_key(local / "gemini_operator.key")
+    return OperatorLedger(local / "gemini_operator_ledger.jsonl", key)
+
+
+def run_operator_phase(run_dir: Path, phase: str) -> CriticReviewDocument:
+    phase_upper = phase.upper()
+    packet = build_browser_packet(run_dir, phase_upper)
+    root = _operator_root(run_dir)
+    binding = load_profile_binding(root / ".local" / "gemini_ultra_profile.json")
+    ledger = _operator_ledger(run_dir)
+    policy = OperatorPolicy.required()
+    request = issue_request(
+        run_dir.resolve().name,
+        phase_upper,
+        sha256_file(Path(packet.media_path)),
+        packet.packet_sha256,
+    )
+
+    def browser_session(operator_request, browser_packet):
+        launch = launch_managed_chrome(root / ".local")
+        try:
+            prompt = Path(browser_packet.prompt_path).read_text(encoding="utf-8")
+            return run_gemini_session(
+                launch.page,
+                policy=policy,
+                account_hint=binding.account_hint,
+                expected_account_sha256=binding.account_sha256,
+                upload_paths=tuple(Path(path) for path in browser_packet.upload_paths),
+                prompt=prompt,
+                screenshot_path=(
+                    run_dir
+                    / "gemini_web"
+                    / phase_upper.casefold()
+                    / "screenshots"
+                    / "session.png"
+                ),
+                chrome_pid=launch.chrome_pid,
+            )
+        finally:
+            launch.close()
+
+    operator = GeminiWebOperator(
+        run_dir=run_dir,
+        binding=binding,
+        ledger=ledger,
+        session_runner=browser_session,
+        policy=policy,
+        operator_build_sha256=calculate_policy_sha256(root),
+    )
+    operator.run(request, packet)
+    return load_operator_verified_review(
+        run_dir,
+        phase_upper,
+        CriticReviewDocument,
+        ledger=ledger,
+    )
+
+
+def _gemini_web_run(run_dir: Path, phase: str) -> int:
+    phase_upper = phase.upper()
+    expected = {
+        "SCRIPT": (Stage.VIET_LOI, Stage.CHO_GEMINI_SCRIPT),
+        "PROXY": (Stage.PHAN_BIEN_VIDEO, Stage.CHO_GEMINI_PROXY),
+        "FINAL": (Stage.CHO_GEMINI_FINAL, Stage.CHO_GEMINI_FINAL),
+    }[phase_upper]
+    state = read_state(run_dir)
+    if state.stage is not expected[0]:
+        raise MvpError(f"Gemini Web {phase.casefold()} run stage does not match")
+    if expected[0] is not expected[1]:
+        advance(run_dir, expected[0], expected[1])
+    try:
+        review = run_operator_phase(run_dir, phase_upper)
+    except GeminiBrowserError as exc:
+        code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")
+        mark_human_required(run_dir, code)
+        _write_next(
+            run_dir,
+            f"Gemini Web dừng: {exc}. Xử lý trên cửa sổ Chrome rồi báo lại Codex.",
+            code=code,
+        )
+        return 1
+    except MvpError as exc:
+        code = "BANG_CHUNG_BROWSER_KHONG_HOP_LE"
+        mark_human_required(run_dir, code)
+        _write_next(
+            run_dir,
+            f"Gemini Web từ chối bằng chứng: {exc}. Báo lại Codex để sửa operator.",
+            code=code,
+        )
+        return 1
+    return _accept_operator_review(run_dir, phase_upper, review)
+
+
+def _gemini_web_smoke(run_dir: Path) -> int:
+    root = _operator_root(run_dir)
+    binding = load_profile_binding(root / ".local" / "gemini_ultra_profile.json")
+    policy = OperatorPolicy.required()
+    smoke_dir = run_dir / "gemini_web" / "smoke"
+    evidence = smoke_dir / "operator-smoke.txt"
+    evidence.parent.mkdir(parents=True, exist_ok=True)
+    evidence.write_text("GEMINI WEB OPERATOR SMOKE TEST\n", encoding="utf-8")
+    launch = launch_managed_chrome(root / ".local")
+    try:
+        observation, response = run_gemini_session(
+            launch.page,
+            policy=policy,
+            account_hint=binding.account_hint,
+            expected_account_sha256=binding.account_sha256,
+            upload_paths=(evidence,),
+            prompt="Trả lời đúng chuỗi GEMINI_WEB_OPERATOR_OK, không thêm nội dung khác.",
+            screenshot_path=smoke_dir / "session.png",
+            chrome_pid=launch.chrome_pid,
+        )
+    finally:
+        launch.close()
+    if response.strip() != "GEMINI_WEB_OPERATOR_OK":
+        raise GeminiBrowserError(
+            "INVALID_RESPONSE", "Gemini smoke response is not the required exact string"
+        )
+    print(observation.conversation_url)
+    return 0
+
+
+def _gemini_web(args: argparse.Namespace) -> int:
     if args.action == "enroll":
         return _web_verify_enroll(args.run, args.account_hint)
+    if args.action == "smoke":
+        try:
+            return _gemini_web_smoke(args.run)
+        except GeminiBrowserError as exc:
+            code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")
+            mark_human_required(args.run, code)
+            _write_next(args.run, f"Gemini Web smoke dừng: {exc}", code=code)
+            return 1
     if args.phase is None:
-        raise MvpError(f"web-verify {args.action} requires --phase")
-    if args.action == "prepare":
-        return _web_verify_prepare(args.run, args.phase)
-    return _web_verify_accept(args.run, args.phase)
+        raise MvpError("gemini-web run requires --phase")
+    return _gemini_web_run(args.run, args.phase)
 
 
 def _audit(run_dir: Path, phase: str, codex_review: Path | None) -> int:
@@ -974,8 +1015,8 @@ def main(argv: list[str] | None = None) -> int:
             return _resume(args.run, args.phase)
         if args.command == "audit":
             return _audit(args.run, args.phase, args.codex_review)
-        if args.command == "web-verify":
-            return _web_verify(args)
+        if args.command == "gemini-web":
+            return _gemini_web(args)
     except MvpError as exc:
         parser.error(str(exc))
     return 2
