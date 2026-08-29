@@ -10,6 +10,7 @@ from anime_review_mvp.gemini_operator import OperatorPolicy
 from anime_review_mvp.gemini_selenium import (
     AccountObservation,
     BrowserReadiness,
+    ChromeLaunch,
     GeminiBrowserError,
     ManagedProfileLock,
     SeleniumGeminiPage,
@@ -153,6 +154,44 @@ def test_second_browser_session_cannot_take_same_profile_lock(tmp_path: Path) ->
             second.acquire()
     finally:
         first.release()
+
+
+def test_chrome_launch_detach_keeps_browser_process_alive(tmp_path: Path) -> None:
+    class Driver:
+        def __init__(self) -> None:
+            self.quit_calls = 0
+
+        def quit(self) -> None:
+            self.quit_calls += 1
+
+    class Page:
+        def __init__(self, driver: Driver) -> None:
+            self.driver = driver
+
+    class Process:
+        pid = 123
+
+        def __init__(self) -> None:
+            self.terminated = False
+
+        def poll(self) -> None:
+            return None if not self.terminated else 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    driver = Driver()
+    process = Process()
+    launch = ChromeLaunch(Page(driver), process, process.pid, "127.0.0.1:9222")
+
+    launch.detach()
+
+    assert driver.quit_calls == 1
+    assert process.terminated is False
+
+    launch.close()
+    assert driver.quit_calls == 1
+    assert process.terminated is True
 
 
 def test_session_rejects_model_label_not_confirmed_by_dom(tmp_path: Path) -> None:

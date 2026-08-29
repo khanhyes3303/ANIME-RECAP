@@ -839,7 +839,7 @@ def run_operator_phase(run_dir: Path, phase: str) -> CriticReviewDocument:
     )
 
     def browser_session(operator_request, browser_packet):
-        launch = launch_managed_chrome(root / ".local")
+        launch = launch_managed_chrome(root)
         try:
             prompt = Path(browser_packet.prompt_path).read_text(encoding="utf-8")
             return run_gemini_session(
@@ -921,7 +921,7 @@ def _gemini_web_smoke(run_dir: Path) -> int:
     evidence = smoke_dir / "operator-smoke.txt"
     evidence.parent.mkdir(parents=True, exist_ok=True)
     evidence.write_text("GEMINI WEB OPERATOR SMOKE TEST\n", encoding="utf-8")
-    launch = launch_managed_chrome(root / ".local")
+    launch = launch_managed_chrome(root)
     try:
         observation, response = run_gemini_session(
             launch.page,

@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -27,6 +27,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from .errors import MvpError
 from .gemini_operator import BrowserObservation, OperatorPolicy
+from .gemini_session import GeminiSessionMetadata
 from .gemini_web import account_sha256
 
 GEMINI_URL = "https://gemini.google.com/app"
@@ -177,18 +178,25 @@ def _reserve_local_port() -> int:
 @dataclass(slots=True)
 class ChromeLaunch:
     page: SeleniumGeminiPage
-    process: subprocess.Popen[bytes]
+    process: subprocess.Popen[bytes] | None
     chrome_pid: int
     debugger_address: str
-    profile_lock: ManagedProfileLock
+    profile_lock: ManagedProfileLock | None = None
+    _driver_closed: bool = field(default=False, init=False, repr=False)
+
+    def detach(self) -> None:
+        if not self._driver_closed:
+            self.page.driver.quit()
+            self._driver_closed = True
+        if self.profile_lock is not None:
+            self.profile_lock.release()
 
     def close(self) -> None:
         try:
-            self.page.driver.quit()
+            self.detach()
         finally:
-            if self.process.poll() is None:
+            if self.process is not None and self.process.poll() is None:
                 self.process.terminate()
-            self.profile_lock.release()
 
 
 def launch_managed_chrome(
@@ -237,6 +245,24 @@ def launch_managed_chrome(
             process.terminate()
         profile_lock.release()
         raise
+
+
+def connect_managed_chrome(metadata: GeminiSessionMetadata) -> ChromeLaunch:
+    """Attach Selenium to an existing visible Chrome owned by the registry."""
+    options = Options()
+    options.debugger_address = metadata.debugger_address
+    try:
+        driver = webdriver.Chrome(options=options)
+    except Exception as exc:
+        raise GeminiBrowserError(
+            "BROWSER_START_FAILED", "Could not attach to managed Gemini Chrome"
+        ) from exc
+    return ChromeLaunch(
+        SeleniumGeminiPage(driver),
+        None,
+        metadata.chrome_pid,
+        metadata.debugger_address,
+    )
 
 
 def _masked_email(email: str) -> str:
