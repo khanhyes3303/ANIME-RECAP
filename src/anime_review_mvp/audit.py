@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from .atomic import validate_critic_evidence
 from .errors import MvpError
 from .models import (
     AtomicStoryboard,
@@ -153,10 +154,13 @@ def build_atomic_engine_audit(
     storyboard: AtomicStoryboard,
     tts: AtomicTtsManifest,
     critic: CriticReviewDocument,
+    source_anchors: FrameAnchorDocument,
+    program_anchors: FrameAnchorDocument,
     render: RenderResult,
     *,
     expected_policy_sha256: str,
     actual_policy_sha256: str,
+    completed_stage_names: tuple[str, ...],
 ) -> EngineAuditReport:
     beat_ids = [beat.beat_id for beat in storyboard.beats]
     tts_ids = [beat.beat_id for beat in tts.beats]
@@ -172,6 +176,7 @@ def build_atomic_engine_audit(
         raise MvpError("critic producer context does not match storyboard")
     if critic.critic_context_id == critic.producer_context_id:
         raise MvpError("producer and critic require separate contexts")
+    validate_critic_evidence(critic, storyboard, source_anchors, program_anchors)
 
     blocking_codes = _BLOCKING_SEMANTIC_CODES | {
         "WRONG_CHARACTER",
@@ -189,14 +194,10 @@ def build_atomic_engine_audit(
     total_ms = sum(duration_by_id.values())
     for beat in storyboard.beats:
         review = review_by_id[beat.beat_id]
-        evidence = set(beat.frame_evidence)
-        has_evidence = bool(evidence) and bool(set(review.evidence_refs) & evidence)
         codes = set(review.finding_codes) | set(beat.finding_codes)
         if beat.status != "LOCKED":
             codes.add("BEAT_NOT_LOCKED")
-        if not has_evidence:
-            codes.add("MISSING_EVIDENCE")
-        if not codes:
+        if review.sync_verdict == "MATCH" and not codes:
             supported_ms += duration_by_id[beat.beat_id]
         for code in sorted(codes):
             findings.append(
@@ -227,6 +228,24 @@ def build_atomic_engine_audit(
                 "POLICY_CHANGED_DURING_RUN",
                 None,
                 "Brain or validator policy changed during the episode run.",
+                (),
+            )
+        )
+    required_stages = {
+        "LAP_STORYBOARD",
+        "PHAN_BIEN_KICH_BAN",
+        "TAO_TTS",
+        "DUNG_PROXY",
+        "PHAN_BIEN_VIDEO",
+        "DUNG_VIDEO_CUOI",
+    }
+    if not required_stages <= set(completed_stage_names):
+        findings.append(
+            AuditFinding(
+                "ERROR",
+                "MISSING_STAGE_METRICS",
+                None,
+                "Run lacks measured stage evidence required before publication.",
                 (),
             )
         )

@@ -15,6 +15,8 @@ from anime_review_mvp.models import (
     Claim,
     CriticBeatReview,
     CriticReviewDocument,
+    FrameAnchor,
+    FrameAnchorDocument,
     SpanSourceRange,
     TtsCacheStats,
 )
@@ -99,6 +101,53 @@ def _tts() -> AtomicTtsManifest:
     )
 
 
+def _anchors(timeline: str) -> FrameAnchorDocument:
+    anchors = []
+    for beat in _board().beats:
+        for source_range in beat.source_ranges:
+            suffix = "" if timeline == "SOURCE" else "-program"
+            timestamps = (
+                (
+                    source_range.source_start_ms + 80,
+                    (source_range.source_start_ms + source_range.source_end_ms) // 2,
+                    source_range.source_end_ms - 80,
+                )
+                if timeline == "SOURCE"
+                else (80, 1_000, 1_920)
+            )
+            anchors.extend(
+                FrameAnchor(
+                    f"{beat.beat_id}-{source_range.range_id}{suffix}-{position.casefold()}",
+                    beat.beat_id,
+                    source_range.range_id,
+                    timeline,
+                    position,
+                    timestamp,
+                    f"{beat.beat_id}-{timeline.casefold()}-{position.casefold()}.jpg",
+                )
+                for position, timestamp in zip(("START", "MIDDLE", "END"), timestamps, strict=True)
+            )
+    return FrameAnchorDocument(tuple(anchors))
+
+
+def _evidence_for(beat_id: str) -> tuple[str, ...]:
+    return tuple(
+        anchor.anchor_id
+        for anchor in (*_anchors("SOURCE").anchors, *_anchors("PROGRAM").anchors)
+        if anchor.span_id == beat_id
+    )
+
+
+_COMPLETED_STAGES = (
+    "LAP_STORYBOARD",
+    "PHAN_BIEN_KICH_BAN",
+    "TAO_TTS",
+    "DUNG_PROXY",
+    "PHAN_BIEN_VIDEO",
+    "DUNG_VIDEO_CUOI",
+)
+
+
 def test_atomic_edl_rejects_action_window_outside_selected_footage() -> None:
     board = _board()
     bad = replace(board.beats[0], action_window_start_ms=500_000, action_window_end_ms=501_000)
@@ -124,9 +173,23 @@ def test_atomic_audit_counts_only_evidenced_beats_without_blocking_findings() ->
         "producer-01",
         "critic-01",
         (
-            CriticBeatReview("beat-001", (), ("frame-001.jpg",), "Khớp."),
             CriticBeatReview(
-                "beat-002", ("VOICE_AHEAD",), ("frame-002.jpg",), "Lời đi trước hình."
+                "beat-001",
+                (),
+                _evidence_for("beat-001"),
+                "Jiro đang chạy trong cả source và program.",
+                "Jiro chạy.",
+                "MATCH",
+                "Khớp hành động.",
+            ),
+            CriticBeatReview(
+                "beat-002",
+                ("VOICE_AHEAD",),
+                _evidence_for("beat-002"),
+                "Rago chỉ quay lại sau khi câu kể đã bắt đầu.",
+                "Rago quay lại.",
+                "VOICE_AHEAD",
+                "Lời đi trước hình.",
             ),
         ),
     )
@@ -136,9 +199,12 @@ def test_atomic_audit_counts_only_evidenced_beats_without_blocking_findings() ->
         _board(),
         _tts(),
         critic,
+        _anchors("SOURCE"),
+        _anchors("PROGRAM"),
         render,
         expected_policy_sha256="a" * 64,
         actual_policy_sha256="a" * 64,
+        completed_stage_names=_COMPLETED_STAGES,
     )
 
     assert report.coverage_ratio == "0.8"
@@ -155,7 +221,15 @@ def test_atomic_audit_rejects_policy_change() -> None:
         "producer-01",
         "critic-01",
         tuple(
-            CriticBeatReview(beat.beat_id, (), beat.frame_evidence, "Khớp.")
+            CriticBeatReview(
+                beat.beat_id,
+                (),
+                _evidence_for(beat.beat_id),
+                f"Hình source và program của {beat.beat_id} cùng hành động.",
+                beat.visual_fact,
+                "MATCH",
+                f"Đối chiếu {beat.beat_id} không thấy lệch.",
+            )
             for beat in _board().beats
         ),
     )
@@ -165,9 +239,48 @@ def test_atomic_audit_rejects_policy_change() -> None:
         _board(),
         _tts(),
         critic,
+        _anchors("SOURCE"),
+        _anchors("PROGRAM"),
         render,
         expected_policy_sha256="a" * 64,
         actual_policy_sha256="b" * 64,
+        completed_stage_names=_COMPLETED_STAGES,
     )
 
     assert "POLICY_CHANGED_DURING_RUN" in {finding.code for finding in report.findings}
+
+
+def test_atomic_audit_rejects_missing_stage_metrics() -> None:
+    critic = CriticReviewDocument(
+        "VIDEO",
+        "producer-01",
+        "critic-01",
+        tuple(
+            CriticBeatReview(
+                beat.beat_id,
+                (),
+                _evidence_for(beat.beat_id),
+                f"Quan sát riêng {beat.beat_id}.",
+                beat.visual_fact,
+                "MATCH",
+                f"Nhận xét riêng {beat.beat_id}.",
+            )
+            for beat in _board().beats
+        ),
+    )
+    render = RenderResult("final.mp4", 420_000, 420_000, 420_000, 0, 1, 1)
+
+    report = build_atomic_engine_audit(
+        _board(),
+        _tts(),
+        critic,
+        _anchors("SOURCE"),
+        _anchors("PROGRAM"),
+        render,
+        expected_policy_sha256="a" * 64,
+        actual_policy_sha256="a" * 64,
+        completed_stage_names=(),
+    )
+
+    assert "MISSING_STAGE_METRICS" in {finding.code for finding in report.findings}
+    assert report.passed is False

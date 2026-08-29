@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from .antigravity import (
@@ -13,7 +14,7 @@ from .antigravity import (
     load_script,
     load_truth,
 )
-from .atomic import load_atomic_storyboard, load_critic_review
+from .atomic import load_atomic_storyboard, load_critic_review, validate_critic_evidence
 from .audit import build_atomic_engine_audit, build_engine_audit
 from .editorial import load_locked_spans
 from .edl import build_atomic_edl, build_edl_from_locked_spans
@@ -21,6 +22,7 @@ from .errors import MvpError
 from .jsonio import dump_json, load_json
 from .media import (
     detect_shots,
+    extract_atomic_source_anchors,
     extract_inspection_assets,
     extract_program_anchors,
     extract_span_anchors,
@@ -55,9 +57,14 @@ from .workflow import (
     read_state,
     record_beat_repair,
     record_repair,
+    record_stage_metric,
     resume_beat_repair,
 )
 from .workspace import create_job, publish_candidate
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(1, round((time.perf_counter() - started) * 1_000))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -211,6 +218,7 @@ def _job_paths_from_state(state: object, episode: Path):
 
 
 def _validate(run_dir: Path, artifact: str) -> int:
+    started = time.perf_counter()
     state, episode = _episode(run_dir)
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     if artifact == "truth":
@@ -247,11 +255,24 @@ def _validate(run_dir: Path, artifact: str) -> int:
             source_duration_ms=source.duration_ms,
         )
         shots = load_json(run_dir / "shots.json", ShotDocument)
-        load_atomic_storyboard(
+        storyboard = load_atomic_storyboard(
             episode / "Kich_ban" / "atomic_storyboard.json",
             truth,
             shots.shots,
             source.duration_ms,
+        )
+        extract_atomic_source_anchors(
+            Path(state.source_video),
+            storyboard,
+            run_dir / "atomic_evidence" / "source",
+        )
+        record_stage_metric(
+            run_dir,
+            Stage.LAP_STORYBOARD,
+            _elapsed_ms(started),
+            0,
+            0,
+            tuple(beat.beat_id for beat in storyboard.beats),
         )
         advance(run_dir, Stage.LAP_STORYBOARD, Stage.VIET_LOI)
         _write_next(
@@ -277,6 +298,11 @@ def _validate(run_dir: Path, artifact: str) -> int:
             storyboard,
             "SCRIPT",
         )
+        source_anchors = load_json(
+            run_dir / "atomic_evidence" / "source" / "anchors.json",
+            FrameAnchorDocument,
+        )
+        validate_critic_evidence(review, storyboard, source_anchors)
         codes_by_beat = {
             item.beat_id: item.finding_codes for item in review.beat_reviews if item.finding_codes
         }
@@ -300,6 +326,14 @@ def _validate(run_dir: Path, artifact: str) -> int:
                 f"{len(repaired.repair_history)}/3.",
             )
             return 1
+        record_stage_metric(
+            run_dir,
+            Stage.PHAN_BIEN_KICH_BAN,
+            _elapsed_ms(started),
+            0,
+            0,
+            (),
+        )
         advance(run_dir, Stage.VIET_LOI, Stage.PHAN_BIEN_KICH_BAN)
         advance(run_dir, Stage.PHAN_BIEN_KICH_BAN, Stage.TAO_TTS)
         _write_next(run_dir, "Critic script sạch; Antigravity chạy tts.")
@@ -322,6 +356,15 @@ def _validate(run_dir: Path, artifact: str) -> int:
             storyboard,
             "VIDEO",
         )
+        source_anchors = load_json(
+            run_dir / "atomic_evidence" / "source" / "anchors.json",
+            FrameAnchorDocument,
+        )
+        program_anchors = load_json(
+            run_dir / "atomic_evidence" / "program" / "anchors.json",
+            FrameAnchorDocument,
+        )
+        validate_critic_evidence(review, storyboard, source_anchors, program_anchors)
         failed = tuple(item for item in review.beat_reviews if item.finding_codes)
         if failed:
             repaired = record_beat_repair(
@@ -336,6 +379,14 @@ def _validate(run_dir: Path, artifact: str) -> int:
                 f"{len(repaired.repair_history)}/3.",
             )
             return 1
+        record_stage_metric(
+            run_dir,
+            Stage.PHAN_BIEN_VIDEO,
+            _elapsed_ms(started),
+            0,
+            0,
+            (),
+        )
         advance(run_dir, Stage.PHAN_BIEN_VIDEO, Stage.DUNG_VIDEO_CUOI)
         _write_next(run_dir, "Critic video sạch; render --quality final.")
     elif artifact == "script":
@@ -403,6 +454,7 @@ def _lock(run_dir: Path) -> int:
 
 
 def _tts(run_dir: Path) -> int:
+    started = time.perf_counter()
     state, episode = _episode(run_dir)
     if state.stage is not Stage.TAO_TTS:
         raise MvpError("tts requires TAO_TTS stage")
@@ -427,6 +479,14 @@ def _tts(run_dir: Path) -> int:
         )
         edl = build_atomic_edl(storyboard, tts)
         dump_json(episode / "Ke_hoach_canh" / "atomic_edl.json", edl)
+        record_stage_metric(
+            run_dir,
+            Stage.TAO_TTS,
+            _elapsed_ms(started),
+            tts.cache_stats.hits,
+            tts.cache_stats.misses,
+            tuple(beat.beat_id for beat in storyboard.beats if beat.actual_tts_ms is None),
+        )
         advance(run_dir, Stage.TAO_TTS, Stage.CAN_TTS)
         _write_next(
             run_dir,
@@ -456,6 +516,7 @@ def _tts(run_dir: Path) -> int:
 
 
 def _render(run_dir: Path, quality: str = "final") -> int:
+    started = time.perf_counter()
     state, episode = _episode(run_dir)
     if quality == "proxy" and state.stage is Stage.DUNG_PROXY:
         edl = load_json(episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument)
@@ -470,6 +531,14 @@ def _render(run_dir: Path, quality: str = "final") -> int:
         )
         dump_json(run_dir / "proxy" / "render_result.json", result)
         extract_program_anchors(output, edl, run_dir / "atomic_evidence" / "program")
+        record_stage_metric(
+            run_dir,
+            Stage.DUNG_PROXY,
+            _elapsed_ms(started),
+            0,
+            0,
+            (),
+        )
         advance(run_dir, Stage.DUNG_PROXY, Stage.PHAN_BIEN_VIDEO)
         _write_next(
             run_dir,
@@ -489,6 +558,15 @@ def _render(run_dir: Path, quality: str = "final") -> int:
             quality="final",
         )
         dump_json(run_dir / "final_render_result.json", result)
+        extract_program_anchors(output, edl, run_dir / "atomic_evidence" / "program")
+        record_stage_metric(
+            run_dir,
+            Stage.DUNG_VIDEO_CUOI,
+            _elapsed_ms(started),
+            0,
+            0,
+            (),
+        )
         advance(run_dir, Stage.DUNG_VIDEO_CUOI, Stage.KIEM_DINH_ENGINE)
         _write_next(run_dir, "Final candidate đã dựng; chạy audit --phase engine.")
         print(output)
@@ -595,6 +673,14 @@ def _audit_atomic_engine(run_dir: Path, episode: Path) -> int:
         "VIDEO",
     )
     tts = load_json(episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest)
+    source_anchors = load_json(
+        run_dir / "atomic_evidence" / "source" / "anchors.json",
+        FrameAnchorDocument,
+    )
+    program_anchors = load_json(
+        run_dir / "atomic_evidence" / "program" / "anchors.json",
+        FrameAnchorDocument,
+    )
     render = load_json(run_dir / "final_render_result.json", RenderResult)
     job_payload = json.loads((run_dir / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
     expected_hash = job_payload["policy_sha256"]
@@ -603,9 +689,12 @@ def _audit_atomic_engine(run_dir: Path, episode: Path) -> int:
         storyboard,
         tts,
         critic,
+        source_anchors,
+        program_anchors,
         render,
         expected_policy_sha256=expected_hash,
         actual_policy_sha256=actual_hash,
+        completed_stage_names=tuple(metric.stage for metric in state.stage_metrics),
     )
     dump_json(episode / "Bao_cao" / "kiem_dinh_engine.json", report)
     if not report.passed:

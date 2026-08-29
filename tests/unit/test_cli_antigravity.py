@@ -11,7 +11,11 @@ from anime_review_mvp.models import (
     AtomicBeat,
     AtomicStoryboard,
     Claim,
+    CriticBeatReview,
+    CriticReviewDocument,
     Event,
+    FrameAnchor,
+    FrameAnchorDocument,
     Shot,
     ShotDocument,
     SourceRef,
@@ -19,7 +23,7 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TruthDocument,
 )
-from anime_review_mvp.workflow import Stage, new_state, read_state
+from anime_review_mvp.workflow import Stage, advance, new_state, read_state
 
 
 def _prepared_storyboard_run(tmp_path: Path) -> tuple[Path, Path]:
@@ -81,9 +85,9 @@ def _prepared_storyboard_run(tmp_path: Path) -> tuple[Path, Path]:
                     ("Jiro",),
                     "ACTION",
                     1_000,
-                    2_000,
+                    2_700,
                     "Jiro lao vào sân.",
-                    ("frame-1000.jpg",),
+                    ("shot-001.jpg",),
                     3_000,
                     None,
                     "",
@@ -96,15 +100,92 @@ def _prepared_storyboard_run(tmp_path: Path) -> tuple[Path, Path]:
     return run, episode
 
 
-def test_cli_validates_storyboard_without_waiting_for_codex(tmp_path: Path) -> None:
+def test_cli_validates_storyboard_without_waiting_for_codex(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     run, _ = _prepared_storyboard_run(tmp_path)
+    calls: list[Path] = []
+
+    def extract_source(
+        source: Path, storyboard: AtomicStoryboard, output: Path
+    ) -> FrameAnchorDocument:
+        calls.append(source)
+        result = FrameAnchorDocument(
+            tuple(
+                FrameAnchor(
+                    f"beat-001-range-001-{position.casefold()}",
+                    "beat-001",
+                    "range-001",
+                    "SOURCE",
+                    position,
+                    timestamp,
+                    str(output / f"{position.casefold()}.jpg"),
+                )
+                for position, timestamp in zip(
+                    ("START", "MIDDLE", "END"), (1_080, 2_500, 3_920), strict=True
+                )
+            )
+        )
+        output.mkdir(parents=True, exist_ok=True)
+        dump_json(output / "anchors.json", result)
+        return result
+
+    monkeypatch.setattr(cli, "extract_atomic_source_anchors", extract_source, raising=False)
 
     assert cli.main(["validate", "--run", str(run), "--artifact", "storyboard"]) == 0
 
     assert read_state(run).stage is Stage.VIET_LOI
+    assert calls
+    assert {metric.stage for metric in read_state(run).stage_metrics} >= {"LAP_STORYBOARD"}
     instruction = json.loads((run / "next_action.json").read_text(encoding="utf-8"))["instruction"]
     assert "Antigravity" in instruction
     assert "Codex" not in instruction
+
+
+def test_cli_rejects_script_critic_without_all_source_anchors(tmp_path: Path) -> None:
+    run, episode = _prepared_storyboard_run(tmp_path)
+    advance(run, Stage.LAP_STORYBOARD, Stage.VIET_LOI)
+    source_anchors = FrameAnchorDocument(
+        tuple(
+            FrameAnchor(
+                f"beat-001-range-001-{position.casefold()}",
+                "beat-001",
+                "range-001",
+                "SOURCE",
+                position,
+                timestamp,
+                f"{position.casefold()}.jpg",
+            )
+            for position, timestamp in zip(
+                ("START", "MIDDLE", "END"), (1_080, 2_500, 3_920), strict=True
+            )
+        )
+    )
+    source_dir = run / "atomic_evidence" / "source"
+    source_dir.mkdir(parents=True)
+    dump_json(source_dir / "anchors.json", source_anchors)
+    dump_json(
+        episode / "Bao_cao" / "critic_script.json",
+        CriticReviewDocument(
+            "SCRIPT",
+            "producer-01",
+            "critic-script-01",
+            (
+                CriticBeatReview(
+                    "beat-001",
+                    (),
+                    (source_anchors.anchors[0].anchor_id,),
+                    "Jiro chạy qua cổng.",
+                    "Jiro chạy.",
+                    "NOT_APPLICABLE",
+                    "Chỉ mới xem một frame.",
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(SystemExit):
+        cli.main(["validate", "--run", str(run), "--artifact", "critic-script"])
 
 
 def test_render_parser_accepts_explicit_proxy_quality() -> None:
