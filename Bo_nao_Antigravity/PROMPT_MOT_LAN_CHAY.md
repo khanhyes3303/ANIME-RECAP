@@ -1,7 +1,4 @@
-# Mẫu prompt một lần chạy Antigravity — không dán trực tiếp
-
-Tệp này còn placeholder. Người dùng chỉ dán nội dung
-`<run_dir>\PROMPT_GUI_ANTIGRAVITY.txt` do lệnh `prompt` tạo ra.
+# Prompt một lần chạy Antigravity
 
 Xử lý duy nhất tập anime trong job:
 
