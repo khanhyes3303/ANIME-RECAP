@@ -855,6 +855,14 @@ def run_operator_phase(
         metadata = registry.load()
         if metadata is None:
             launch = launch_managed_chrome(root)
+            print(
+                "Gemini Chrome operator đã mở: "
+                f"{(root / '.local' / 'gemini_ultra_chrome').resolve()}"
+            )
+            print(
+                "Hãy đăng nhập đúng tài khoản Ultra và tự chọn "
+                "3.7 Flash + Tư duy mở rộng trên cửa sổ này."
+            )
             metadata = GeminiSessionMetadata(
                 run_id=run_dir.resolve().name,
                 chrome_pid=launch.chrome_pid,
@@ -867,6 +875,7 @@ def run_operator_phase(
         else:
             metadata = registry.assert_attachable(run_dir.resolve().name)
             launch = connect_managed_chrome(metadata)
+            print("Đã nối lại phiên Gemini Web đang mở của run này.")
         try:
             turn_number = registry.increment_turn(
                 run_dir.resolve().name,
@@ -964,7 +973,10 @@ def _gemini_web_run(run_dir: Path, phase: str) -> int:
             code=code,
         )
         return 1
-    return _accept_operator_review(run_dir, phase_upper, review)
+    result = _accept_operator_review(run_dir, phase_upper, review)
+    if result == 0 and phase_upper == "FINAL":
+        _gemini_web_stop(run_dir)
+    return result
 
 
 def _gemini_web_continue(run_dir: Path, phase: str, prompt_file: Path) -> int:
