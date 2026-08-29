@@ -208,7 +208,12 @@ def test_one_antigravity_run_reaches_final_without_codex_artifact(
     )
     monkeypatch.setattr(cli, "extract_inspection_assets", lambda *args, **kwargs: ())
 
-    def fake_tts(storyboard: AtomicStoryboard, output: Path, cache: Path) -> AtomicTtsManifest:
+    def fake_tts(
+        storyboard: AtomicStoryboard,
+        output: Path,
+        cache: Path,
+        **_: object,
+    ) -> AtomicTtsManifest:
         del cache
         output.mkdir(parents=True, exist_ok=True)
         narration = output / "narration.wav"

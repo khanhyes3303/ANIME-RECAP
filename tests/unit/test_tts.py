@@ -209,6 +209,8 @@ def test_atomic_tts_reuses_unchanged_beat(tmp_path: Path) -> None:
         tmp_path / "cache",
         provider=provider,
         converter=_fake_converter,
+        revision_id="rev-a",
+        source_sha256="1" * 64,
     )
     second = synthesize_atomic_beats(
         _atomic_storyboard("Jiro lao vào sân."),
@@ -216,6 +218,8 @@ def test_atomic_tts_reuses_unchanged_beat(tmp_path: Path) -> None:
         tmp_path / "cache",
         provider=provider,
         converter=_fake_converter,
+        revision_id="rev-a",
+        source_sha256="1" * 64,
     )
 
     assert provider.calls == 1
@@ -232,6 +236,8 @@ def test_atomic_tts_invalidates_only_changed_beat(tmp_path: Path) -> None:
         tmp_path / "cache",
         provider=provider,
         converter=_fake_converter,
+        revision_id="rev-a",
+        source_sha256="1" * 64,
     )
     result = synthesize_atomic_beats(
         _atomic_storyboard("Câu một.", "Câu hai đã sửa."),
@@ -239,8 +245,36 @@ def test_atomic_tts_invalidates_only_changed_beat(tmp_path: Path) -> None:
         tmp_path / "cache",
         provider=provider,
         converter=_fake_converter,
+        revision_id="rev-a",
+        source_sha256="1" * 64,
     )
 
     assert provider.calls == 3
     assert result.cache_stats.hits == 1
     assert result.cache_stats.misses == 1
+
+
+def test_new_revision_invalidates_every_atomic_tts_entry(tmp_path: Path) -> None:
+    provider = CountingProvider()
+    first = synthesize_atomic_beats(
+        _atomic_storyboard("Câu một.", "Câu hai."),
+        tmp_path / "out-1",
+        tmp_path / "cache",
+        revision_id="rev-a",
+        source_sha256="1" * 64,
+        provider=provider,
+        converter=_fake_converter,
+    )
+    second = synthesize_atomic_beats(
+        _atomic_storyboard("Câu một.", "Câu hai."),
+        tmp_path / "out-2",
+        tmp_path / "cache",
+        revision_id="rev-b",
+        source_sha256="1" * 64,
+        provider=provider,
+        converter=_fake_converter,
+    )
+
+    assert first.cache_stats.misses == 2
+    assert second.cache_stats.misses == 2
+    assert second.cache_stats.hits == 0

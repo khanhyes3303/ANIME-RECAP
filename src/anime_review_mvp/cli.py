@@ -398,6 +398,8 @@ def _tts(run_dir: Path) -> int:
             storyboard,
             episode / "TTS",
             episode / "_Cache" / "tts",
+            revision_id=run_dir.resolve().name,
+            source_sha256=source.sha256,
         )
         edl = build_atomic_edl(storyboard, tts)
         dump_json(episode / "Ke_hoach_canh" / "atomic_edl.json", edl)

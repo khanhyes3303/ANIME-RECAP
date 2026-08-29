@@ -368,9 +368,24 @@ def synthesize_spans(
     return manifest
 
 
-def _atomic_tts_cache_key(text: str, profile: VoiceProfile, policy_version: str) -> str:
+def _atomic_tts_cache_key(
+    text: str,
+    profile: VoiceProfile,
+    policy_version: str,
+    revision_id: str,
+    source_sha256: str,
+) -> str:
     normalized = normalize_speech_text(text)
-    raw = "\0".join((normalized, profile.provider, profile.voice_id, policy_version))
+    raw = "\0".join(
+        (
+            normalized,
+            profile.provider,
+            profile.voice_id,
+            policy_version,
+            revision_id,
+            source_sha256,
+        )
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -379,9 +394,17 @@ def synthesize_atomic_beats(
     output_dir: Path,
     cache_dir: Path,
     *,
+    revision_id: str,
+    source_sha256: str,
     provider: TtsProvider | None = None,
     converter: Converter = _convert_mp3_to_wav,
 ) -> AtomicTtsManifest:
+    if not revision_id.strip():
+        raise MvpError("atomic TTS revision ID is required")
+    if len(source_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in source_sha256
+    ):
+        raise MvpError("atomic TTS source SHA-256 is invalid")
     output_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
     profile = default_profile()
@@ -399,6 +422,8 @@ def synthesize_atomic_beats(
             beat.narration_text,
             profile,
             storyboard.policy_version,
+            revision_id,
+            source_sha256,
         )
         entry = cache_dir / cache_key
         cached_mp3 = entry / "audio.mp3"
