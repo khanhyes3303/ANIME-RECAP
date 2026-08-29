@@ -31,6 +31,11 @@ Kỳ vọng:
 5. `gemini_web\session.json`, `raw_response.json`, screenshot và receipt được tạo;
    conversation URL khác trang `/app` trống và chat xuất hiện trong lịch sử.
 
+Timeout thao tác giao diện là 30 giây, nhưng sau khi gửi prompt operator chờ Gemini
+tối đa 15 phút. Trong run sản xuất, Selenium chỉ tách khỏi phiên sau mỗi lượt;
+tiến trình Chrome và conversation URL được giữ để lượt sau nối lại. Chỉ smoke test,
+phase `FINAL` thành công hoặc lệnh `gemini-web stop` mới đóng cửa sổ Chrome.
+
 ## Kiểm tra follow-up cùng chat
 
 Tạo một file feedback bên trong run, ví dụ

@@ -314,10 +314,12 @@ class SeleniumGeminiPage:
         *,
         timeout_seconds: float = 30.0,
         account_wait_seconds: float = 180.0,
+        response_wait_seconds: float = 900.0,
     ) -> None:
         self.driver = driver
         self._wait = WebDriverWait(driver, timeout_seconds)
         self._account_wait_seconds = max(0.0, account_wait_seconds)
+        self._response_wait_seconds = max(0.0, response_wait_seconds)
 
     def _click_first(self, selectors: tuple[tuple[str, str], ...], code: str) -> object:
         for selector in selectors:
@@ -659,7 +661,9 @@ class SeleniumGeminiPage:
             return text if text and not stopping else False
 
         try:
-            return str(self._wait.until(completed))
+            return str(
+                WebDriverWait(self.driver, self._response_wait_seconds).until(completed)
+            )
         except TimeoutException as exc:
             raise GeminiBrowserError(
                 "INVALID_RESPONSE", "Gemini response did not complete"

@@ -648,6 +648,29 @@ def test_send_prompt_uses_dom_click_when_send_button_is_intercepted() -> None:
     assert driver.dom_clicked is True
 
 
+def test_response_wait_is_independent_from_short_ui_timeout() -> None:
+    class Response:
+        text = "GEMINI_WEB_OPERATOR_OK"
+
+    class Driver:
+        def __init__(self) -> None:
+            self.response_checks = 0
+
+        def find_elements(self, kind: str, selector: str):
+            if "Dừng" in selector or "Stop" in selector:
+                return []
+            self.response_checks += 1
+            return [Response()] if self.response_checks >= 2 else []
+
+    page = SeleniumGeminiPage(
+        Driver(),
+        timeout_seconds=0.0,
+        response_wait_seconds=1.0,
+    )
+
+    assert page.wait_for_response() == "GEMINI_WEB_OPERATOR_OK"
+
+
 def test_wait_until_ready_reads_manual_model_and_mode_without_selecting() -> None:
     class Element:
         def __init__(
