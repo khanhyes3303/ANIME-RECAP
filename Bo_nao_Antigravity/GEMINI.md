@@ -20,24 +20,25 @@ Anh, không BGM, caption, speed, freeze, loop hoặc time-stretch.
 
 ## Gemini Ultra Web là cổng kiểm định duy nhất
 
-Mọi kiểm định script, proxy và final phải đi qua Browser Agent tích hợp của
-Antigravity tại `https://gemini.google.com`. Dùng một profile Chrome riêng cho dự án.
+Mọi kiểm định script, proxy và final phải đi qua lệnh `gemini-web run` của engine,
+được điều khiển bằng Chrome hiển thị tại `https://gemini.google.com`. Dùng một profile
+Chrome riêng cho dự án.
 Người dùng tự đăng nhập đúng tài khoản Google AI Ultra ở lần đầu; không đọc, ghi,
 copy hoặc lưu password/cookie. Không dùng Gemini API, MCP, tài khoản thường, model
 thấp hơn hoặc fallback.
 
-Trước mỗi phase, mở chat mới, xác nhận account fingerprint khớp binding, kiểm tra giao
-diện hiển thị plan Ultra và chọn mode/model mạnh nhất. Nếu thiếu một điều kiện, CAPTCHA,
-upload lỗi hoặc mất đăng nhập, dừng ở `CAN_CON_NGUOI_XU_LY`; không tự đoán và không báo
-PASS. Gemini phải trả JSON-only theo request; Browser Agent chỉ lưu nguyên response,
-screenshot giao diện và receipt, không tự viết verdict thay Gemini.
+Engine tự mở chat mới, xác nhận account fingerprint khớp binding, kiểm tra plan Ultra và
+chọn chính xác model `3.7 Flash` cùng mode `Tư duy mở rộng`. Nếu thiếu một điều kiện,
+CAPTCHA, upload lỗi hoặc mất đăng nhập, dừng ở `CAN_CON_NGUOI_XU_LY`; không tự đoán và
+không báo PASS. Gemini phải trả JSON-only theo request.
 
 `gemini_web/<phase>/request.json` là danh sách nguồn duy nhất: upload đúng
 `artifact_path` và mọi file trong `evidence_paths`, không lấy ảnh từ phase/run khác.
-Lưu nguyên văn câu trả lời Web vào `response.txt`, lưu JSON đã parse đúng schema vào
-`critic_script.json`, `critic_proxy.json` hoặc `critic_final.json`, rồi ghi `receipt.json`
-với SHA-256 của cả request, response thô và critic JSON. Receipt phải trỏ tới ảnh chụp
-giao diện trong chính phase đó; thiếu một file hoặc hash không khớp thì engine từ chối.
+Chỉ engine operator được lưu raw response envelope, critic JSON, ảnh giao diện, request
+và `operator_receipt.json`, sau đó ký receipt vào ledger HMAC. Antigravity **không tự tạo receipt**,
+không tự tạo response/critic/screenshot và không khai PASS thay Gemini.
+Engine từ chối mọi file thiếu hash, sai packet hoặc không có ledger entry. **Không dùng FFmpeg tạo ảnh phiên**;
+screenshot phải đến từ DOM Chrome thật.
 
 ## Atomic beat
 
@@ -102,16 +103,13 @@ uv run python run_episode.py prepare --run "<run_dir>"
 uv run python run_episode.py validate --run "<run_dir>" --artifact truth
 uv run python run_episode.py validate --run "<run_dir>" --artifact scene
 uv run python run_episode.py validate --run "<run_dir>" --artifact storyboard
-uv run python run_episode.py web-verify prepare --run "<run_dir>" --phase script
-uv run python run_episode.py web-verify accept --run "<run_dir>" --phase script
+uv run python run_episode.py gemini-web run --run "<run_dir>" --phase script
 uv run python run_episode.py tts --run "<run_dir>"
 uv run python run_episode.py validate --run "<run_dir>" --artifact edl
 uv run python run_episode.py render --run "<run_dir>" --quality proxy
-uv run python run_episode.py web-verify prepare --run "<run_dir>" --phase proxy
-uv run python run_episode.py web-verify accept --run "<run_dir>" --phase proxy
+uv run python run_episode.py gemini-web run --run "<run_dir>" --phase proxy
 uv run python run_episode.py render --run "<run_dir>" --quality final
-uv run python run_episode.py web-verify prepare --run "<run_dir>" --phase final
-uv run python run_episode.py web-verify accept --run "<run_dir>" --phase final
+uv run python run_episode.py gemini-web run --run "<run_dir>" --phase final
 uv run python run_episode.py audit --run "<run_dir>" --phase engine
 ```
 
@@ -123,8 +121,9 @@ nhất: `script`, `tts` hoặc `video`.
 uv run python run_episode.py resume --run "<run_dir>" --phase video
 ```
 
-Tối đa ba vòng; không làm lại beat sạch. TTS cache tự reuse câu không đổi, vì vậy
-không xóa `_Cache`.
+Tối đa ba vòng; không làm lại beat sạch. TTS cache chỉ reuse trong cùng `revision_id` và
+cùng SHA-256 nguồn; revision mới tự động miss để không dính audio cũ. Không xóa `_Cache`
+trong lúc cùng revision.
 
 ## Văn phong
 

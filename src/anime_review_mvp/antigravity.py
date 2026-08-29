@@ -76,12 +76,27 @@ def calculate_policy_sha256(root: Path) -> str:
 
 
 def render_operator_prompt(run_dir: Path, template_path: Path) -> str:
+    _validate_operator_policy(template_path.parent)
     placeholder = r"<ĐƯỜNG_DẪN_RUN>\cong_viec_antigravity.json"
     template = template_path.read_text(encoding="utf-8")
     if placeholder not in template:
         raise MvpError("operator prompt template is missing the run-path placeholder")
     job_path = (run_dir / "cong_viec_antigravity.json").resolve()
     return template.replace(placeholder, str(job_path)).replace("<run_dir>", str(run_dir.resolve()))
+
+
+def _validate_operator_policy(policy_dir: Path) -> None:
+    """Fail closed if the checked-in Antigravity policy regresses to manual receipts."""
+    policy_path = policy_dir / "GEMINI.md"
+    if not policy_path.is_file():
+        return
+    policy = policy_path.read_text(encoding="utf-8").casefold()
+    required = ("gemini-web run", "3.7 flash", "tư duy mở rộng", "không tự tạo receipt")
+    forbidden = ("web-verify accept", "tự viết verdict thay gemini")
+    if any(token not in policy for token in required):
+        raise MvpError("Antigravity policy does not require the trusted Gemini operator")
+    if any(token in policy for token in forbidden):
+        raise MvpError("Antigravity policy contains a forbidden manual Gemini path")
 
 
 def build_operator_job(
