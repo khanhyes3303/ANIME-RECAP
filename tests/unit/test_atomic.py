@@ -83,9 +83,9 @@ def _payload() -> dict[str, object]:
                 "characters_spoken_about": ["Jiro"],
                 "sync_mode": "ACTION",
                 "action_window_start_ms": 1_100,
-                "action_window_end_ms": 2_200,
+                "action_window_end_ms": 2_800,
                 "narration_text": "Jiro lao qua cổng như đang bị deadline dí.",
-                "frame_evidence": ["frame-1100.jpg", "frame-2200.jpg"],
+                "frame_evidence": ["shot-001.jpg", "shot-002.jpg"],
                 "estimated_tts_ms": 3_000,
                 "actual_tts_ms": None,
                 "tts_cache_key": "",
@@ -138,6 +138,51 @@ def test_atomic_storyboard_rejects_excluded_footage(tmp_path: Path) -> None:
     with pytest.raises(MvpError, match="excluded"):
         load_atomic_storyboard(
             _write(tmp_path / "atomic.json", payload), _truth(excluded=True), _shots(), 10_000
+        )
+
+
+def test_atomic_storyboard_rejects_frame_evidence_outside_selected_shots(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    beats = payload["beats"]
+    assert isinstance(beats, list)
+    beats[0]["frame_evidence"] = ["shot-999.jpg"]
+
+    with pytest.raises(MvpError, match="frame evidence.*selected shot"):
+        load_atomic_storyboard(
+            _write(tmp_path / "atomic.json", payload), _truth(), _shots(), 10_000
+        )
+
+
+def test_atomic_storyboard_rejects_short_action_window_for_long_voice(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    beats = payload["beats"]
+    assert isinstance(beats, list)
+    beats[0]["estimated_tts_ms"] = 9_000
+    beats[0]["action_window_start_ms"] = 1_000
+    beats[0]["action_window_end_ms"] = 2_000
+
+    with pytest.raises(MvpError, match="action window.*TTS"):
+        load_atomic_storyboard(
+            _write(tmp_path / "atomic.json", payload), _truth(), _shots(), 10_000
+        )
+
+
+def test_atomic_storyboard_rejects_voice_leading_action_by_more_than_750ms(
+    tmp_path: Path,
+) -> None:
+    payload = _payload()
+    beats = payload["beats"]
+    assert isinstance(beats, list)
+    beats[0]["action_window_start_ms"] = 1_800
+    beats[0]["action_window_end_ms"] = 3_500
+
+    with pytest.raises(MvpError, match="voice leads action"):
+        load_atomic_storyboard(
+            _write(tmp_path / "atomic.json", payload), _truth(), _shots(), 10_000
         )
 
 
