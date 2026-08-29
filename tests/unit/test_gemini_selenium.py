@@ -120,6 +120,21 @@ def test_session_selects_required_model_mode_uploads_and_reads_real_url(tmp_path
     assert response.startswith("{")
 
 
+def test_session_restores_operator_window_before_navigation(tmp_path: Path) -> None:
+    class VisiblePage(RecordingPage):
+        def show(self) -> None:
+            self.events.append("show")
+
+    upload = tmp_path / "manifest.json"
+    upload.write_text("{}", encoding="utf-8")
+    page = VisiblePage(tmp_path / "session.png")
+
+    _run_page(tmp_path, page, (upload,))
+
+    assert page.events[0] == "show"
+    assert page.events[1] == "open:new-chat"
+
+
 def test_session_stops_before_model_selection_for_wrong_account(tmp_path: Path) -> None:
     page = RecordingPage(tmp_path / "session.png")
 
@@ -199,6 +214,38 @@ def test_chrome_launch_detach_keeps_browser_process_alive(tmp_path: Path) -> Non
     launch.close()
     assert driver.quit_calls == 1
     assert process.terminated is True
+
+
+def test_show_restores_latest_operator_window() -> None:
+    class SwitchTo:
+        def __init__(self) -> None:
+            self.selected: str | None = None
+
+        def window(self, handle: str) -> None:
+            self.selected = handle
+
+    class Driver:
+        window_handles = ["background", "operator"]
+
+        def __init__(self) -> None:
+            self.switch_to = SwitchTo()
+            self.maximize_calls = 0
+            self.focus_calls = 0
+
+        def maximize_window(self) -> None:
+            self.maximize_calls += 1
+
+        def execute_script(self, script: str) -> None:
+            assert "focus" in script
+            self.focus_calls += 1
+
+    driver = Driver()
+
+    SeleniumGeminiPage(driver).show()
+
+    assert driver.switch_to.selected == "operator"
+    assert driver.maximize_calls == 1
+    assert driver.focus_calls == 1
 
 
 def test_session_rejects_model_label_not_confirmed_by_dom(tmp_path: Path) -> None:

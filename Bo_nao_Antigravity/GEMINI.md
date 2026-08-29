@@ -126,6 +126,17 @@ dẫn `next_action.json`. Sau khi phase FINAL và engine audit đạt, dọn Chr
 uv run python run_episode.py gemini-web stop --run "<run_dir>"
 ```
 
+Trước khi phase FINAL và engine audit đạt, không được chạy `gemini-web stop`,
+`Stop-Process`, `taskkill` hay bất kỳ lệnh kill Chrome nào. Khi engine cần người dùng
+đăng nhập hoặc chọn model mà cửa sổ chưa hiện, giữ nguyên phiên và chạy:
+
+```powershell
+uv run python run_episode.py gemini-web show --run "<run_dir>"
+```
+
+Sau đó báo người dùng thao tác trên cửa sổ vừa được đưa ra màn hình; không tự đóng,
+không khởi tạo lại profile và không xóa metadata phiên.
+
 Chỉ chạy lệnh phù hợp stage hiện tại; run có thể đã prepare trước. Nếu validation ghi
 stage `SUA_BEAT`, chỉ sửa các beat/finding được nêu rồi chạy `resume` với phase mới
 nhất: `script`, `tts` hoặc `video`.

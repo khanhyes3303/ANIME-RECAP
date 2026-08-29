@@ -99,6 +99,8 @@ class BrowserConversationResult:
 
 
 class GeminiPage(Protocol):
+    def show(self) -> None: ...
+
     def open_new_chat(self) -> None: ...
 
     def verify_account(
@@ -320,6 +322,16 @@ class SeleniumGeminiPage:
         self._wait = WebDriverWait(driver, timeout_seconds)
         self._account_wait_seconds = max(0.0, account_wait_seconds)
         self._response_wait_seconds = max(0.0, response_wait_seconds)
+
+    def show(self) -> None:
+        handles = self.driver.window_handles
+        if not handles:
+            raise GeminiBrowserError(
+                "BROWSER_START_FAILED", "Gemini Chrome has no visible window"
+            )
+        self.driver.switch_to.window(handles[-1])
+        self.driver.maximize_window()
+        self.driver.execute_script("window.focus();")
 
     def _click_first(self, selectors: tuple[tuple[str, str], ...], code: str) -> object:
         for selector in selectors:
@@ -693,6 +705,9 @@ def run_gemini_session(
 ) -> BrowserConversationResult:
     now = clock or (lambda: datetime.now(UTC).isoformat())
     started_at = now()
+    show = getattr(page, "show", None)
+    if callable(show):
+        show()
     if conversation_url:
         open_conversation = getattr(page, "open_conversation", None)
         if not callable(open_conversation):

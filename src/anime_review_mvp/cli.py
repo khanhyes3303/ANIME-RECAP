@@ -140,7 +140,7 @@ def _parser() -> argparse.ArgumentParser:
         "gemini-web", help="Vận hành Gemini Ultra Web bằng Chrome do engine sở hữu"
     )
     gemini_web.add_argument(
-        "action", choices=("enroll", "smoke", "run", "continue", "stop")
+        "action", choices=("enroll", "smoke", "run", "continue", "show", "stop")
     )
     gemini_web.add_argument("--run", required=True, type=Path)
     gemini_web.add_argument("--phase", choices=("script", "proxy", "final"))
@@ -961,9 +961,15 @@ def _gemini_web_run(run_dir: Path, phase: str) -> int:
     except GeminiBrowserError as exc:
         code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")
         mark_human_required(run_dir, code)
+        show_command = (
+            "uv run python run_episode.py gemini-web show "
+            f'--run "{run_dir.resolve()}"'
+        )
         _write_next(
             run_dir,
-            f"Gemini Web dừng: {exc}. Xử lý trên cửa sổ Chrome rồi báo lại Codex.",
+            f"Gemini Web dừng: {exc}. Giữ nguyên Chrome. Nếu cửa sổ không hiện, "
+            f"chạy PowerShell: {show_command}. Sau khi đăng nhập/chọn model, chạy lại "
+            f"gemini-web run --phase {phase.casefold()}.",
             code=code,
         )
         return 1
@@ -1044,6 +1050,19 @@ def _gemini_web_stop(run_dir: Path) -> int:
     return 0
 
 
+def _gemini_web_show(run_dir: Path) -> int:
+    root = _operator_root(run_dir)
+    registry = GeminiSessionRegistry(root / ".local" / "gemini_operator_session.json")
+    metadata = registry.assert_attachable(run_dir.resolve().name)
+    launch = connect_managed_chrome(metadata)
+    try:
+        launch.page.show()
+    finally:
+        launch.detach()
+    print("Cửa sổ Gemini Chrome operator đã được khôi phục và đưa ra màn hình.")
+    return 0
+
+
 def _gemini_web_smoke(run_dir: Path) -> int:
     root = _operator_root(run_dir)
     binding = load_profile_binding(root / ".local" / "gemini_ultra_profile.json")
@@ -1087,6 +1106,8 @@ def _gemini_web(args: argparse.Namespace) -> int:
             return 1
     if args.action == "stop":
         return _gemini_web_stop(args.run)
+    if args.action == "show":
+        return _gemini_web_show(args.run)
     if args.action == "continue":
         if args.phase is None or args.prompt_file is None:
             raise MvpError("gemini-web continue requires --phase and --prompt-file")

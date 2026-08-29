@@ -61,4 +61,11 @@ Kỳ vọng Chrome operator đóng và `.local\gemini_operator_session.json` b�
 Chrome/login/model gặp lỗi, không chạy stop; để cửa sổ mở, xử lý thủ công rồi chạy
 lại chính lệnh `gemini-web run --phase <phase>`. Engine tự khôi phục stage
 `CAN_CON_NGUOI_XU_LY` và gửi lại packet đầy đủ; không dùng `continue` cho lượt đầu
-chưa có chat hợp lệ. Không tạo receipt, critic, screenshot hoặc verdict bằng tay.
+chưa có chat hợp lệ. Nếu không nhìn thấy cửa sổ operator, chạy:
+
+```powershell
+uv run python run_episode.py gemini-web show --run "<run_dir>"
+```
+
+Lệnh này khôi phục, maximize và focus phiên đã đăng ký; không đóng hoặc tạo lại Chrome.
+Không tạo receipt, critic, screenshot hoặc verdict bằng tay.

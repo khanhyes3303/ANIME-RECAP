@@ -322,3 +322,6 @@ def test_antigravity_policy_requires_real_operator_and_forbids_fake_browser_arti
     assert "không dùng ffmpeg tạo ảnh phiên" in combined
     assert "3.7 flash" in combined
     assert "tư duy mở rộng" in combined
+    assert "không được chạy `gemini-web stop`" in combined
+    assert "stop-process" in combined
+    assert "taskkill" in combined

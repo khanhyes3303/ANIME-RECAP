@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from anime_review_mvp import gemini_session
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_session import (
     GeminiSessionMetadata,
     GeminiSessionRegistry,
+    _pid_is_alive,
 )
 
 
@@ -71,3 +74,21 @@ def test_session_registry_clear_is_run_scoped(tmp_path) -> None:
 
     registry.clear("run-1")
     assert not path.exists()
+
+
+def test_pid_probe_uses_windows_process_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def posix_probe(_pid: int, _signal: int) -> None:
+        raise OSError("WinError 87")
+
+    monkeypatch.setattr(gemini_session, "sys", SimpleNamespace(platform="win32"), raising=False)
+    monkeypatch.setattr(gemini_session.os, "kill", posix_probe)
+    monkeypatch.setattr(
+        gemini_session,
+        "_windows_pid_is_alive",
+        lambda pid: pid == 1234,
+        raising=False,
+    )
+
+    assert _pid_is_alive(1234) is True

@@ -38,6 +38,17 @@ upload lại file nếu feedback chỉ yêu cầu sửa. Khi tập hoàn tất v
 uv run python run_episode.py gemini-web stop --run "<run_dir>"
 ```
 
+Trước khi phase FINAL và engine audit đạt, không được chạy `gemini-web stop`,
+`Stop-Process`, `taskkill` hoặc kill Chrome dưới bất kỳ hình thức nào. Nếu engine yêu
+cầu người dùng đăng nhập/chọn model nhưng cửa sổ không hiện, giữ nguyên phiên và chạy:
+
+```powershell
+uv run python run_episode.py gemini-web show --run "<run_dir>"
+```
+
+Chờ người dùng thao tác trên giao diện vừa hiện rồi chạy lại đúng phase; không xóa
+session metadata, không tạo profile mới và không tự xử lý đăng nhập.
+
 Không dùng Gemini API, MCP, tài khoản thường, model thấp hơn hoặc fallback. Không
 được sinh critic hàng loạt bằng giá trị mặc định, tự khai PASS, tự viết verdict thay
 Gemini, bỏ qua CAPTCHA/login hoặc sửa bộ não/code/test/dependency/Git/video nguồn.

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from anime_review_mvp import cli
+from anime_review_mvp import cli, gemini_session
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_session import GeminiSessionMetadata, GeminiSessionRegistry
 from anime_review_mvp.gemini_web import account_sha256
@@ -227,6 +227,12 @@ def test_gemini_web_parser_accepts_continue_and_stop() -> None:
     assert stop_args.action == "stop"
 
 
+def test_gemini_web_parser_accepts_show() -> None:
+    args = cli._parser().parse_args(["gemini-web", "show", "--run", "run"])
+
+    assert args.action == "show"
+
+
 def test_gemini_web_continue_rejects_prompt_outside_run(tmp_path: Path) -> None:
     run, _ = _prepared_storyboard_run(tmp_path)
     prompt = tmp_path / "outside-feedback.txt"
@@ -240,6 +246,47 @@ def test_gemini_web_stop_without_session_is_noop(tmp_path: Path) -> None:
     run, _ = _prepared_storyboard_run(tmp_path)
 
     assert cli._gemini_web_stop(run) == 0
+
+
+def test_gemini_web_show_restores_registered_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+    registry = GeminiSessionRegistry(tmp_path / ".local" / "gemini_operator_session.json")
+    registry.save(
+        GeminiSessionMetadata(
+            run.name,
+            123,
+            "127.0.0.1:9222",
+            None,
+            "2026-08-30T12:00:00+00:00",
+            {},
+        )
+    )
+
+    class Page:
+        def __init__(self) -> None:
+            self.shown = False
+
+        def show(self) -> None:
+            self.shown = True
+
+    class Launch:
+        def __init__(self) -> None:
+            self.page = Page()
+            self.detached = False
+
+        def detach(self) -> None:
+            self.detached = True
+
+    launch = Launch()
+    monkeypatch.setattr(gemini_session, "_pid_is_alive", lambda _pid: True)
+    monkeypatch.setattr(gemini_session, "_debugger_is_alive", lambda _address: True)
+    monkeypatch.setattr(cli, "connect_managed_chrome", lambda _metadata: launch)
+
+    assert cli._gemini_web_show(run) == 0
+    assert launch.page.shown is True
+    assert launch.detached is True
 
 
 def test_final_gemini_web_pass_cleans_registered_session(
@@ -411,6 +458,7 @@ def test_gemini_web_browser_failure_stops_run_for_human(
     assert read_state(run).stage is Stage.CAN_CON_NGUOI_XU_LY
     next_action = json.loads((run / "next_action.json").read_text(encoding="utf-8"))
     assert next_action["code"] == "CAN_DANG_NHAP_GEMINI_ULTRA"
+    assert "gemini-web show" in next_action["instruction"]
 
 
 def test_gemini_web_run_resumes_human_browser_stop_with_full_packet(
