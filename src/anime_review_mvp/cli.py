@@ -85,8 +85,9 @@ from .workflow import (
     record_repair,
     record_stage_metric,
     resume_beat_repair,
+    resume_browser_review,
 )
-from .workspace import create_job, publish_candidate
+from .workspace import assert_inside_run, create_job, publish_candidate
 
 
 def _elapsed_ms(started: float) -> int:
@@ -138,10 +139,13 @@ def _parser() -> argparse.ArgumentParser:
     gemini_web = subparsers.add_parser(
         "gemini-web", help="Vận hành Gemini Ultra Web bằng Chrome do engine sở hữu"
     )
-    gemini_web.add_argument("action", choices=("enroll", "smoke", "run"))
+    gemini_web.add_argument(
+        "action", choices=("enroll", "smoke", "run", "continue", "stop")
+    )
     gemini_web.add_argument("--run", required=True, type=Path)
     gemini_web.add_argument("--phase", choices=("script", "proxy", "final"))
     gemini_web.add_argument("--account-hint")
+    gemini_web.add_argument("--prompt-file", type=Path)
     return parser
 
 
@@ -827,7 +831,12 @@ def _operator_ledger(run_dir: Path) -> OperatorLedger:
     return OperatorLedger(local / "gemini_operator_ledger.jsonl", key)
 
 
-def run_operator_phase(run_dir: Path, phase: str) -> CriticReviewDocument:
+def run_operator_phase(
+    run_dir: Path,
+    phase: str,
+    *,
+    prompt_override: Path | None = None,
+) -> CriticReviewDocument:
     phase_upper = phase.upper()
     packet = build_browser_packet(run_dir, phase_upper)
     root = _operator_root(run_dir)
@@ -864,13 +873,19 @@ def run_operator_phase(run_dir: Path, phase: str) -> CriticReviewDocument:
                 phase_upper,
                 max_turns=policy.max_turns,
             )
-            prompt = Path(browser_packet.prompt_path).read_text(encoding="utf-8")
+            if prompt_override is None:
+                prompt_path = Path(browser_packet.prompt_path)
+                upload_paths = tuple(Path(path) for path in browser_packet.upload_paths)
+            else:
+                prompt_path = assert_inside_run(prompt_override, run_dir)
+                upload_paths = ()
+            prompt = prompt_path.read_text(encoding="utf-8")
             result = run_gemini_session(
                 launch.page,
                 policy=policy,
                 account_hint=binding.account_hint,
                 expected_account_sha256=binding.account_sha256,
-                upload_paths=tuple(Path(path) for path in browser_packet.upload_paths),
+                upload_paths=upload_paths,
                 prompt=prompt,
                 screenshot_path=(
                     run_dir
@@ -952,6 +967,68 @@ def _gemini_web_run(run_dir: Path, phase: str) -> int:
     return _accept_operator_review(run_dir, phase_upper, review)
 
 
+def _gemini_web_continue(run_dir: Path, phase: str, prompt_file: Path) -> int:
+    phase_upper = phase.upper()
+    prompt_path = assert_inside_run(prompt_file, run_dir)
+    if not prompt_path.is_file():
+        raise MvpError("Gemini follow-up prompt file is missing")
+    state = read_state(run_dir)
+    expected_stage = {
+        "SCRIPT": Stage.CHO_GEMINI_SCRIPT,
+        "PROXY": Stage.CHO_GEMINI_PROXY,
+        "FINAL": Stage.CHO_GEMINI_FINAL,
+    }.get(phase_upper)
+    if expected_stage is None:
+        raise MvpError("Gemini Web phase is invalid")
+    if state.stage is Stage.CAN_CON_NGUOI_XU_LY:
+        resume_browser_review(run_dir, phase_upper)
+    elif state.stage is not expected_stage:
+        raise MvpError("Gemini follow-up phase does not match the current stage")
+    try:
+        review = run_operator_phase(
+            run_dir,
+            phase_upper,
+            prompt_override=prompt_path,
+        )
+    except GeminiBrowserError as exc:
+        code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")
+        mark_human_required(run_dir, code)
+        _write_next(run_dir, f"Gemini follow-up dừng: {exc}", code=code)
+        return 1
+    except MvpError as exc:
+        mark_human_required(run_dir, "BANG_CHUNG_BROWSER_KHONG_HOP_LE")
+        _write_next(
+            run_dir,
+            f"Gemini follow-up bị từ chối: {exc}",
+            code="BANG_CHUNG_BROWSER_KHONG_HOP_LE",
+        )
+        return 1
+    return _accept_operator_review(run_dir, phase_upper, review)
+
+
+def _gemini_web_stop(run_dir: Path) -> int:
+    root = _operator_root(run_dir)
+    registry = GeminiSessionRegistry(root / ".local" / "gemini_operator_session.json")
+    metadata = registry.load()
+    if metadata is None:
+        print("Gemini Web không có phiên đang hoạt động.")
+        return 0
+    if metadata.run_id != run_dir.resolve().name:
+        raise MvpError("Gemini session belongs to another run")
+    try:
+        launch = connect_managed_chrome(metadata)
+    except GeminiBrowserError:
+        registry.clear(run_dir.resolve().name)
+        print("Gemini Web session đã stale; đã dọn metadata.")
+        return 0
+    try:
+        launch.close()
+    finally:
+        registry.clear(run_dir.resolve().name)
+    print("Gemini Web session đã đóng và metadata đã dọn.")
+    return 0
+
+
 def _gemini_web_smoke(run_dir: Path) -> int:
     root = _operator_root(run_dir)
     binding = load_profile_binding(root / ".local" / "gemini_ultra_profile.json")
@@ -993,6 +1070,12 @@ def _gemini_web(args: argparse.Namespace) -> int:
             mark_human_required(args.run, code)
             _write_next(args.run, f"Gemini Web smoke dừng: {exc}", code=code)
             return 1
+    if args.action == "stop":
+        return _gemini_web_stop(args.run)
+    if args.action == "continue":
+        if args.phase is None or args.prompt_file is None:
+            raise MvpError("gemini-web continue requires --phase and --prompt-file")
+        return _gemini_web_continue(args.run, args.phase, args.prompt_file)
     if args.phase is None:
         raise MvpError("gemini-web run requires --phase")
     return _gemini_web_run(args.run, args.phase)

@@ -598,9 +598,10 @@ def run_gemini_session(
         raise GeminiBrowserError(
             "MODEL_NOT_FOUND", f"Gemini mode must be {policy.mode_label}"
         )
-    if not upload_paths or any(not path.is_file() for path in upload_paths):
+    if upload_paths and any(not path.is_file() for path in upload_paths):
         raise GeminiBrowserError("UPLOAD_FAILED", "Gemini upload files are missing")
-    page.upload(upload_paths)
+    if upload_paths:
+        page.upload(upload_paths)
     page.send_prompt(prompt)
     response = page.wait_for_response()
     if not response.strip():

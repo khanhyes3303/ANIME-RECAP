@@ -275,6 +275,24 @@ def mark_human_required(run_dir: Path, code: str) -> RunState:
     return state
 
 
+def resume_browser_review(run_dir: Path, phase: str) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.CAN_CON_NGUOI_XU_LY:
+        raise MvpError("only a browser review stopped for human handling can resume")
+    target_by_phase = {
+        "SCRIPT": Stage.CHO_GEMINI_SCRIPT,
+        "PROXY": Stage.CHO_GEMINI_PROXY,
+        "FINAL": Stage.CHO_GEMINI_FINAL,
+    }
+    try:
+        target = target_by_phase[phase.upper()]
+    except KeyError as exc:
+        raise MvpError("browser review phase is invalid") from exc
+    state = replace(state, stage=target)
+    _write_state(state)
+    return state
+
+
 def resume_beat_repair(run_dir: Path, phase: str) -> RunState:
     state = read_state(run_dir)
     if state.stage is not Stage.SUA_BEAT or not state.repair_history:
