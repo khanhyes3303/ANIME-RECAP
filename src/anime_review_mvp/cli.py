@@ -13,6 +13,7 @@ from .antigravity import (
     load_scene_packets,
     load_script,
     load_truth,
+    render_operator_prompt,
 )
 from .atomic import load_atomic_storyboard, load_critic_review, validate_critic_evidence
 from .audit import build_atomic_engine_audit, build_engine_audit
@@ -80,6 +81,8 @@ def _parser() -> argparse.ArgumentParser:
     start.add_argument("--revision", action="store_true")
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--run", required=True, type=Path)
+    prompt = subparsers.add_parser("prompt", help="Tạo prompt đã gắn đúng đường dẫn run")
+    prompt.add_argument("--run", required=True, type=Path)
     validate = subparsers.add_parser("validate")
     validate.add_argument("--run", required=True, type=Path)
     validate.add_argument(
@@ -725,6 +728,22 @@ def _audit_atomic_engine(run_dir: Path, episode: Path) -> int:
     return 0
 
 
+def _prompt(run_dir: Path) -> int:
+    _, episode = _episode(run_dir)
+    root = episode.parents[3]
+    job_path = run_dir / "cong_viec_antigravity.json"
+    if not job_path.is_file():
+        raise MvpError("run has no cong_viec_antigravity.json; run prepare first")
+    rendered = render_operator_prompt(
+        run_dir,
+        root / "Bo_nao_Antigravity" / "PROMPT_MOT_LAN_CHAY.md",
+    )
+    output = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
+    output.write_text(rendered, encoding="utf-8")
+    print(output.resolve())
+    return 0
+
+
 def _audit(run_dir: Path, phase: str, codex_review: Path | None) -> int:
     _, episode = _episode(run_dir)
     if phase == "script":
@@ -769,6 +788,8 @@ def main(argv: list[str] | None = None) -> int:
             return _start(args)
         if args.command == "prepare":
             return _prepare(args.run)
+        if args.command == "prompt":
+            return _prompt(args.run)
         if args.command == "validate":
             return _validate(args.run, args.artifact)
         if args.command == "lock":

@@ -5,7 +5,17 @@
   "beat_reviews": [{
     "beat_id": "beat-001",
     "finding_codes": [],
-    "evidence_refs": ["frame-1100.jpg", "frame-2200.jpg"],
-    "note": "Proxy cho thấy lời và hành động xuất hiện trong cùng beat."
+    "evidence_refs": [
+      "beat-001-range-001-start",
+      "beat-001-range-001-middle",
+      "beat-001-range-001-end",
+      "beat-001-range-001-program-start",
+      "beat-001-range-001-program-middle",
+      "beat-001-range-001-program-end"
+    ],
+    "observed_visual": "Proxy hiển thị đúng nhân vật và hành động của beat-001 trong cửa sổ lời tương ứng.",
+    "narration_summary": "Lời review kể đúng hành động và phản ứng thuộc beat-001.",
+    "sync_verdict": "MATCH",
+    "note": "Đã đối chiếu ba anchor nguồn với ba anchor chương trình; hình và lời cùng beat, không đi trước hoặc theo sau."
   }]
 }

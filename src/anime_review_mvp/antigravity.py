@@ -64,6 +64,15 @@ def calculate_policy_sha256(root: Path) -> str:
     return digest.hexdigest()
 
 
+def render_operator_prompt(run_dir: Path, template_path: Path) -> str:
+    placeholder = r"<ĐƯỜNG_DẪN_RUN>\cong_viec_antigravity.json"
+    template = template_path.read_text(encoding="utf-8")
+    if placeholder not in template:
+        raise MvpError("operator prompt template is missing the run-path placeholder")
+    job_path = (run_dir / "cong_viec_antigravity.json").resolve()
+    return template.replace(placeholder, str(job_path))
+
+
 def build_operator_job(
     paths: JobPaths,
     source: SourceRef,

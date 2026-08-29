@@ -46,7 +46,16 @@ class SourceRegionAnnotation:
     def __post_init__(self) -> None:
         _non_empty(self.region_id, "region_id")
         _positive_interval(self.start_ms, self.end_ms, "source region")
-        if self.kind not in {"OPENING", "ENDING", "CREDITS", "NEXT_PREVIEW", "OTHER"}:
+        if self.kind not in {
+            "OPENING",
+            "ENDING",
+            "CREDITS",
+            "NEXT_PREVIEW",
+            "TITLE_CARD",
+            "EYECATCH",
+            "STUDIO_LOGO",
+            "OTHER",
+        }:
             raise MvpError("source region kind is invalid")
         if self.decision not in {"EXCLUDE", "KEEP_STORY"}:
             raise MvpError("source region decision is invalid")

@@ -193,6 +193,30 @@ def test_render_parser_accepts_explicit_proxy_quality() -> None:
     assert args.quality == "proxy"
 
 
+def test_prompt_command_writes_resolved_operator_prompt(tmp_path: Path) -> None:
+    root = tmp_path
+    run, _ = _prepared_storyboard_run(root)
+    brain = root / "Bo_nao_Antigravity"
+    brain.mkdir()
+    (brain / "PROMPT_MOT_LAN_CHAY.md").write_text(
+        "Job: <ĐƯỜNG_DẪN_RUN>\\cong_viec_antigravity.json\n",
+        encoding="utf-8",
+    )
+    (run / "cong_viec_antigravity.json").write_text("{}\n", encoding="utf-8")
+
+    assert cli.main(["prompt", "--run", str(run)]) == 0
+
+    output = run / "PROMPT_GUI_ANTIGRAVITY.txt"
+    rendered = output.read_text(encoding="utf-8")
+    assert str((run / "cong_viec_antigravity.json").resolve()) in rendered
+    assert "<ĐƯỜNG_DẪN_RUN>" not in rendered
+
+
+def test_prompt_parser_accepts_run_path() -> None:
+    args = cli._parser().parse_args(["prompt", "--run", "run"])
+    assert args.run == Path("run")
+
+
 def test_prepare_reuses_source_analysis_for_revision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

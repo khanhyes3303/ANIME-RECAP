@@ -27,13 +27,21 @@ nếu cùng minh họa đúng một ý.
 Mỗi beat bắt buộc có scene/event/claim/source range/shot, `visual_fact`, nhân vật,
 `sync_mode`, frame bằng chứng, một câu `narration_text`, ước lượng TTS và status.
 
-- `ACTION`/`REACTION`: khai action window chính xác nằm trong source range.
+- `ACTION`/`REACTION`: khai action window chính xác nằm trong source range. Hành động
+  phải bắt đầu không muộn hơn 750 ms sau lúc footage/lời của beat bắt đầu; cửa sổ
+  hành động phải dài ít nhất 1.500 ms và phủ ít nhất 35% TTS ước lượng, trừ hành động
+  ngắn có bằng chứng rõ ràng.
 - `CONTEXT`: action window là `null`, nhưng footage vẫn phải cùng tình huống.
 - Hai hành động khác thời điểm phải tách hai beat.
 - Khóa hình và visual fact trước, sau đó mới viết lời.
 - TTS dài hơn hình: rút hoặc tách lời; không lấy cảnh sai nghĩa để lấp.
 - Joke chỉ đổi cách kể, không bịa hành động, động cơ hay người nói.
-- Bỏ OP, ED, credits, next preview và cảnh không có giá trị review.
+- Tuyệt đối không chọn hình bằng công thức `source_start + thời lượng TTS`. Phải tìm
+  đúng thời điểm hành động rồi mới chọn source range; nếu lời không vừa thì rút/tách
+  lời hoặc thêm shot cùng đúng tình huống.
+- Bỏ OP, ED, credits, next preview, title card, eyecatch, studio logo và cảnh không có
+  giá trị review. Quét toàn tập vì các đoạn này có thể nằm giữa nội dung, không chỉ ở
+  đầu hoặc cuối.
 
 Dùng mẫu trong `Bo_nao_Antigravity/mau/atomic_storyboard.json`. Timestamp dùng mili
 giây. Không suy ra đã xem hình chỉ từ transcript hoặc tên shot: phải mở frame/clip.
@@ -46,9 +54,18 @@ context khác để lập `critic_script.json`; hai ID không được giống n
 frame/clip và tìm sai người, sai hành động, lời đi trước/sau hình, nhiều hành động
 trong một beat, văn dịch máy, lặp công thức, joke gượng và TTS dự kiến không vừa.
 
-Sau proxy, chạy critic video bằng context khác producer và ghi `critic_video.json`.
-Không có trường `passed` trong critic artifact. Chỉ ghi finding và evidence; engine
-tự tính PASS. Dùng mẫu `critic_script.json` và `critic_video.json`.
+Sau khi storyboard hợp lệ, engine tạo
+`atomic_evidence/source/anchors.json`. Critic script bắt buộc mở đủ START/MIDDLE/END
+của mọi source range và ghi cụ thể `observed_visual`, `narration_summary`; không được
+tự chế tên frame hoặc dùng evidence ngoài manifest.
+
+Sau proxy, engine tạo `atomic_evidence/program/anchors.json`. Critic video phải mở và
+đối chiếu đủ ba anchor SOURCE với ba anchor PROGRAM của từng range, rồi ghi
+`sync_verdict`. Nếu lời đi trước, theo sau, sai cảnh hoặc sai hành động thì verdict và
+finding code phải nêu đúng lỗi. Không được tạo critic bằng vòng lặp điền mặc định,
+không được để finding rỗng hàng loạt, không được copy cùng một mô tả cho nhiều beat.
+Không có trường `passed`; engine tự tính PASS từ bằng chứng. Dùng mẫu
+`critic_script.json` và `critic_video.json`.
 
 ## Trình tự một lần chạy
 
@@ -93,3 +110,7 @@ Chỉ báo `HOAN_THANH` khi engine audit đã xuất
 `Thanh_pham/review_anime.mp4`. Báo đường dẫn MP4, thời gian từng stage, cache hit/miss,
 beat đã sửa và finding đã xử lý. Nếu stage là `CAN_CON_NGUOI_XU_LY` hoặc có
 `BRAIN_CHANGE_REQUESTED`, báo đúng lỗi và dừng; không tuyên bố video đạt.
+
+Engine audit sẽ chặn nếu thiếu metric thật của các stage storyboard, critic script,
+TTS, proxy, critic video và final. Một báo cáo văn bản tự nhận PASS không thay thế
+được metric, anchor hoặc validation.

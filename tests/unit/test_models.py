@@ -15,6 +15,7 @@ from anime_review_mvp.models import (
     ScenePacketDocument,
     SceneShot,
     ScriptDocument,
+    SourceRegionAnnotation,
 )
 
 
@@ -102,3 +103,10 @@ def test_scene_packet_document_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "scene_packets.json"
     dump_json(path, document)
     assert load_json(path, ScenePacketDocument) == document
+
+
+@pytest.mark.parametrize("kind", ["TITLE_CARD", "EYECATCH", "STUDIO_LOGO"])
+def test_source_region_accepts_non_story_visual_kinds(kind: str) -> None:
+    region = SourceRegionAnnotation("region-001", 1_000, 2_000, kind, "EXCLUDE", "Bỏ.")
+
+    assert region.kind == kind

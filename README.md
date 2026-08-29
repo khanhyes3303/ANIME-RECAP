@@ -22,8 +22,15 @@ $env:ANIME_RECAP_TIKTOK_SESSION = "SESSION_CUA_BAN"
 uv run python run_episode.py start --anime "Ten Anime" --season 1 --episode 1 --video "D:\Tap01.mp4"
 ```
 
-Nếu tập đã có thành phẩm, thêm `--revision`. Điền đường dẫn run vào
-`Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md` rồi gửi đúng một prompt cho Antigravity.
+Nếu tập đã có thành phẩm, thêm `--revision`. Sau khi chạy `prepare`, sinh prompt đã
+gắn đúng đường dẫn:
+
+```powershell
+uv run python run_episode.py prompt --run "<đường_dẫn_run>"
+```
+
+Chỉ dán nội dung tệp `PROMPT_GUI_ANTIGRAVITY.txt` được in ra. Không dán trực tiếp
+`Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md` vì đó là mẫu còn placeholder.
 
 ```text
 prepare → truth/scene → atomic storyboard → critic script → TTS cache

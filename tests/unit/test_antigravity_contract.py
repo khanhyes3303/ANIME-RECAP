@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import anime_review_mvp.antigravity as antigravity_module
 from anime_review_mvp.antigravity import (
     build_operator_job,
     load_audit,
@@ -274,3 +275,18 @@ def test_atomic_operator_templates_follow_strict_runtime_contract() -> None:
     assert script_review.phase == "SCRIPT"
     assert video_review.phase == "VIDEO"
     assert script_review.critic_context_id != storyboard.producer_context_id
+
+
+def test_operator_prompt_renderer_inserts_exact_job_path(tmp_path: Path) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-001"
+    run.mkdir(parents=True)
+    template = tmp_path / "prompt.md"
+    template.write_text(
+        "Xử lý job: <ĐƯỜNG_DẪN_RUN>\\cong_viec_antigravity.json\n",
+        encoding="utf-8",
+    )
+
+    rendered = antigravity_module.render_operator_prompt(run, template)
+
+    assert str((run / "cong_viec_antigravity.json").resolve()) in rendered
+    assert "<ĐƯỜNG_DẪN_RUN>" not in rendered
