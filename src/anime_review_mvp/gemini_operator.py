@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import math
 import re
-from dataclasses import dataclass
-from datetime import datetime
+import secrets
+from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -38,6 +42,167 @@ class BrowserObservation:
     screenshot_path: str
     started_at: str
     finished_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorRequest:
+    run_id: str
+    phase: str
+    nonce: str
+    request_sha256: str
+    artifact_sha256: str
+    packet_sha256: str
+    issued_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorReceipt:
+    run_id: str
+    phase: str
+    nonce: str
+    request_sha256: str
+    artifact_sha256: str
+    packet_sha256: str
+    observation: BrowserObservation
+    screenshot_sha256: str
+    raw_response_path: str
+    raw_response_sha256: str
+    critic_path: str
+    critic_sha256: str
+    operator_build_sha256: str
+    ledger_signature: str = ""
+
+
+def _canonical_json(payload: object) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _receipt_payload(receipt: OperatorReceipt) -> dict[str, object]:
+    payload = asdict(receipt)
+    payload.pop("ledger_signature")
+    return payload
+
+
+def _request_payload(request: OperatorRequest) -> dict[str, str]:
+    payload = asdict(request)
+    payload.pop("request_sha256")
+    return payload
+
+
+def issue_request(
+    run_id: str,
+    phase: str,
+    artifact_sha256: str,
+    packet_sha256: str,
+    *,
+    nonce: str | None = None,
+    issued_at: str | None = None,
+) -> OperatorRequest:
+    request = OperatorRequest(
+        run_id=run_id,
+        phase=phase,
+        nonce=nonce or secrets.token_urlsafe(32),
+        request_sha256="",
+        artifact_sha256=artifact_sha256,
+        packet_sha256=packet_sha256,
+        issued_at=issued_at or datetime.now(UTC).isoformat(),
+    )
+    digest = hashlib.sha256(_canonical_json(_request_payload(request))).hexdigest()
+    return replace(request, request_sha256=digest)
+
+
+class OperatorLedger:
+    def __init__(self, path: Path, key: bytes) -> None:
+        if len(key) < 32:
+            raise MvpError("operator ledger key must contain at least 32 bytes")
+        self.path = path
+        self._key = key
+
+    def append(self, receipt: OperatorReceipt) -> str:
+        if receipt.ledger_signature:
+            raise MvpError("ledger only accepts unsigned operator receipts")
+        payload = _receipt_payload(receipt)
+        canonical = _canonical_json(payload)
+        signature = hmac.new(self._key, canonical, hashlib.sha256).hexdigest()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(
+                json.dumps(
+                    {"payload": payload, "signature": signature},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            )
+        return signature
+
+    def verified_entry(self, nonce: str) -> OperatorReceipt:
+        matches: list[tuple[OperatorReceipt, str]] = []
+        if not self.path.is_file():
+            raise MvpError("operator receipt has no unique ledger entry")
+        try:
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+            for line in lines:
+                entry = json.loads(line)
+                payload = entry["payload"]
+                signature = entry["signature"]
+                expected = hmac.new(
+                    self._key,
+                    _canonical_json(payload),
+                    hashlib.sha256,
+                ).hexdigest()
+                if not hmac.compare_digest(signature, expected):
+                    raise MvpError("operator ledger signature is invalid")
+                if payload.get("nonce") == nonce:
+                    raw = dict(payload)
+                    raw["observation"] = BrowserObservation(**raw["observation"])
+                    matches.append((OperatorReceipt(**raw), signature))
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise MvpError("operator ledger is malformed") from exc
+        if len(matches) != 1:
+            raise MvpError("operator receipt has no unique ledger entry")
+        receipt, signature = matches[0]
+        return replace(receipt, ledger_signature=signature)
+
+
+def verify_operator_receipt(
+    receipt: OperatorReceipt,
+    ledger: OperatorLedger,
+    *,
+    expected_request: OperatorRequest,
+) -> OperatorReceipt:
+    recorded = ledger.verified_entry(receipt.nonce)
+    if recorded != receipt:
+        raise MvpError("operator receipt does not match signed ledger entry")
+    request_fields = (
+        "run_id",
+        "phase",
+        "nonce",
+        "request_sha256",
+        "artifact_sha256",
+        "packet_sha256",
+    )
+    if any(getattr(receipt, name) != getattr(expected_request, name) for name in request_fields):
+        raise MvpError("operator receipt does not match expected request")
+    return receipt
+
+
+def load_or_create_ledger_key(path: Path) -> bytes:
+    if path.is_file():
+        key = path.read_bytes()
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        key = secrets.token_bytes(32)
+        path.write_bytes(key)
+    if len(key) != 32:
+        raise MvpError("operator ledger key is invalid")
+    return key
 
 
 def validate_session_screenshot(path: Path) -> None:

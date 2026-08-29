@@ -9,8 +9,12 @@ from PIL import Image
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_operator import (
     BrowserObservation,
+    OperatorLedger,
     OperatorPolicy,
+    OperatorReceipt,
+    OperatorRequest,
     validate_browser_evidence,
+    verify_operator_receipt,
 )
 
 
@@ -139,4 +143,95 @@ def test_rejects_raw_response_identical_to_critic(tmp_path: Path) -> None:
             OperatorPolicy.required(),
             raw_response=raw,
             critic=critic,
+        )
+
+
+def _operator_request() -> OperatorRequest:
+    return OperatorRequest(
+        run_id="run-123",
+        phase="SCRIPT",
+        nonce="nonce-123",
+        request_sha256="1" * 64,
+        artifact_sha256="2" * 64,
+        packet_sha256="3" * 64,
+        issued_at="2026-08-29T21:00:00+07:00",
+    )
+
+
+def _operator_receipt(tmp_path: Path) -> OperatorReceipt:
+    observation, raw, critic = _valid_evidence(tmp_path)
+    return OperatorReceipt(
+        run_id="run-123",
+        phase="SCRIPT",
+        nonce="nonce-123",
+        request_sha256="1" * 64,
+        artifact_sha256="2" * 64,
+        packet_sha256="3" * 64,
+        observation=observation,
+        screenshot_sha256="4" * 64,
+        raw_response_path=str(raw),
+        raw_response_sha256="5" * 64,
+        critic_path=str(critic),
+        critic_sha256="6" * 64,
+        operator_build_sha256="7" * 64,
+    )
+
+
+def test_receipt_without_matching_signed_ledger_entry_is_rejected(tmp_path: Path) -> None:
+    ledger = OperatorLedger(tmp_path / "operator-ledger.jsonl", b"k" * 32)
+
+    with pytest.raises(MvpError, match="ledger"):
+        verify_operator_receipt(
+            _operator_receipt(tmp_path),
+            ledger,
+            expected_request=_operator_request(),
+        )
+
+
+def test_signed_ledger_entry_verifies_exact_receipt(tmp_path: Path) -> None:
+    ledger = OperatorLedger(tmp_path / "operator-ledger.jsonl", b"k" * 32)
+    unsigned = _operator_receipt(tmp_path)
+    signed = replace(unsigned, ledger_signature=ledger.append(unsigned))
+
+    assert verify_operator_receipt(
+        signed,
+        ledger,
+        expected_request=_operator_request(),
+    ) == signed
+
+
+def test_reused_nonce_is_rejected_even_when_both_entries_are_signed(tmp_path: Path) -> None:
+    ledger = OperatorLedger(tmp_path / "operator-ledger.jsonl", b"k" * 32)
+    unsigned = _operator_receipt(tmp_path)
+    first = replace(unsigned, ledger_signature=ledger.append(unsigned))
+    ledger.append(replace(unsigned, critic_sha256="8" * 64))
+
+    with pytest.raises(MvpError, match="unique ledger"):
+        verify_operator_receipt(first, ledger, expected_request=_operator_request())
+
+
+def test_tampered_ledger_signature_is_rejected(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "operator-ledger.jsonl"
+    ledger = OperatorLedger(ledger_path, b"k" * 32)
+    unsigned = _operator_receipt(tmp_path)
+    signed = replace(unsigned, ledger_signature=ledger.append(unsigned))
+    ledger_path.write_text(
+        ledger_path.read_text(encoding="utf-8").replace(signed.ledger_signature, "0" * 64),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(MvpError, match="signature"):
+        verify_operator_receipt(signed, ledger, expected_request=_operator_request())
+
+
+def test_receipt_for_different_request_is_rejected(tmp_path: Path) -> None:
+    ledger = OperatorLedger(tmp_path / "operator-ledger.jsonl", b"k" * 32)
+    unsigned = _operator_receipt(tmp_path)
+    signed = replace(unsigned, ledger_signature=ledger.append(unsigned))
+
+    with pytest.raises(MvpError, match="request"):
+        verify_operator_receipt(
+            signed,
+            ledger,
+            expected_request=replace(_operator_request(), packet_sha256="9" * 64),
         )
