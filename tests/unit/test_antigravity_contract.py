@@ -235,8 +235,9 @@ def test_operator_job_points_to_only_one_episode_and_expected_outputs(
         "truth": str(paths.truth_dir / "su_that_tap_phim.json"),
         "scene_packets": str(paths.truth_dir / "scene_packets.json"),
         "storyboard": str(paths.script_dir / "atomic_storyboard.json"),
-        "critic_script": str(paths.report_dir / "critic_script.json"),
-        "critic_video": str(paths.report_dir / "critic_video.json"),
+        "critic_script": str(paths.temp_dir / "gemini_web" / "script" / "critic_script.json"),
+        "critic_proxy": str(paths.temp_dir / "gemini_web" / "proxy" / "critic_proxy.json"),
+        "critic_final": str(paths.temp_dir / "gemini_web" / "final" / "critic_final.json"),
     }
     assert len(payload["policy_sha256"]) == 64
     assert str(paths.truth_dir) in payload["write_policy"]["allowed_write_roots"]

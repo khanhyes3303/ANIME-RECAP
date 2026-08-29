@@ -18,6 +18,27 @@ dừng. Không tự sửa bộ não.
 Video cuối dài 7–12 phút, chỉ có TTS Việt `BV074_streaming`; tắt hoàn toàn audio dub
 Anh, không BGM, caption, speed, freeze, loop hoặc time-stretch.
 
+## Gemini Ultra Web là cổng kiểm định duy nhất
+
+Mọi kiểm định script, proxy và final phải đi qua Browser Agent tích hợp của
+Antigravity tại `https://gemini.google.com`. Dùng một profile Chrome riêng cho dự án.
+Người dùng tự đăng nhập đúng tài khoản Google AI Ultra ở lần đầu; không đọc, ghi,
+copy hoặc lưu password/cookie. Không dùng Gemini API, MCP, tài khoản thường, model
+thấp hơn hoặc fallback.
+
+Trước mỗi phase, mở chat mới, xác nhận account fingerprint khớp binding, kiểm tra giao
+diện hiển thị plan Ultra và chọn mode/model mạnh nhất. Nếu thiếu một điều kiện, CAPTCHA,
+upload lỗi hoặc mất đăng nhập, dừng ở `CAN_CON_NGUOI_XU_LY`; không tự đoán và không báo
+PASS. Gemini phải trả JSON-only theo request; Browser Agent chỉ lưu nguyên response,
+screenshot giao diện và receipt, không tự viết verdict thay Gemini.
+
+`gemini_web/<phase>/request.json` là danh sách nguồn duy nhất: upload đúng
+`artifact_path` và mọi file trong `evidence_paths`, không lấy ảnh từ phase/run khác.
+Lưu nguyên văn câu trả lời Web vào `response.txt`, lưu JSON đã parse đúng schema vào
+`critic_script.json`, `critic_proxy.json` hoặc `critic_final.json`, rồi ghi `receipt.json`
+với SHA-256 của cả request, response thô và critic JSON. Receipt phải trỏ tới ảnh chụp
+giao diện trong chính phase đó; thiếu một file hoặc hash không khớp thì engine từ chối.
+
 ## Atomic beat
 
 `Kich_ban/atomic_storyboard.json` là artifact biên tập chính. Một beat chỉ kể một
@@ -59,13 +80,18 @@ Sau khi storyboard hợp lệ, engine tạo
 của mọi source range và ghi cụ thể `observed_visual`, `narration_summary`; không được
 tự chế tên frame hoặc dùng evidence ngoài manifest.
 
-Sau proxy, engine tạo `atomic_evidence/program/anchors.json`. Critic video phải mở và
-đối chiếu đủ ba anchor SOURCE với ba anchor PROGRAM của từng range, rồi ghi
-`sync_verdict`. Nếu lời đi trước, theo sau, sai cảnh hoặc sai hành động thì verdict và
-finding code phải nêu đúng lỗi. Không được tạo critic bằng vòng lặp điền mặc định,
-không được để finding rỗng hàng loạt, không được copy cùng một mô tả cho nhiều beat.
+Sau proxy, engine tạo `atomic_evidence/program/anchors.json`. Gemini Web phải mở contact
+sheet dày do engine tạo, đối chiếu đủ ba anchor SOURCE với ba anchor PROGRAM của từng
+range, rồi ghi `sync_verdict`. Nếu lời đi trước, theo sau, sai cảnh hoặc sai hành động
+thì verdict và finding code phải nêu đúng lỗi. Không được tạo critic bằng vòng lặp điền
+mặc định, không được để finding rỗng hàng loạt, không được copy cùng một mô tả cho
+nhiều beat.
 Không có trường `passed`; engine tự tính PASS từ bằng chứng. Dùng mẫu
-`critic_script.json` và `critic_video.json`.
+`critic_script.json`, `critic_proxy.json` và `critic_final.json`; tất cả phải nằm trong
+`gemini_web/<phase>/` của run, không ghi đè báo cáo của episode. Với JSON, dùng
+`sync_verdict` nội bộ (`NOT_APPLICABLE`, `MATCH`, `VOICE_AHEAD`, `VOICE_BEHIND`,
+`SCENE_MISMATCH`, `ACTION_MISMATCH`); các nhãn dễ hiểu như `VOICE_EARLY` phải được
+ánh xạ sang mã nội bộ và lặp mã đó trong `finding_codes` nếu không phải `MATCH`.
 
 ## Trình tự một lần chạy
 
@@ -76,12 +102,16 @@ uv run python run_episode.py prepare --run "<run_dir>"
 uv run python run_episode.py validate --run "<run_dir>" --artifact truth
 uv run python run_episode.py validate --run "<run_dir>" --artifact scene
 uv run python run_episode.py validate --run "<run_dir>" --artifact storyboard
-uv run python run_episode.py validate --run "<run_dir>" --artifact critic-script
+uv run python run_episode.py web-verify prepare --run "<run_dir>" --phase script
+uv run python run_episode.py web-verify accept --run "<run_dir>" --phase script
 uv run python run_episode.py tts --run "<run_dir>"
 uv run python run_episode.py validate --run "<run_dir>" --artifact edl
 uv run python run_episode.py render --run "<run_dir>" --quality proxy
-uv run python run_episode.py validate --run "<run_dir>" --artifact critic-video
+uv run python run_episode.py web-verify prepare --run "<run_dir>" --phase proxy
+uv run python run_episode.py web-verify accept --run "<run_dir>" --phase proxy
 uv run python run_episode.py render --run "<run_dir>" --quality final
+uv run python run_episode.py web-verify prepare --run "<run_dir>" --phase final
+uv run python run_episode.py web-verify accept --run "<run_dir>" --phase final
 uv run python run_episode.py audit --run "<run_dir>" --phase engine
 ```
 

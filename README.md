@@ -32,10 +32,24 @@ uv run python run_episode.py prompt --run "<đường_dẫn_run>"
 Chỉ dán nội dung tệp `PROMPT_GUI_ANTIGRAVITY.txt` được in ra. Không dán trực tiếp
 `Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md` vì đó là mẫu còn placeholder.
 
-```text
-prepare → truth/scene → atomic storyboard → critic script → TTS cache
-→ atomic EDL → proxy 360p → critic video → final render → engine audit
+Lần đầu, sau khi profile Chrome riêng được Antigravity mở, bạn tự đăng nhập đúng
+Google AI Ultra rồi enroll fingerprint (email chỉ đọc từ stdin, không ghi plaintext):
+
+```powershell
+uv run python run_episode.py web-verify enroll --run "<đường_dẫn_run>" --account-hint "u***@gmail.com"
 ```
+
+Luồng duy nhất là:
+
+```text
+prepare → truth/scene → atomic storyboard → Gemini Ultra Web (script)
+→ TTS cache → atomic EDL → proxy 360p → Gemini Ultra Web (proxy)
+→ final render → Gemini Ultra Web (final) → engine audit
+```
+
+Mỗi phase dùng `web-verify prepare` để tạo request/contact sheet và `web-verify accept`
+để kiểm receipt, account fingerprint, hash và verdict. Không dùng Gemini API, MCP,
+tài khoản thường hoặc fallback model.
 
 Beat lỗi được sửa riêng; cache nằm trong
 `Kho_Anime/<Anime>/Mua_XX/Tap_XXX/_Cache`. Thành phẩm ở:

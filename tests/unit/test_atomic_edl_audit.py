@@ -140,11 +140,12 @@ def _evidence_for(beat_id: str) -> tuple[str, ...]:
 
 _COMPLETED_STAGES = (
     "LAP_STORYBOARD",
-    "PHAN_BIEN_KICH_BAN",
+    "CHO_GEMINI_SCRIPT",
     "TAO_TTS",
     "DUNG_PROXY",
-    "PHAN_BIEN_VIDEO",
+    "CHO_GEMINI_PROXY",
     "DUNG_VIDEO_CUOI",
+    "CHO_GEMINI_FINAL",
 )
 
 

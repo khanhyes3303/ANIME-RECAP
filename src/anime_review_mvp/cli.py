@@ -20,10 +20,20 @@ from .audit import build_atomic_engine_audit, build_engine_audit
 from .editorial import load_locked_spans
 from .edl import build_atomic_edl, build_edl_from_locked_spans
 from .errors import MvpError
+from .gemini_web import (
+    GeminiUltraProfileBinding,
+    account_sha256,
+    load_verified_web_review,
+    reset_web_phase,
+    write_profile_binding,
+    write_web_request,
+)
 from .jsonio import dump_json, load_json
 from .media import (
+    build_contact_sheets,
     detect_shots,
     extract_atomic_source_anchors,
+    extract_dense_beat_evidence,
     extract_inspection_assets,
     extract_program_anchors,
     extract_span_anchors,
@@ -34,6 +44,8 @@ from .models import (
     AtomicStoryboard,
     AtomicTtsManifest,
     CodexSemanticReview,
+    CriticReviewDocument,
+    DenseEvidenceDocument,
     FrameAnchorDocument,
     NarrationSpanDocument,
     ShotDocument,
@@ -45,7 +57,6 @@ from .models import (
 from .render import RenderResult, render_review
 from .tts import synthesize_atomic_beats, synthesize_spans
 from .validation import (
-    atomic_style_findings,
     narration_style_findings,
     validate_scene_packets,
     validate_script,
@@ -54,6 +65,7 @@ from .validation import (
 from .workflow import (
     Stage,
     advance,
+    mark_human_required,
     new_state,
     read_state,
     record_beat_repair,
@@ -112,6 +124,13 @@ def _parser() -> argparse.ArgumentParser:
     audit.add_argument("--run", required=True, type=Path)
     audit.add_argument("--phase", required=True, choices=("script", "video", "engine"))
     audit.add_argument("--codex-review", type=Path)
+    web_verify = subparsers.add_parser(
+        "web-verify", help="Chuẩn bị/nhận kiểm định Gemini Ultra Web"
+    )
+    web_verify.add_argument("action", choices=("enroll", "prepare", "accept"))
+    web_verify.add_argument("--run", required=True, type=Path)
+    web_verify.add_argument("--phase", choices=("script", "proxy", "final"))
+    web_verify.add_argument("--account-hint")
     return parser
 
 
@@ -283,115 +302,13 @@ def _validate(run_dir: Path, artifact: str) -> int:
             "Antigravity hoàn thiện lời theo atomic beat rồi tạo critic-script độc lập.",
         )
     elif artifact == "critic-script":
-        if state.stage is not Stage.VIET_LOI:
-            raise MvpError("critic-script validation requires VIET_LOI stage")
-        truth = load_truth(
-            episode / "Su_that" / "su_that_tap_phim.json",
-            source_duration_ms=source.duration_ms,
-        )
-        shots = load_json(run_dir / "shots.json", ShotDocument)
-        storyboard = load_atomic_storyboard(
-            episode / "Kich_ban" / "atomic_storyboard.json",
-            truth,
-            shots.shots,
-            source.duration_ms,
-        )
-        review = load_critic_review(
-            episode / "Bao_cao" / "critic_script.json",
-            storyboard,
-            "SCRIPT",
-        )
-        source_anchors = load_json(
-            run_dir / "atomic_evidence" / "source" / "anchors.json",
-            FrameAnchorDocument,
-        )
-        validate_critic_evidence(review, storyboard, source_anchors)
-        codes_by_beat = {
-            item.beat_id: item.finding_codes for item in review.beat_reviews if item.finding_codes
-        }
-        style_findings = atomic_style_findings(storyboard)
-        for finding in style_findings:
-            if finding.cue_id:
-                codes_by_beat.setdefault(finding.cue_id, ())
-                codes_by_beat[finding.cue_id] = (
-                    *codes_by_beat[finding.cue_id],
-                    finding.code,
-                )
-        if codes_by_beat:
-            beat_ids = tuple(codes_by_beat)
-            codes = tuple(
-                dict.fromkeys(code for values in codes_by_beat.values() for code in values)
-            )
-            repaired = record_beat_repair(run_dir, "SCRIPT", beat_ids, codes)
-            _write_next(
-                run_dir,
-                f"Antigravity chỉ sửa beat lỗi {', '.join(beat_ids)}; vòng "
-                f"{len(repaired.repair_history)}/3.",
-            )
-            return 1
-        record_stage_metric(
-            run_dir,
-            Stage.PHAN_BIEN_KICH_BAN,
-            _elapsed_ms(started),
-            0,
-            0,
-            (),
-        )
-        advance(run_dir, Stage.VIET_LOI, Stage.PHAN_BIEN_KICH_BAN)
-        advance(run_dir, Stage.PHAN_BIEN_KICH_BAN, Stage.TAO_TTS)
-        _write_next(run_dir, "Critic script sạch; Antigravity chạy tts.")
+        if state.stage is Stage.VIET_LOI:
+            raise MvpError("chạy web-verify prepare --phase script trước khi nhận critic")
+        return _web_verify_accept(run_dir, "script")
     elif artifact == "critic-video":
-        if state.stage is not Stage.PHAN_BIEN_VIDEO:
-            raise MvpError("critic-video validation requires PHAN_BIEN_VIDEO stage")
-        truth = load_truth(
-            episode / "Su_that" / "su_that_tap_phim.json",
-            source_duration_ms=source.duration_ms,
-        )
-        shots = load_json(run_dir / "shots.json", ShotDocument)
-        storyboard = load_atomic_storyboard(
-            episode / "Kich_ban" / "atomic_storyboard.json",
-            truth,
-            shots.shots,
-            source.duration_ms,
-        )
-        review = load_critic_review(
-            episode / "Bao_cao" / "critic_video.json",
-            storyboard,
-            "VIDEO",
-        )
-        source_anchors = load_json(
-            run_dir / "atomic_evidence" / "source" / "anchors.json",
-            FrameAnchorDocument,
-        )
-        program_anchors = load_json(
-            run_dir / "atomic_evidence" / "program" / "anchors.json",
-            FrameAnchorDocument,
-        )
-        validate_critic_evidence(review, storyboard, source_anchors, program_anchors)
-        failed = tuple(item for item in review.beat_reviews if item.finding_codes)
-        if failed:
-            repaired = record_beat_repair(
-                run_dir,
-                "VIDEO",
-                tuple(item.beat_id for item in failed),
-                tuple(dict.fromkeys(code for item in failed for code in item.finding_codes)),
-            )
-            _write_next(
-                run_dir,
-                f"Antigravity chỉ sửa {len(failed)} beat lỗi; vòng "
-                f"{len(repaired.repair_history)}/3.",
-            )
-            return 1
-        record_stage_metric(
-            run_dir,
-            Stage.PHAN_BIEN_VIDEO,
-            _elapsed_ms(started),
-            0,
-            0,
-            (),
-        )
-        advance(run_dir, Stage.PHAN_BIEN_VIDEO, Stage.DUNG_VIDEO_CUOI)
-        _write_next(run_dir, "Critic video sạch; render --quality final.")
+        if state.stage is Stage.PHAN_BIEN_VIDEO:
+            raise MvpError("chạy web-verify prepare --phase proxy trước khi nhận critic")
+        return _web_verify_accept(run_dir, "proxy")
     elif artifact == "script":
         truth = load_truth(
             episode / "Su_that" / "su_that_tap_phim.json",
@@ -570,8 +487,8 @@ def _render(run_dir: Path, quality: str = "final") -> int:
             0,
             (),
         )
-        advance(run_dir, Stage.DUNG_VIDEO_CUOI, Stage.KIEM_DINH_ENGINE)
-        _write_next(run_dir, "Final candidate đã dựng; chạy audit --phase engine.")
+        advance(run_dir, Stage.DUNG_VIDEO_CUOI, Stage.CHO_GEMINI_FINAL)
+        _write_next(run_dir, "Final candidate đã dựng; chạy web-verify prepare --phase final.")
         print(output)
         return 0
     if state.stage is not Stage.DUNG_VIDEO:
@@ -670,11 +587,6 @@ def _audit_atomic_engine(run_dir: Path, episode: Path) -> int:
         shots.shots,
         source.duration_ms,
     )
-    critic = load_critic_review(
-        episode / "Bao_cao" / "critic_video.json",
-        storyboard,
-        "VIDEO",
-    )
     tts = load_json(episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest)
     source_anchors = load_json(
         run_dir / "atomic_evidence" / "source" / "anchors.json",
@@ -684,6 +596,11 @@ def _audit_atomic_engine(run_dir: Path, episode: Path) -> int:
         run_dir / "atomic_evidence" / "program" / "anchors.json",
         FrameAnchorDocument,
     )
+    script_critic = _load_verified_critic(run_dir, "script", storyboard)
+    validate_critic_evidence(script_critic, storyboard, source_anchors)
+    proxy_critic = _load_verified_critic(run_dir, "proxy", storyboard)
+    validate_critic_evidence(proxy_critic, storyboard, source_anchors, program_anchors)
+    critic = _load_verified_critic(run_dir, "final", storyboard)
     render = load_json(run_dir / "final_render_result.json", RenderResult)
     job_payload = json.loads((run_dir / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
     expected_hash = job_payload["policy_sha256"]
@@ -744,6 +661,261 @@ def _prompt(run_dir: Path) -> int:
     return 0
 
 
+def _gemini_profile_path(run_dir: Path) -> Path:
+    _, episode = _episode(run_dir)
+    return episode.parents[3] / ".local" / "gemini_ultra_profile.json"
+
+
+def _web_verify_enroll(run_dir: Path, account_hint: str | None) -> int:
+    if not account_hint:
+        raise MvpError("web-verify enroll requires --account-hint")
+    print("Nhập email của tài khoản Gemini Ultra đang hiển thị trong profile Chrome:")
+    email = sys.stdin.readline().strip()
+    if not email:
+        raise MvpError("web-verify enroll requires the signed-in email on stdin")
+    binding = GeminiUltraProfileBinding(account_sha256(email), account_hint)
+    output = _gemini_profile_path(run_dir)
+    write_profile_binding(output, binding)
+    print(output.resolve())
+    return 0
+
+
+def _web_phase_paths(run_dir: Path, phase: str) -> tuple[Path, Path, Path, Path]:
+    state, episode = _episode(run_dir)
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    truth = load_truth(
+        episode / "Su_that" / "su_that_tap_phim.json",
+        source_duration_ms=source.duration_ms,
+    )
+    shots = load_json(run_dir / "shots.json", ShotDocument)
+    storyboard_path = episode / "Kich_ban" / "atomic_storyboard.json"
+    storyboard = load_atomic_storyboard(storyboard_path, truth, shots.shots, source.duration_ms)
+    phase_dir = reset_web_phase(run_dir, phase)
+    evidence_dir = phase_dir / "evidence"
+    if phase == "SCRIPT":
+        extract_dense_beat_evidence(
+            Path(state.source_video), storyboard, None, evidence_dir / "source", "SOURCE"
+        )
+        build_contact_sheets(
+            load_json(evidence_dir / "source" / "manifest.json", DenseEvidenceDocument),
+            evidence_dir / "source" / "sheets",
+        )
+        artifact = storyboard_path
+    else:
+        edl = load_json(episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument)
+        candidate = (
+            run_dir / "proxy" / "review_proxy.mp4"
+            if phase == "PROXY"
+            else run_dir / "final_candidate.mp4"
+        )
+        if not candidate.is_file():
+            raise MvpError(f"Gemini Web {phase.casefold()} candidate is missing: {candidate}")
+        extract_dense_beat_evidence(
+            Path(state.source_video), storyboard, None, evidence_dir / "source", "SOURCE"
+        )
+        extract_dense_beat_evidence(
+            candidate, None, edl, evidence_dir / "program", "PROGRAM"
+        )
+        for timeline in ("source", "program"):
+            build_contact_sheets(
+                load_json(
+                    evidence_dir / timeline / "manifest.json", DenseEvidenceDocument
+                ),
+                evidence_dir / timeline / "sheets",
+            )
+        artifact = candidate
+    sheet_paths = tuple(
+        path
+        for path in evidence_dir.rglob("*.jpg")
+        if path.is_file()
+    )
+    if not sheet_paths:
+        raise MvpError("Gemini Web request has no contact sheets")
+    prompt_path = phase_dir / "prompt.txt"
+    return storyboard_path, artifact, phase_dir, prompt_path
+
+
+def _web_verify_prepare(run_dir: Path, phase: str) -> int:
+    phase_upper = phase.upper()
+    state, _ = _episode(run_dir)
+    expected_stage = {
+        "SCRIPT": Stage.VIET_LOI,
+        "PROXY": Stage.PHAN_BIEN_VIDEO,
+        "FINAL": Stage.CHO_GEMINI_FINAL,
+    }[phase_upper]
+    if state.stage is not expected_stage:
+        raise MvpError(f"Gemini Web {phase.casefold()} prepare stage does not match")
+    storyboard_path, artifact, phase_dir, _ = _web_phase_paths(run_dir, phase_upper)
+    storyboard = load_json(storyboard_path, AtomicStoryboard)
+    evidence_paths = tuple(sorted(path for path in (phase_dir / "evidence").rglob("*.jpg")))
+    critic_path = phase_dir / f"critic_{phase.casefold()}.json"
+    prompt = (
+        f"Bạn là kiểm định viên Gemini Web Ultra cho phase {phase_upper}. Đọc request.json, "
+        "artifact_path và TOÀN BỘ evidence_paths được liệt kê; chỉ dùng đúng các file đó. "
+        "Tạo JSON-only theo schema CriticReviewDocument, một beat_reviews cho từng beat, "
+        "không markdown và không tự bỏ beat. Chỉ MATCH khi hình, thứ tự hành động và lời "
+        "Việt cùng khớp. Nhãn phân tích tương đương VOICE_EARLY/VOICE_LATE/WRONG_VISUAL/"
+        "EXCLUDED_CONTENT/UNCERTAIN phải được ánh xạ vào schema nội bộ: VOICE_AHEAD, "
+        "VOICE_BEHIND, SCENE_MISMATCH hoặc ACTION_MISMATCH; mọi verdict khác MATCH phải "
+        "đưa chính sync_verdict vào finding_codes. Script dùng NOT_APPLICABLE. "
+        f"Lưu JSON chuẩn vào {critic_path}; không đổi tên hoặc ghi đè artifact khác."
+    )
+    anchor_paths = [
+        run_dir / "atomic_evidence" / "source" / "anchors.json",
+        run_dir / "atomic_evidence" / "program" / "anchors.json",
+    ]
+    anchor_ids: list[str] = []
+    for anchor_path in anchor_paths:
+        if anchor_path.is_file():
+            anchors = load_json(anchor_path, FrameAnchorDocument)
+            anchor_ids.extend(anchor.anchor_id for anchor in anchors.anchors)
+    prompt += (
+        " evidence_refs phải dùng đúng ID anchor engine sau đây, không tự chế: "
+        + ", ".join(anchor_ids)
+        + "."
+    )
+    prompt += (
+        f" Lưu nguyên văn câu trả lời Gemini vào {phase_dir / 'response.txt'}, ảnh chụp "
+        f"phiên vào {phase_dir / 'screenshots' / 'session.png'}, rồi ghi receipt.json "
+        "với hash SHA-256 của request, response.txt và critic JSON; session phải có đúng "
+        "account hint đã binding, plan Ultra, model mạnh nhất và browser_status READY."
+    )
+    # The request hash must cover the final upload/receipt instructions as well.
+    request, request_path = write_web_request(
+        phase_dir,
+        Path(run_dir).resolve().name,
+        phase_upper,
+        artifact,
+        evidence_paths,
+        tuple(beat.beat_id for beat in storyboard.beats),
+        prompt,
+    )
+    if phase_upper == "SCRIPT":
+        advance(run_dir, Stage.VIET_LOI, Stage.CHO_GEMINI_SCRIPT)
+    elif phase_upper == "PROXY":
+        advance(run_dir, Stage.PHAN_BIEN_VIDEO, Stage.CHO_GEMINI_PROXY)
+    print(request_path.resolve())
+    return 0
+
+
+def _load_verified_critic(
+    run_dir: Path, phase: str, storyboard: AtomicStoryboard
+) -> CriticReviewDocument:
+    phase_lower = phase.casefold()
+    review_path = run_dir / "gemini_web" / phase_lower / f"critic_{phase_lower}.json"
+    load_verified_web_review(run_dir, phase_lower, CriticReviewDocument)
+    expected_phase = "SCRIPT" if phase.upper() == "SCRIPT" else "VIDEO"
+    return load_critic_review(
+        review_path,
+        storyboard,
+        expected_phase,
+    )
+
+
+def _web_verify_accept(run_dir: Path, phase: str) -> int:
+    started = time.perf_counter()
+    phase_upper = phase.upper()
+    state, episode = _episode(run_dir)
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    truth = load_truth(
+        episode / "Su_that" / "su_that_tap_phim.json",
+        source_duration_ms=source.duration_ms,
+    )
+    shots = load_json(run_dir / "shots.json", ShotDocument)
+    storyboard = load_atomic_storyboard(
+        episode / "Kich_ban" / "atomic_storyboard.json",
+        truth,
+        shots.shots,
+        source.duration_ms,
+    )
+    if phase_upper == "SCRIPT":
+        if state.stage is not Stage.CHO_GEMINI_SCRIPT:
+            raise MvpError("Gemini Web script accept requires CHO_GEMINI_SCRIPT stage")
+        try:
+            review = _load_verified_critic(run_dir, "script", storyboard)
+            source_anchors = load_json(
+                run_dir / "atomic_evidence" / "source" / "anchors.json", FrameAnchorDocument
+            )
+            validate_critic_evidence(review, storyboard, source_anchors)
+        except MvpError:
+            mark_human_required(run_dir, "GEMINI_WEB_SCRIPT_VERIFY_FAILED")
+            _write_next(run_dir, "Gemini Web script không hợp lệ; cần người xử lý.")
+            raise
+        failed = tuple(item for item in review.beat_reviews if item.finding_codes)
+        if failed:
+            repaired = record_beat_repair(
+                run_dir,
+                "SCRIPT",
+                tuple(item.beat_id for item in failed),
+                tuple(dict.fromkeys(code for item in failed for code in item.finding_codes)),
+            )
+            _write_next(
+                run_dir,
+                f"Gemini Ultra Web chặn {len(failed)} beat script; sửa rồi chạy resume, "
+                f"vòng {len(repaired.repair_history)}/3.",
+            )
+            return 1
+        record_stage_metric(run_dir, Stage.CHO_GEMINI_SCRIPT, _elapsed_ms(started), 0, 0, ())
+        advance(run_dir, Stage.CHO_GEMINI_SCRIPT, Stage.PHAN_BIEN_KICH_BAN)
+        advance(run_dir, Stage.PHAN_BIEN_KICH_BAN, Stage.TAO_TTS)
+        _write_next(run_dir, "Gemini Ultra Web đã duyệt script; chạy tts.")
+    elif phase_upper in {"PROXY", "FINAL"}:
+        expected_stage = (
+            Stage.CHO_GEMINI_PROXY if phase_upper == "PROXY" else Stage.CHO_GEMINI_FINAL
+        )
+        if state.stage is not expected_stage:
+            raise MvpError(f"Gemini Web {phase.casefold()} accept stage does not match")
+        try:
+            review = _load_verified_critic(run_dir, phase.casefold(), storyboard)
+            source_anchors = load_json(
+                run_dir / "atomic_evidence" / "source" / "anchors.json", FrameAnchorDocument
+            )
+            program_anchors = load_json(
+                run_dir / "atomic_evidence" / "program" / "anchors.json", FrameAnchorDocument
+            )
+            validate_critic_evidence(review, storyboard, source_anchors, program_anchors)
+        except MvpError:
+            mark_human_required(run_dir, f"GEMINI_WEB_{phase_upper}_VERIFY_FAILED")
+            _write_next(run_dir, f"Gemini Web {phase.casefold()} không hợp lệ; cần người xử lý.")
+            raise
+        failed = tuple(item for item in review.beat_reviews if item.finding_codes)
+        if failed:
+            repaired = record_beat_repair(
+                run_dir,
+                "VIDEO",
+                tuple(item.beat_id for item in failed),
+                tuple(dict.fromkeys(code for item in failed for code in item.finding_codes)),
+            )
+            _write_next(
+                run_dir,
+                f"Gemini Ultra Web chặn {len(failed)} beat; sửa rồi chạy resume, "
+                f"vòng {len(repaired.repair_history)}/3.",
+            )
+            return 1
+        if phase_upper == "PROXY":
+            record_stage_metric(run_dir, Stage.CHO_GEMINI_PROXY, _elapsed_ms(started), 0, 0, ())
+            advance(run_dir, Stage.CHO_GEMINI_PROXY, Stage.DUNG_VIDEO_CUOI)
+            _write_next(run_dir, "Gemini Ultra Web đã duyệt proxy; render --quality final.")
+        else:
+            record_stage_metric(run_dir, Stage.CHO_GEMINI_FINAL, _elapsed_ms(started), 0, 0, ())
+            advance(run_dir, Stage.CHO_GEMINI_FINAL, Stage.KIEM_DINH_ENGINE)
+            _write_next(run_dir, "Gemini Ultra Web đã duyệt final; chạy audit --phase engine.")
+    else:
+        raise MvpError("Gemini Web phase is invalid")
+    print((run_dir / "gemini_web" / phase.casefold() / f"critic_{phase.casefold()}.json").resolve())
+    return 0
+
+
+def _web_verify(args: argparse.Namespace) -> int:
+    if args.action == "enroll":
+        return _web_verify_enroll(args.run, args.account_hint)
+    if args.phase is None:
+        raise MvpError(f"web-verify {args.action} requires --phase")
+    if args.action == "prepare":
+        return _web_verify_prepare(args.run, args.phase)
+    return _web_verify_accept(args.run, args.phase)
+
+
 def _audit(run_dir: Path, phase: str, codex_review: Path | None) -> int:
     _, episode = _episode(run_dir)
     if phase == "script":
@@ -802,6 +974,8 @@ def main(argv: list[str] | None = None) -> int:
             return _resume(args.run, args.phase)
         if args.command == "audit":
             return _audit(args.run, args.phase, args.codex_review)
+        if args.command == "web-verify":
+            return _web_verify(args)
     except MvpError as exc:
         parser.error(str(exc))
     return 2

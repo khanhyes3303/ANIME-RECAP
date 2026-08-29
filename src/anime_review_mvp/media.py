@@ -12,6 +12,10 @@ from .errors import MvpError
 from .jsonio import dump_json
 from .models import (
     AtomicStoryboard,
+    ContactSheet,
+    ContactSheetDocument,
+    DenseEvidenceDocument,
+    DenseFrame,
     FrameAnchor,
     FrameAnchorDocument,
     NarrationSpanDocument,
@@ -79,6 +83,202 @@ def extract_atomic_source_anchors(
     result = FrameAnchorDocument(tuple(anchors))
     dump_json(output_dir / "anchors.json", result)
     return result
+
+
+def extract_dense_beat_evidence(
+    video: Path,
+    storyboard: AtomicStoryboard | None,
+    edl: SpanEdlDocument | None,
+    output_dir: Path,
+    timeline: str,
+    *,
+    max_gap_ms: int = 1_000,
+    runner: Runner = subprocess.run,
+) -> DenseEvidenceDocument:
+    if not video.is_file():
+        raise MvpError(f"dense evidence video does not exist: {video}")
+    if timeline not in {"SOURCE", "PROGRAM"}:
+        raise MvpError("dense evidence timeline is invalid")
+    if max_gap_ms <= 0:
+        raise MvpError("dense evidence max gap must be positive")
+    if timeline == "SOURCE" and storyboard is None:
+        raise MvpError("SOURCE dense evidence requires an atomic storyboard")
+    if timeline == "PROGRAM" and edl is None:
+        raise MvpError("PROGRAM dense evidence requires an EDL")
+
+    ranges: list[tuple[str, str, int, int, tuple[int, ...]]] = []
+    if timeline == "SOURCE":
+        assert storyboard is not None
+        for beat in storyboard.beats:
+            action_points = tuple(
+                point
+                for point in (beat.action_window_start_ms, beat.action_window_end_ms)
+                if point is not None
+            )
+            for source_range in beat.source_ranges:
+                ranges.append(
+                    (
+                        beat.beat_id,
+                        source_range.range_id,
+                        source_range.source_start_ms,
+                        source_range.source_end_ms,
+                        action_points,
+                    )
+                )
+    else:
+        assert edl is not None
+        for segment in edl.segments:
+            ranges.append(
+                (
+                    segment.beat_id or segment.span_id,
+                    segment.range_id,
+                    segment.program_start_ms,
+                    segment.program_end_ms,
+                    (),
+                )
+            )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    frames: list[DenseFrame] = []
+    for beat_id, range_id, start_ms, end_ms, action_points in ranges:
+        timestamps = _dense_timestamps(start_ms, end_ms, action_points, max_gap_ms)
+        for timestamp_ms in timestamps:
+            frame_id = f"{beat_id}-{range_id}-{timeline.casefold()}-{timestamp_ms:08d}"
+            frame = output_dir / f"{frame_id}.jpg"
+            _run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-ss",
+                    f"{timestamp_ms / 1_000:.3f}",
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "2",
+                    str(frame),
+                ],
+                runner,
+            )
+            if not frame.is_file():
+                raise MvpError(f"FFmpeg did not create dense evidence frame: {frame}")
+            frames.append(
+                DenseFrame(
+                    frame_id,
+                    beat_id,
+                    range_id,
+                    timeline,
+                    timestamp_ms,
+                    str(frame.resolve()),
+                    hashlib.sha256(frame.read_bytes()).hexdigest(),
+                )
+            )
+    if not frames:
+        raise MvpError("dense evidence requires at least one source range")
+    result = DenseEvidenceDocument(timeline, tuple(frames))
+    dump_json(output_dir / "manifest.json", result)
+    return result
+
+
+def build_contact_sheets(
+    evidence: DenseEvidenceDocument,
+    output_dir: Path,
+    *,
+    max_frames: int = 12,
+    runner: Runner = subprocess.run,
+) -> ContactSheetDocument:
+    if max_frames <= 0:
+        raise MvpError("contact sheet max frames must be positive")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    grouped: dict[str, list[DenseFrame]] = {}
+    for frame in evidence.frames:
+        grouped.setdefault(frame.beat_id, []).append(frame)
+    sheets: list[ContactSheet] = []
+    for beat_id, beat_frames in grouped.items():
+        for index in range(0, len(beat_frames), max_frames):
+            chunk = beat_frames[index : index + max_frames]
+            sheet_id = f"{beat_id}-{evidence.timeline.casefold()}-{index // max_frames + 1:03d}"
+            sheet = output_dir / f"{sheet_id}.jpg"
+            concat_list = output_dir / f".{sheet_id}.concat.txt"
+            concat_contents = "".join(
+                f"file '{frame.path.replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39))}'\n"
+                for frame in chunk
+            )
+            concat_list.write_text(
+                concat_contents,
+                encoding="utf-8",
+            )
+            try:
+                label = (
+                    f"{beat_id} | {evidence.timeline} | "
+                    f"{chunk[0].timestamp_ms}ms-{chunk[-1].timestamp_ms}ms"
+                )
+                escaped_label = (
+                    label.replace("\\", "\\\\")
+                    .replace(":", "\\:")
+                    .replace("'", "\\'")
+                )
+                _run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-v",
+                        "error",
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        str(concat_list),
+                        "-vf",
+                        "scale=320:-2,tile=4x3:padding=8:margin=8,"
+                        f"drawtext=text='{escaped_label}':x=8:y=8:fontsize=18:"
+                        "fontcolor=white:box=1:boxcolor=black@0.6",
+                        "-frames:v",
+                        "1",
+                        "-q:v",
+                        "2",
+                        str(sheet),
+                    ],
+                    runner,
+                )
+            finally:
+                concat_list.unlink(missing_ok=True)
+            if not sheet.is_file():
+                raise MvpError(f"FFmpeg did not create contact sheet: {sheet}")
+            sheets.append(
+                ContactSheet(
+                    sheet_id,
+                    evidence.timeline,
+                    beat_id,
+                    tuple(frame.frame_id for frame in chunk),
+                    str(sheet.resolve()),
+                    hashlib.sha256(sheet.read_bytes()).hexdigest(),
+                )
+            )
+    result = ContactSheetDocument(tuple(sheets))
+    dump_json(output_dir / "manifest.json", result)
+    return result
+
+
+def _dense_timestamps(
+    start_ms: int,
+    end_ms: int,
+    action_points: tuple[int, ...],
+    max_gap_ms: int,
+) -> tuple[int, ...]:
+    if start_ms < 0 or end_ms <= start_ms:
+        raise MvpError("dense evidence range is invalid")
+    points = {start_ms, end_ms}
+    points.update(point for point in action_points if start_ms <= point <= end_ms)
+    current = start_ms
+    while current + max_gap_ms < end_ms:
+        current += max_gap_ms
+        points.add(current)
+    return tuple(sorted(points))
 
 
 def _run(command: list[str], runner: Runner) -> Any:

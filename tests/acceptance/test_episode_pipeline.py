@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
 
 from anime_review_mvp import cli
-from anime_review_mvp.jsonio import dump_json
+from anime_review_mvp.gemini_web import (
+    GeminiUltraProfileBinding,
+    GeminiUltraSessionReceipt,
+    GeminiWebReceipt,
+    sha256_file,
+)
+from anime_review_mvp.jsonio import dump_json, load_json
 from anime_review_mvp.models import (
     AtomicBeat,
     AtomicStoryboard,
@@ -14,6 +21,8 @@ from anime_review_mvp.models import (
     Claim,
     CriticBeatReview,
     CriticReviewDocument,
+    DenseEvidenceDocument,
+    DenseFrame,
     Event,
     FrameAnchor,
     FrameAnchorDocument,
@@ -137,6 +146,46 @@ def _fake_anchors(
     return anchors
 
 
+def _write_web_result(
+    run: Path,
+    phase: str,
+    review: CriticReviewDocument,
+    binding: GeminiUltraProfileBinding,
+) -> None:
+    phase_dir = run / "gemini_web" / phase
+    response = phase_dir / f"critic_{phase}.json"
+    raw_response = phase_dir / "response.txt"
+    screenshot = phase_dir / "screenshots" / "session.png"
+    dump_json(response, review)
+    raw_response.write_text(response.read_text(encoding="utf-8"), encoding="utf-8")
+    screenshot.parent.mkdir(parents=True, exist_ok=True)
+    screenshot.write_bytes(b"screen")
+    request_path = phase_dir / "request.json"
+    request = load_json(request_path, object)
+    dump_json(
+        phase_dir / "receipt.json",
+        GeminiWebReceipt(
+            run.name,
+            phase.upper(),
+            request["request_id"],
+            sha256_file(request_path),
+            str(response),
+            sha256_file(response),
+            (str(screenshot),),
+            GeminiUltraSessionReceipt(
+                binding.account_sha256,
+                binding.account_hint,
+                "Google AI Ultra",
+                "Deep Think",
+                True,
+                "READY",
+            ),
+            str(raw_response),
+            sha256_file(raw_response),
+        ),
+    )
+
+
 def test_one_antigravity_run_reaches_final_without_codex_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -211,6 +260,37 @@ def test_one_antigravity_run_reaches_final_without_codex_artifact(
     monkeypatch.setattr(cli, "extract_atomic_source_anchors", _fake_anchors)
     monkeypatch.setattr(cli, "extract_program_anchors", _fake_anchors)
 
+    def fake_dense(
+        video: Path,
+        storyboard: AtomicStoryboard | None,
+        edl: object,
+        output_dir: Path,
+        timeline: str,
+        **_: object,
+    ) -> DenseEvidenceDocument:
+        del video, storyboard, edl
+        frame_path = output_dir / f"beat-001-{timeline.casefold()}-00001000.jpg"
+        frame_path.parent.mkdir(parents=True, exist_ok=True)
+        frame_path.write_bytes(b"frame")
+        result = DenseEvidenceDocument(
+            timeline,
+            (
+                DenseFrame(
+                    "dense-001", "beat-001", "range-001", timeline, 1_000,
+                    str(frame_path), hashlib.sha256(b"frame").hexdigest(),
+                ),
+            ),
+        )
+        dump_json(output_dir / "manifest.json", result)
+        return result
+
+    def fake_sheets(evidence: DenseEvidenceDocument, output_dir: Path, **_: object) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / f"beat-001-{evidence.timeline.casefold()}-001.jpg").write_bytes(b"sheet")
+
+    monkeypatch.setattr(cli, "extract_dense_beat_evidence", fake_dense)
+    monkeypatch.setattr(cli, "build_contact_sheets", fake_sheets)
+
     assert (
         cli.main(
             [
@@ -265,14 +345,22 @@ def test_one_antigravity_run_reaches_final_without_codex_artifact(
 
     dump_json(episode / "Kich_ban" / "atomic_storyboard.json", _storyboard())
     assert cli.main(["validate", "--run", str(run), "--artifact", "storyboard"]) == 0
-    dump_json(episode / "Bao_cao" / "critic_script.json", _critic("SCRIPT"))
-    assert cli.main(["validate", "--run", str(run), "--artifact", "critic-script"]) == 0
+    binding = GeminiUltraProfileBinding("a" * 64, "a***@example.com")
+    (tmp_path / ".local").mkdir()
+    dump_json(tmp_path / ".local" / "gemini_ultra_profile.json", binding)
+    assert cli.main(["web-verify", "prepare", "--run", str(run), "--phase", "script"]) == 0
+    _write_web_result(run, "script", _critic("SCRIPT"), binding)
+    assert cli.main(["web-verify", "accept", "--run", str(run), "--phase", "script"]) == 0
     assert cli.main(["tts", "--run", str(run)]) == 0
     assert cli.main(["validate", "--run", str(run), "--artifact", "edl"]) == 0
     assert cli.main(["render", "--run", str(run), "--quality", "proxy"]) == 0
-    dump_json(episode / "Bao_cao" / "critic_video.json", _critic("VIDEO"))
-    assert cli.main(["validate", "--run", str(run), "--artifact", "critic-video"]) == 0
+    assert cli.main(["web-verify", "prepare", "--run", str(run), "--phase", "proxy"]) == 0
+    _write_web_result(run, "proxy", _critic("VIDEO"), binding)
+    assert cli.main(["web-verify", "accept", "--run", str(run), "--phase", "proxy"]) == 0
     assert cli.main(["render", "--run", str(run), "--quality", "final"]) == 0
+    assert cli.main(["web-verify", "prepare", "--run", str(run), "--phase", "final"]) == 0
+    _write_web_result(run, "final", _critic("VIDEO"), binding)
+    assert cli.main(["web-verify", "accept", "--run", str(run), "--phase", "final"]) == 0
     assert cli.main(["audit", "--run", str(run), "--phase", "engine"]) == 0
 
     assert read_state(run).stage is Stage.HOAN_THANH

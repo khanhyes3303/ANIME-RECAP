@@ -23,12 +23,15 @@ class Stage(StrEnum):
     CAN_CON_NGUOI_XU_LY = "CAN_CON_NGUOI_XU_LY"
     LAP_STORYBOARD = "LAP_STORYBOARD"
     VIET_LOI = "VIET_LOI"
+    CHO_GEMINI_SCRIPT = "CHO_GEMINI_SCRIPT"
     PHAN_BIEN_KICH_BAN = "PHAN_BIEN_KICH_BAN"
     CAN_TTS = "CAN_TTS"
     DUNG_PROXY = "DUNG_PROXY"
     PHAN_BIEN_VIDEO = "PHAN_BIEN_VIDEO"
+    CHO_GEMINI_PROXY = "CHO_GEMINI_PROXY"
     SUA_BEAT = "SUA_BEAT"
     DUNG_VIDEO_CUOI = "DUNG_VIDEO_CUOI"
+    CHO_GEMINI_FINAL = "CHO_GEMINI_FINAL"
     KIEM_DINH_ENGINE = "KIEM_DINH_ENGINE"
 
 
@@ -63,13 +66,16 @@ _NEXT_STAGE = {
     Stage.CHUAN_BI: Stage.QUAN_SAT,
     Stage.QUAN_SAT: Stage.LAP_STORYBOARD,
     Stage.LAP_STORYBOARD: Stage.VIET_LOI,
-    Stage.VIET_LOI: Stage.PHAN_BIEN_KICH_BAN,
+    Stage.VIET_LOI: Stage.CHO_GEMINI_SCRIPT,
+    Stage.CHO_GEMINI_SCRIPT: Stage.PHAN_BIEN_KICH_BAN,
     Stage.PHAN_BIEN_KICH_BAN: Stage.TAO_TTS,
     Stage.TAO_TTS: Stage.CAN_TTS,
     Stage.CAN_TTS: Stage.DUNG_PROXY,
     Stage.DUNG_PROXY: Stage.PHAN_BIEN_VIDEO,
-    Stage.PHAN_BIEN_VIDEO: Stage.DUNG_VIDEO_CUOI,
-    Stage.DUNG_VIDEO_CUOI: Stage.KIEM_DINH_ENGINE,
+    Stage.PHAN_BIEN_VIDEO: Stage.CHO_GEMINI_PROXY,
+    Stage.CHO_GEMINI_PROXY: Stage.DUNG_VIDEO_CUOI,
+    Stage.DUNG_VIDEO_CUOI: Stage.CHO_GEMINI_FINAL,
+    Stage.CHO_GEMINI_FINAL: Stage.KIEM_DINH_ENGINE,
     Stage.KIEM_DINH_ENGINE: Stage.HOAN_THANH,
     # Legacy runs already at the old final-audit stage remain resumable.
     Stage.KIEM_DINH_VIDEO: Stage.HOAN_THANH,
@@ -250,6 +256,21 @@ def record_stage_metric(
         changed_beat_ids,
     )
     state = replace(state, stage_metrics=(*state.stage_metrics, metric))
+    _write_state(state)
+    return state
+
+
+def mark_human_required(run_dir: Path, code: str) -> RunState:
+    normalized = code.strip()
+    if not normalized:
+        raise MvpError("human-handling code is required")
+    state = read_state(run_dir)
+    if state.stage is Stage.HOAN_THANH:
+        raise MvpError("completed run cannot be moved to human handling")
+    if state.stage is Stage.CAN_CON_NGUOI_XU_LY:
+        return state
+    history = (*state.repair_history, RepairRecord("ANTIGRAVITY", (code,), "HUMAN"))
+    state = replace(state, stage=Stage.CAN_CON_NGUOI_XU_LY, repair_history=history)
     _write_state(state)
     return state
 

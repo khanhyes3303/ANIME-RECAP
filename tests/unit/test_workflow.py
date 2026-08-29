@@ -6,8 +6,10 @@ import pytest
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.workflow import (
+    RunState,
     Stage,
     advance,
+    mark_human_required,
     new_state,
     read_state,
     record_beat_repair,
@@ -56,6 +58,42 @@ def test_only_engine_audit_can_mark_run_complete(tmp_path: Path) -> None:
         _engine_audit_passed=True,
     )
     assert completed.stage is Stage.HOAN_THANH
+
+
+def test_gemini_ultra_web_phases_are_explicit_workflow_gates(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.VIET_LOI)
+
+    script_wait = advance(run, Stage.VIET_LOI, Stage.CHO_GEMINI_SCRIPT)
+    script_done = advance(run, Stage.CHO_GEMINI_SCRIPT, Stage.PHAN_BIEN_KICH_BAN)
+
+    assert script_wait.stage is Stage.CHO_GEMINI_SCRIPT
+    assert script_done.stage is Stage.PHAN_BIEN_KICH_BAN
+
+    proxy = replace_state(run, Stage.PHAN_BIEN_VIDEO)
+    proxy_wait = advance(run, proxy.stage, Stage.CHO_GEMINI_PROXY)
+    proxy_done = advance(run, Stage.CHO_GEMINI_PROXY, Stage.DUNG_VIDEO_CUOI)
+    assert proxy_wait.stage is Stage.CHO_GEMINI_PROXY
+    assert proxy_done.stage is Stage.DUNG_VIDEO_CUOI
+
+
+def test_invalid_web_receipt_moves_run_to_human_handling(tmp_path: Path) -> None:
+    state = new_state(tmp_path / "run", stage=Stage.CHO_GEMINI_FINAL)
+
+    stopped = mark_human_required(state.run_dir, "GEMINI_WEB_FINAL_VERIFY_FAILED")
+
+    assert stopped.stage is Stage.CAN_CON_NGUOI_XU_LY
+    assert stopped.repair_history[-1].phase == "HUMAN"
+
+
+def replace_state(run: Path, stage: Stage) -> RunState:
+    state = read_state(run)
+    return new_state(
+        run,
+        stage=stage,
+        episode_dir=Path(state.episode_dir),
+        source_video=Path(state.source_video) if state.source_video else None,
+    )
 
 
 def test_content_repair_returns_to_codex_editor(tmp_path: Path) -> None:

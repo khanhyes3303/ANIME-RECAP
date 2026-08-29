@@ -4,6 +4,7 @@
 .ruff_cache/
 __pycache__/
 *.py[cod]
+/.local/
 
 # Runtime-only artifacts and real media never belong in Git.
 Tam_dang_xu_ly/

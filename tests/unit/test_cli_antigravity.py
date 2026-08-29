@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from io import StringIO
 from pathlib import Path
 
 import pytest
 
 from anime_review_mvp import cli
+from anime_review_mvp.gemini_web import account_sha256
 from anime_review_mvp.jsonio import dump_json
 from anime_review_mvp.models import (
     AtomicBeat,
@@ -13,12 +15,15 @@ from anime_review_mvp.models import (
     Claim,
     CriticBeatReview,
     CriticReviewDocument,
+    DenseEvidenceDocument,
+    DenseFrame,
     Event,
     FrameAnchor,
     FrameAnchorDocument,
     Shot,
     ShotDocument,
     SourceRef,
+    SpanEdlDocument,
     SpanSourceRange,
     TranscriptDocument,
     TruthDocument,
@@ -193,13 +198,139 @@ def test_render_parser_accepts_explicit_proxy_quality() -> None:
     assert args.quality == "proxy"
 
 
+def test_web_verify_parser_requires_action_run_and_phase() -> None:
+    args = cli._parser().parse_args(
+        ["web-verify", "prepare", "--run", "run", "--phase", "final"]
+    )
+
+    assert (args.action, args.phase) == ("prepare", "final")
+
+
+def test_web_verify_enroll_hashes_email_without_persisting_plaintext(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, episode = _prepared_storyboard_run(tmp_path)
+    monkeypatch.setattr(cli.sys, "stdin", StringIO("Ultra@Example.com\n"))
+
+    assert cli.main(
+        [
+            "web-verify",
+            "enroll",
+            "--run",
+            str(run),
+            "--account-hint",
+            "ul***@example.com",
+        ]
+    ) == 0
+
+    binding_path = tmp_path / ".local" / "gemini_ultra_profile.json"
+    assert binding_path.is_file()
+    payload = json.loads(binding_path.read_text(encoding="utf-8"))
+    assert payload["account_sha256"] == account_sha256("Ultra@Example.com")
+    assert "Ultra@Example.com" not in binding_path.read_text(encoding="utf-8")
+
+
+def test_web_verify_prepare_writes_hashed_script_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+    advance(run, Stage.LAP_STORYBOARD, Stage.VIET_LOI)
+
+    def fake_dense(
+        video: Path,
+        storyboard: AtomicStoryboard | None,
+        edl: SpanEdlDocument | None,
+        output_dir: Path,
+        timeline: str,
+        **_: object,
+    ) -> DenseEvidenceDocument:
+        frame_path = output_dir / "beat-001-source-00001000.jpg"
+        frame_path.parent.mkdir(parents=True, exist_ok=True)
+        frame_path.write_bytes(b"frame")
+        result = DenseEvidenceDocument(
+            timeline,
+            (
+                DenseFrame(
+                    "frame-001",
+                    "beat-001",
+                    "range-001",
+                    timeline,
+                    1_000,
+                    str(frame_path),
+                    "a" * 64,
+                ),
+            ),
+        )
+        dump_json(output_dir / "manifest.json", result)
+        return result
+
+    def fake_sheets(evidence: DenseEvidenceDocument, output_dir: Path, **_: object) -> None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "beat-001-source-001.jpg").write_bytes(b"sheet")
+
+    monkeypatch.setattr(cli, "extract_dense_beat_evidence", fake_dense)
+    monkeypatch.setattr(cli, "build_contact_sheets", fake_sheets)
+
+    assert cli.main(
+        ["web-verify", "prepare", "--run", str(run), "--phase", "script"]
+    ) == 0
+
+    request_path = run / "gemini_web" / "script" / "request.json"
+    payload = json.loads(request_path.read_text(encoding="utf-8"))
+    assert payload["phase"] == "SCRIPT"
+    assert payload["beat_ids"] == ["beat-001"]
+    assert payload["evidence_paths"]
+
+
+def test_web_verify_accept_blocks_script_findings_before_tts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+    advance(run, Stage.LAP_STORYBOARD, Stage.VIET_LOI)
+    advance(run, Stage.VIET_LOI, Stage.CHO_GEMINI_SCRIPT)
+    source_anchor = FrameAnchor(
+        "beat-001-range-001-start",
+        "beat-001",
+        "range-001",
+        "SOURCE",
+        "START",
+        1_000,
+        "start.jpg",
+    )
+    source_dir = run / "atomic_evidence" / "source"
+    source_dir.mkdir(parents=True)
+    dump_json(source_dir / "anchors.json", FrameAnchorDocument((source_anchor,)))
+    review = CriticReviewDocument(
+        "SCRIPT",
+        "producer-01",
+        "critic-script-01",
+        (
+            CriticBeatReview(
+                "beat-001",
+                ("ACTION_MISMATCH",),
+                (source_anchor.anchor_id,),
+                "Jiro đứng yên.",
+                "Jiro lao vào sân.",
+                "NOT_APPLICABLE",
+                "Hình không khớp lời.",
+            ),
+        ),
+    )
+    monkeypatch.setattr(cli, "_load_verified_critic", lambda *_: review)
+    monkeypatch.setattr(cli, "validate_critic_evidence", lambda *_: None)
+
+    assert cli.main(["web-verify", "accept", "--run", str(run), "--phase", "script"]) == 1
+    assert read_state(run).stage is Stage.SUA_BEAT
+    assert not (Path(read_state(run).episode_dir) / "TTS" / "atomic_tts_manifest.json").exists()
+
+
 def test_prompt_command_writes_resolved_operator_prompt(tmp_path: Path) -> None:
     root = tmp_path
     run, _ = _prepared_storyboard_run(root)
     brain = root / "Bo_nao_Antigravity"
     brain.mkdir()
     (brain / "PROMPT_MOT_LAN_CHAY.md").write_text(
-        "Job: <ĐƯỜNG_DẪN_RUN>\\cong_viec_antigravity.json\n",
+        "Job: <ĐƯỜNG_DẪN_RUN>\\cong_viec_antigravity.json\nRun: <run_dir>\n",
         encoding="utf-8",
     )
     (run / "cong_viec_antigravity.json").write_text("{}\n", encoding="utf-8")
@@ -210,6 +341,8 @@ def test_prompt_command_writes_resolved_operator_prompt(tmp_path: Path) -> None:
     rendered = output.read_text(encoding="utf-8")
     assert str((run / "cong_viec_antigravity.json").resolve()) in rendered
     assert "<ĐƯỜNG_DẪN_RUN>" not in rendered
+    assert "<run_dir>" not in rendered
+    assert str(run.resolve()) in rendered
 
 
 def test_prompt_parser_accepts_run_path() -> None:

@@ -335,6 +335,76 @@ class FrameAnchorDocument:
 
 
 @dataclass(frozen=True, slots=True)
+class DenseFrame:
+    frame_id: str
+    beat_id: str
+    range_id: str
+    timeline: str
+    timestamp_ms: int
+    path: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.frame_id, "dense frame_id")
+        _non_empty(self.beat_id, "dense beat_id")
+        _non_empty(self.range_id, "dense range_id")
+        if self.timeline not in {"SOURCE", "PROGRAM"}:
+            raise MvpError("dense frame timeline is invalid")
+        if self.timestamp_ms < 0:
+            raise MvpError("dense frame timestamp must not be negative")
+        _non_empty(self.path, "dense frame path")
+        if len(self.sha256) != 64 or any(char not in "0123456789abcdef" for char in self.sha256):
+            raise MvpError("dense frame SHA-256 is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class DenseEvidenceDocument:
+    timeline: str
+    frames: tuple[DenseFrame, ...]
+
+    def __post_init__(self) -> None:
+        if self.timeline not in {"SOURCE", "PROGRAM"}:
+            raise MvpError("dense evidence timeline is invalid")
+        if not self.frames:
+            raise MvpError("dense evidence requires frames")
+        if any(frame.timeline != self.timeline for frame in self.frames):
+            raise MvpError("dense evidence contains another timeline")
+        frame_ids = [frame.frame_id for frame in self.frames]
+        if len(frame_ids) != len(set(frame_ids)):
+            raise MvpError("dense evidence contains duplicate frame IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class ContactSheet:
+    sheet_id: str
+    timeline: str
+    beat_id: str
+    frame_ids: tuple[str, ...]
+    path: str
+    sha256: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.sheet_id, "contact sheet_id")
+        if self.timeline not in {"SOURCE", "PROGRAM"}:
+            raise MvpError("contact sheet timeline is invalid")
+        _non_empty(self.beat_id, "contact sheet beat_id")
+        if not self.frame_ids:
+            raise MvpError("contact sheet requires frame IDs")
+        _non_empty(self.path, "contact sheet path")
+        if len(self.sha256) != 64 or any(char not in "0123456789abcdef" for char in self.sha256):
+            raise MvpError("contact sheet SHA-256 is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class ContactSheetDocument:
+    sheets: tuple[ContactSheet, ...]
+
+    def __post_init__(self) -> None:
+        if not self.sheets:
+            raise MvpError("contact sheet document requires sheets")
+
+
+@dataclass(frozen=True, slots=True)
 class NarrationCue:
     cue_id: str
     text: str

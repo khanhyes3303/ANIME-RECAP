@@ -24,7 +24,8 @@ class RequiredOutputs:
     scene_packets: str
     storyboard: str
     critic_script: str
-    critic_video: str
+    critic_proxy: str
+    critic_final: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +81,7 @@ def render_operator_prompt(run_dir: Path, template_path: Path) -> str:
     if placeholder not in template:
         raise MvpError("operator prompt template is missing the run-path placeholder")
     job_path = (run_dir / "cong_viec_antigravity.json").resolve()
-    return template.replace(placeholder, str(job_path))
+    return template.replace(placeholder, str(job_path)).replace("<run_dir>", str(run_dir.resolve()))
 
 
 def build_operator_job(
@@ -100,8 +101,9 @@ def build_operator_job(
             truth=str(paths.truth_dir / "su_that_tap_phim.json"),
             scene_packets=str(paths.truth_dir / "scene_packets.json"),
             storyboard=str(paths.script_dir / "atomic_storyboard.json"),
-            critic_script=str(paths.report_dir / "critic_script.json"),
-            critic_video=str(paths.report_dir / "critic_video.json"),
+            critic_script=str(paths.temp_dir / "gemini_web" / "script" / "critic_script.json"),
+            critic_proxy=str(paths.temp_dir / "gemini_web" / "proxy" / "critic_proxy.json"),
+            critic_final=str(paths.temp_dir / "gemini_web" / "final" / "critic_final.json"),
         ),
         write_policy=WritePolicy(
             allowed_write_roots=tuple(

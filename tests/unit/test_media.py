@@ -8,8 +8,10 @@ import pytest
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.media import (
+    build_contact_sheets,
     detect_shots,
     extract_atomic_source_anchors,
+    extract_dense_beat_evidence,
     extract_inspection_assets,
     extract_program_anchors,
     extract_span_anchors,
@@ -20,6 +22,8 @@ from anime_review_mvp.models import (
     AtomicBeat,
     AtomicStoryboard,
     Claim,
+    DenseEvidenceDocument,
+    DenseFrame,
     NarrationSpan,
     NarrationSpanDocument,
     Shot,
@@ -222,6 +226,101 @@ def test_extract_atomic_source_anchors_uses_each_beat_range(tmp_path: Path) -> N
     assert all(anchor.span_id == "beat-001" for anchor in anchors.anchors)
     assert all(anchor.timeline == "SOURCE" for anchor in anchors.anchors)
     assert (output_dir / "anchors.json").is_file()
+
+
+def test_dense_evidence_covers_boundaries_and_action_window(tmp_path: Path) -> None:
+    source = tmp_path / "episode.mp4"
+    source.write_bytes(b"media")
+    source_range = SpanSourceRange(
+        "range-001", 1_000, 4_000, "scene-001", "beat-001", ("shot-001",), ("event-001",)
+    )
+    board = AtomicStoryboard(
+        "ANTIGRAVITY",
+        "atomic-v2",
+        "producer-01",
+        (Claim("claim-001", "ACTION", "Jiro runs.", ("event-001",)),),
+        (
+            AtomicBeat(
+                "beat-001", "scene-001", ("event-001",), ("claim-001",), (source_range,),
+                "Jiro chạy qua cổng.", ("Jiro",), ("Jiro",), "ACTION", 1_500, 2_700,
+                "Jiro lao qua cổng.", ("shot-001.jpg",), 3_000, None, "", "LOCKED", (),
+            ),
+        ),
+    )
+
+    class WritingRunner(FakeRunner):
+        def __call__(self, command: list[str], **kwargs: object) -> SimpleNamespace:
+            result = super().__call__(command, **kwargs)
+            output = Path(command[-1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"frame")
+            return result
+
+    evidence = extract_dense_beat_evidence(
+        source, board, None, tmp_path / "dense", "SOURCE", runner=WritingRunner()
+    )
+    stamps = [frame.timestamp_ms for frame in evidence.frames if frame.beat_id == "beat-001"]
+
+    assert {1_000, 1_500, 2_700, 4_000} <= set(stamps)
+    assert max(b - a for a, b in zip(stamps, stamps[1:], strict=False)) <= 1_000
+    assert (tmp_path / "dense" / "manifest.json").is_file()
+
+
+def test_dense_program_evidence_uses_edl_timestamps(tmp_path: Path) -> None:
+    video = tmp_path / "candidate.mp4"
+    video.write_bytes(b"media")
+    edl = SpanEdlDocument(
+        (
+            SpanEdlSegment(
+                "segment-001", "beat-001", 1_000, 4_000, 2_000, 5_000,
+                "range-001", "scene-001", "beat-001", ("shot-001",), ("event-001",), False,
+            ),
+        )
+    )
+
+    class WritingRunner(FakeRunner):
+        def __call__(self, command: list[str], **kwargs: object) -> SimpleNamespace:
+            result = super().__call__(command, **kwargs)
+            output = Path(command[-1])
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(b"frame")
+            return result
+
+    evidence = extract_dense_beat_evidence(
+        video, None, edl, tmp_path / "program-dense", "PROGRAM", runner=WritingRunner()
+    )
+    stamps = [frame.timestamp_ms for frame in evidence.frames]
+    assert stamps[0] == 2_000
+    assert stamps[-1] == 5_000
+
+
+def test_contact_sheets_paginate_each_beat_at_twelve_frames(tmp_path: Path) -> None:
+    source = tmp_path / "episode.mp4"
+    source.write_bytes(b"media")
+    frames = tuple(
+        DenseFrame(
+            f"frame-{index:02d}", "beat-001", "range-001", "SOURCE", index * 100,
+            str(tmp_path / f"frame-{index:02d}.jpg"), "a" * 64,
+        )
+        for index in range(13)
+    )
+    for frame in frames:
+        Path(frame.path).write_bytes(b"frame")
+    evidence = DenseEvidenceDocument("SOURCE", frames)
+
+    class WritingRunner(FakeRunner):
+        def __call__(self, command: list[str], **kwargs: object) -> SimpleNamespace:
+            result = super().__call__(command, **kwargs)
+            Path(command[-1]).write_bytes(b"sheet")
+            return result
+
+    runner = WritingRunner()
+    sheets = build_contact_sheets(evidence, tmp_path / "sheets", runner=runner)
+
+    assert len(sheets.sheets) == 2
+    assert [len(sheet.frame_ids) for sheet in sheets.sheets] == [12, 1]
+    assert any("drawtext" in argument for argument in runner.commands[0])
+    assert (tmp_path / "sheets" / "manifest.json").is_file()
 
 
 def test_extract_program_anchors_uses_edl_program_timing(tmp_path: Path) -> None:
