@@ -32,6 +32,7 @@ from .gemini_packets import build_browser_packet
 from .gemini_selenium import (
     GeminiBrowserError,
     connect_managed_chrome,
+    ensure_managed_chrome_visible,
     launch_managed_chrome,
     run_gemini_session,
 )
@@ -1053,8 +1054,24 @@ def _gemini_web_stop(run_dir: Path) -> int:
 def _gemini_web_show(run_dir: Path) -> int:
     root = _operator_root(run_dir)
     registry = GeminiSessionRegistry(root / ".local" / "gemini_operator_session.json")
-    metadata = registry.assert_attachable(run_dir.resolve().name)
-    launch = connect_managed_chrome(metadata)
+    run_id = run_dir.resolve().name
+    metadata = registry.load()
+    if metadata is None:
+        launch = launch_managed_chrome(root)
+        registry.save(
+            GeminiSessionMetadata(
+                run_id=run_id,
+                chrome_pid=launch.chrome_pid,
+                debugger_address=launch.debugger_address,
+                conversation_url=None,
+                started_at=datetime.now(UTC).isoformat(),
+                phase_turns={},
+            )
+        )
+    else:
+        metadata = registry.assert_attachable(run_id)
+        ensure_managed_chrome_visible(root, metadata)
+        launch = connect_managed_chrome(metadata)
     try:
         launch.page.show()
     finally:

@@ -280,11 +280,60 @@ def test_gemini_web_show_restores_registered_window(
             self.detached = True
 
     launch = Launch()
+    events: list[str] = []
     monkeypatch.setattr(gemini_session, "_pid_is_alive", lambda _pid: True)
     monkeypatch.setattr(gemini_session, "_debugger_is_alive", lambda _address: True)
-    monkeypatch.setattr(cli, "connect_managed_chrome", lambda _metadata: launch)
+    monkeypatch.setattr(
+        cli,
+        "ensure_managed_chrome_visible",
+        lambda _root, _metadata: events.append("native-visible") or 9001,
+    )
+    monkeypatch.setattr(
+        cli,
+        "connect_managed_chrome",
+        lambda _metadata: events.append("selenium-connect") or launch,
+    )
 
     assert cli._gemini_web_show(run) == 0
+    assert events == ["native-visible", "selenium-connect"]
+    assert launch.page.shown is True
+    assert launch.detached is True
+
+
+def test_gemini_web_show_starts_visible_operator_when_session_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+
+    class Page:
+        def __init__(self) -> None:
+            self.shown = False
+
+        def show(self) -> None:
+            self.shown = True
+
+    class Launch:
+        chrome_pid = 456
+        debugger_address = "127.0.0.1:9333"
+
+        def __init__(self) -> None:
+            self.page = Page()
+            self.detached = False
+
+        def detach(self) -> None:
+            self.detached = True
+
+    launch = Launch()
+    monkeypatch.setattr(cli, "launch_managed_chrome", lambda _root: launch)
+
+    assert cli._gemini_web_show(run) == 0
+
+    metadata = GeminiSessionRegistry(
+        tmp_path / ".local" / "gemini_operator_session.json"
+    ).load()
+    assert metadata is not None
+    assert metadata.run_id == run.name
+    assert metadata.chrome_pid == 456
     assert launch.page.shown is True
     assert launch.detached is True
 

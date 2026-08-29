@@ -10,6 +10,7 @@ from selenium.common.exceptions import (
     StaleElementReferenceException,
 )
 
+import anime_review_mvp.gemini_selenium as gemini_selenium
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_operator import OperatorPolicy
 from anime_review_mvp.gemini_selenium import (
@@ -24,6 +25,7 @@ from anime_review_mvp.gemini_selenium import (
     build_chrome_command,
     run_gemini_session,
 )
+from anime_review_mvp.gemini_session import GeminiSessionMetadata
 from anime_review_mvp.gemini_web import account_sha256
 
 
@@ -179,9 +181,17 @@ def test_second_browser_session_cannot_take_same_profile_lock(tmp_path: Path) ->
 
 
 def test_chrome_launch_detach_keeps_browser_process_alive(tmp_path: Path) -> None:
+    class Service:
+        def __init__(self) -> None:
+            self.stop_calls = 0
+
+        def stop(self) -> None:
+            self.stop_calls += 1
+
     class Driver:
         def __init__(self) -> None:
             self.quit_calls = 0
+            self.service = Service()
 
         def quit(self) -> None:
             self.quit_calls += 1
@@ -208,11 +218,12 @@ def test_chrome_launch_detach_keeps_browser_process_alive(tmp_path: Path) -> Non
 
     launch.detach()
 
-    assert driver.quit_calls == 1
+    assert driver.quit_calls == 0
+    assert driver.service.stop_calls == 1
     assert process.terminated is False
 
     launch.close()
-    assert driver.quit_calls == 1
+    assert driver.quit_calls == 0
     assert process.terminated is True
 
 
@@ -246,6 +257,45 @@ def test_show_restores_latest_operator_window() -> None:
     assert driver.switch_to.selected == "operator"
     assert driver.maximize_calls == 1
     assert driver.focus_calls == 1
+
+
+def test_ensure_managed_chrome_visible_reopens_background_only_operator(
+    tmp_path: Path,
+) -> None:
+    metadata = GeminiSessionMetadata(
+        "run-123",
+        26300,
+        "127.0.0.1:64451",
+        None,
+        "2026-08-30T12:00:00+00:00",
+        {},
+    )
+    handles = iter((None, None, 9001))
+    spawned: list[list[str]] = []
+    restored: list[int] = []
+
+    handle = gemini_selenium.ensure_managed_chrome_visible(
+        tmp_path,
+        metadata,
+        chrome_path=Path("C:/Program Files/Google/Chrome/Application/chrome.exe"),
+        timeout_seconds=1,
+        find_window=lambda _pid: next(handles),
+        spawn=lambda command: spawned.append(command),
+        restore_window=lambda value: restored.append(value),
+        sleep=lambda _seconds: None,
+    )
+
+    assert handle == 9001
+    assert spawned == [
+        [
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            "--remote-debugging-port=64451",
+            f"--user-data-dir={tmp_path / '.local' / 'gemini_ultra_chrome'}",
+            "--new-window",
+            "https://gemini.google.com/app",
+        ]
+    ]
+    assert restored == [9001]
 
 
 def test_session_rejects_model_label_not_confirmed_by_dom(tmp_path: Path) -> None:

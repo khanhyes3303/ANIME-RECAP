@@ -6,6 +6,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -216,14 +217,21 @@ class ChromeLaunch:
 
     def detach(self) -> None:
         if not self._driver_closed:
-            self.page.driver.quit()
+            # DELETE /session closes every attached Chrome window. Stopping only
+            # ChromeDriver releases automation while preserving the user's
+            # visible Gemini window and its signed-in profile.
+            self.page.driver.service.stop()
             self._driver_closed = True
         if self.profile_lock is not None:
             self.profile_lock.release()
 
     def close(self) -> None:
         try:
-            self.detach()
+            if not self._driver_closed:
+                self.page.driver.quit()
+                self._driver_closed = True
+            if self.profile_lock is not None:
+                self.profile_lock.release()
         finally:
             if self.process is not None and self.process.poll() is None:
                 self.process.terminate()
@@ -293,6 +301,78 @@ def connect_managed_chrome(metadata: GeminiSessionMetadata) -> ChromeLaunch:
         metadata.chrome_pid,
         metadata.debugger_address,
     )
+
+
+def _windows_visible_window_handle(pid: int) -> int | None:
+    if sys.platform != "win32":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    handles: list[int] = []
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    @callback_type
+    def collect(hwnd: int, _lparam: int) -> bool:
+        window_pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(window_pid))
+        if window_pid.value == pid and user32.IsWindowVisible(hwnd):
+            handles.append(int(hwnd))
+        return True
+
+    user32.EnumWindows(collect, 0)
+    return handles[-1] if handles else None
+
+
+def _restore_windows_window(handle: int) -> None:
+    import ctypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.ShowWindowAsync(handle, 9)  # SW_RESTORE
+    user32.BringWindowToTop(handle)
+    user32.SetForegroundWindow(handle)
+
+
+def ensure_managed_chrome_visible(
+    project_root: Path,
+    metadata: GeminiSessionMetadata,
+    *,
+    chrome_path: Path | None = None,
+    timeout_seconds: float = 10.0,
+    find_window: Callable[[int], int | None] = _windows_visible_window_handle,
+    spawn: Callable[[list[str]], object] = subprocess.Popen,
+    restore_window: Callable[[int], None] = _restore_windows_window,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    """Restore the real operator HWND, reopening it when Chrome is background-only."""
+    handle = find_window(metadata.chrome_pid)
+    if handle is None:
+        try:
+            port = int(metadata.debugger_address.rsplit(":", 1)[1])
+        except (IndexError, ValueError) as exc:
+            raise GeminiBrowserError(
+                "BROWSER_START_FAILED", "Gemini debugger address is invalid"
+            ) from exc
+        command = build_chrome_command(
+            chrome_path or locate_chrome(),
+            project_root.resolve() / ".local" / "gemini_ultra_chrome",
+            port,
+        )
+        spawn(command)
+
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while handle is None and time.monotonic() <= deadline:
+        handle = find_window(metadata.chrome_pid)
+        if handle is None:
+            sleep(0.1)
+    if handle is None:
+        raise GeminiBrowserError(
+            "BROWSER_START_FAILED",
+            "Chrome operator is running in background but has no visible Windows window",
+        )
+    restore_window(handle)
+    return handle
 
 
 def _masked_email(email: str) -> str:
