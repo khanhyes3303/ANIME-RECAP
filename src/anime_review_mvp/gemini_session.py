@@ -12,6 +12,16 @@ from .errors import MvpError
 
 
 @dataclass(frozen=True, slots=True)
+class BrowserTurn:
+    index: int
+    prompt_sha256: str
+    response_sha256: str
+    conversation_url: str
+    started_at: str
+    finished_at: str
+
+
+@dataclass(frozen=True, slots=True)
 class GeminiSessionMetadata:
     run_id: str
     chrome_pid: int
