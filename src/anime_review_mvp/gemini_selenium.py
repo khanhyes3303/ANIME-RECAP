@@ -18,7 +18,11 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import (
+    NoSuchElementException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -303,7 +307,7 @@ class SeleniumGeminiPage:
                 )
                 element.click()
                 return element
-            except TimeoutException:
+            except (StaleElementReferenceException, TimeoutException):
                 continue
         raise GeminiBrowserError(code, f"Gemini element was not found: {code}")
 
@@ -313,7 +317,7 @@ class SeleniumGeminiPage:
                 return WebDriverWait(self.driver, 3).until(
                     expected.visibility_of_element_located(selector)
                 )
-            except TimeoutException:
+            except (StaleElementReferenceException, TimeoutException):
                 continue
         raise GeminiBrowserError(code, f"Gemini element was not found: {code}")
 
@@ -369,18 +373,25 @@ class SeleniumGeminiPage:
                 body = None
 
             if body is not None:
-                details: list[str] = [str(getattr(body, "text", ""))]
-                if account_element is not None:
-                    details.extend(
-                        str(getattr(account_element, attribute, ""))
-                        for attribute in ("text",)
-                    )
-                    get_attribute = getattr(account_element, "get_attribute", None)
-                    if callable(get_attribute):
+                try:
+                    details: list[str] = [str(getattr(body, "text", ""))]
+                    if account_element is not None:
                         details.extend(
-                            str(get_attribute(attribute) or "")
-                            for attribute in ("aria-label", "data-email", "title")
+                            str(getattr(account_element, attribute, ""))
+                            for attribute in ("text",)
                         )
+                        get_attribute = getattr(account_element, "get_attribute", None)
+                        if callable(get_attribute):
+                            details.extend(
+                                str(get_attribute(attribute) or "")
+                                for attribute in ("aria-label", "data-email", "title")
+                            )
+                except StaleElementReferenceException:
+                    # Gemini frequently replaces the account control while its
+                    # menu opens. Drop the old reference and let the next poll
+                    # locate the current DOM node.
+                    account_element = None
+                    continue
                 text = "\n".join(details)
                 match = re.search(
                     r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, re.IGNORECASE

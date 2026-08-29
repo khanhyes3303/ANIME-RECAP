@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from selenium.common.exceptions import StaleElementReferenceException
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_operator import OperatorPolicy
@@ -281,6 +282,57 @@ def test_account_verification_accepts_generic_account_aria_label() -> None:
     assert result.account_sha256 == account_sha256("nguyenkhanh@example.com")
     assert result.account_hint == "n***@example.com"
     assert result.plan_label == "Google AI Ultra"
+
+
+def test_account_verification_recovers_when_account_control_is_rerendered() -> None:
+    class Element:
+        def __init__(self, *, text: str = "", aria: str = "", stale: bool = False) -> None:
+            self._text = text
+            self.aria = aria
+            self.stale = stale
+
+        @property
+        def text(self) -> str:
+            if self.stale:
+                raise StaleElementReferenceException("account control was replaced")
+            return self._text
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def get_attribute(self, name: str) -> str:
+            if self.stale:
+                raise StaleElementReferenceException("account control was replaced")
+            return self.aria if name == "aria-label" else ""
+
+    class Driver:
+        current_url = "https://gemini.google.com/app"
+
+        def __init__(self) -> None:
+            self.account_calls = 0
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and "account" in selector.casefold():
+                self.account_calls += 1
+                return Element(aria="Account menu", stale=self.account_calls == 1)
+            if selector == "body":
+                return Element(text="Signed in: nguyenkhanh@example.com\nGoogle AI Ultra")
+            raise AssertionError(f"unexpected selector: {kind} {selector}")
+
+    driver = Driver()
+    page = SeleniumGeminiPage(driver, account_wait_seconds=0.2)
+
+    result = page.verify_account()
+
+    assert result.account_sha256 == account_sha256("nguyenkhanh@example.com")
+    assert result.plan_label == "Google AI Ultra"
+    assert driver.account_calls >= 2
 
 
 def test_wait_until_ready_reads_manual_model_and_mode_without_selecting() -> None:
