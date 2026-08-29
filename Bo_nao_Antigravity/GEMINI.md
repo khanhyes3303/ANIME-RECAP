@@ -22,15 +22,21 @@ Anh, không BGM, caption, speed, freeze, loop hoặc time-stretch.
 
 Mọi kiểm định script, proxy và final phải đi qua lệnh `gemini-web run` của engine,
 được điều khiển bằng Chrome hiển thị tại `https://gemini.google.com`. Dùng một profile
-Chrome riêng cho dự án.
-Người dùng tự đăng nhập đúng tài khoản Google AI Ultra ở lần đầu; không đọc, ghi,
-copy hoặc lưu password/cookie. Không dùng Gemini API, MCP, tài khoản thường, model
-thấp hơn hoặc fallback.
+Chrome riêng cho dự án. Operator mở hoặc nối lại đúng cửa sổ này và giữ nó sống trong
+suốt một tập.
+Người dùng tự đăng nhập đúng tài khoản Google AI Ultra và **người dùng tự chọn** model
+`3.7 Flash` cùng mode `Tư duy mở rộng`; operator chỉ đọc DOM để xác nhận, không tự bấm
+đổi model/mode. Không đọc, ghi, copy hoặc lưu password/cookie. Không dùng Gemini API,
+MCP, tài khoản thường, model thấp hơn hoặc fallback.
 
-Engine tự mở chat mới, xác nhận account fingerprint khớp binding, kiểm tra plan Ultra và
-chọn chính xác model `3.7 Flash` cùng mode `Tư duy mở rộng`. Nếu thiếu một điều kiện,
-CAPTCHA, upload lỗi hoặc mất đăng nhập, dừng ở `CAN_CON_NGUOI_XU_LY`; không tự đoán và
-không báo PASS. Gemini phải trả JSON-only theo request.
+Phase đầu mở một chat; SCRIPT/PROXY/FINAL tiếp tục **cùng một chat** và cùng
+conversation URL. Nếu Gemini cần sửa JSON, bổ sung bằng chứng hoặc giải thích mismatch,
+Antigravity phải tạo prompt trong run rồi gọi `gemini-web continue --run <run_dir>
+--phase <phase> --prompt-file <prompt_file>`; tối đa sáu lượt mỗi phase. Không tự sửa
+phản hồi của Gemini và không tạo chat mới cho follow-up. Nếu thiếu account/model/mode,
+CAPTCHA, upload lỗi hoặc mất đăng nhập, dừng ở `CAN_CON_NGUOI_XU_LY` và giữ cửa sổ mở
+để người dùng xử lý; không tự đoán và không báo PASS. Gemini phải trả JSON-only theo
+request.
 
 `gemini_web/<phase>/request.json` là danh sách nguồn duy nhất: upload đúng
 `artifact_path` và mọi file trong `evidence_paths`, không lấy ảnh từ phase/run khác.
@@ -111,6 +117,13 @@ uv run python run_episode.py gemini-web run --run "<run_dir>" --phase proxy
 uv run python run_episode.py render --run "<run_dir>" --quality final
 uv run python run_episode.py gemini-web run --run "<run_dir>" --phase final
 uv run python run_episode.py audit --run "<run_dir>" --phase engine
+```
+
+Khi cần trao đổi lại với Gemini trong cùng chat, dùng `gemini-web continue` theo chỉ
+dẫn `next_action.json`. Sau khi phase FINAL và engine audit đạt, dọn Chrome bằng:
+
+```powershell
+uv run python run_episode.py gemini-web stop --run "<run_dir>"
 ```
 
 Chỉ chạy lệnh phù hợp stage hiện tại; run có thể đã prepare trước. Nếu validation ghi

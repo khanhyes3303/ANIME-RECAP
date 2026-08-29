@@ -17,6 +17,7 @@ from anime_review_mvp.gemini_operator import (
     verify_operator_receipt,
 )
 from anime_review_mvp.gemini_packets import GeminiBrowserPacket
+from anime_review_mvp.gemini_selenium import BrowserConversationResult, BrowserTurn
 from anime_review_mvp.gemini_web import (
     GeminiUltraProfileBinding,
     load_operator_verified_review,
@@ -88,20 +89,40 @@ def _runner(run: Path, response: str):
         screenshot = run / "gemini_web" / "script" / "screenshots" / "session.png"
         screenshot.parent.mkdir(parents=True, exist_ok=True)
         Image.effect_noise((1280, 720), 64).convert("RGB").save(screenshot)
-        return (
-            BrowserObservation(
-                account_sha256="a" * 64,
-                account_hint="k***@gmail.com",
-                plan_label="Google AI Ultra",
-                model_label="3.7 Flash",
-                mode_label="Tư duy mở rộng",
-                conversation_url="https://gemini.google.com/app/chat-123",
-                chrome_pid=321,
-                screenshot_path=str(screenshot.resolve()),
-                started_at="2026-08-29T21:00:00+07:00",
-                finished_at="2026-08-29T21:00:10+07:00",
+        observation = BrowserObservation(
+            account_sha256="a" * 64,
+            account_hint="k***@gmail.com",
+            plan_label="Google AI Ultra",
+            model_label="3.7 Flash",
+            mode_label="Tư duy mở rộng",
+            conversation_url="https://gemini.google.com/app/chat-123",
+            chrome_pid=321,
+            screenshot_path=str(screenshot.resolve()),
+            started_at="2026-08-29T21:00:00+07:00",
+            finished_at="2026-08-29T21:00:10+07:00",
+        )
+        run.joinpath("gemini_web", "session.json").write_text(
+            json.dumps(
+                {
+                    "run_id": run.name,
+                    "conversation_url": observation.conversation_url,
+                }
             ),
+            encoding="utf-8",
+        )
+        return BrowserConversationResult(
+            observation,
             response,
+            (
+                BrowserTurn(
+                    1,
+                    "1" * 64,
+                    "2" * 64,
+                    observation.conversation_url,
+                    observation.started_at,
+                    observation.finished_at,
+                ),
+            ),
         )
 
     return execute
@@ -136,6 +157,8 @@ def test_operator_parses_real_response_then_signs_ledger(tmp_path: Path) -> None
     raw = json.loads(Path(receipt.raw_response_path).read_text(encoding="utf-8"))
     critic = json.loads(Path(receipt.critic_path).read_text(encoding="utf-8"))
     assert raw["dom_text"] == _response()
+    assert raw["turns"][0]["index"] == 1
+    assert receipt.turns[0].conversation_url.endswith("chat-123")
     assert raw != critic
     assert critic["beat_reviews"][0]["beat_id"] == "beat-001"
 

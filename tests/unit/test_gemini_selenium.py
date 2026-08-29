@@ -9,7 +9,13 @@ from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_operator import OperatorPolicy
 from anime_review_mvp.gemini_selenium import (
     AccountObservation,
+    BrowserConversationResult,
+    BrowserReadiness,
+    BrowserTurn,
+    ChromeLaunch,
+    GeminiBrowserError,
     ManagedProfileLock,
+    SeleniumGeminiPage,
     build_chrome_command,
     run_gemini_session,
 )
@@ -152,6 +158,44 @@ def test_second_browser_session_cannot_take_same_profile_lock(tmp_path: Path) ->
         first.release()
 
 
+def test_chrome_launch_detach_keeps_browser_process_alive(tmp_path: Path) -> None:
+    class Driver:
+        def __init__(self) -> None:
+            self.quit_calls = 0
+
+        def quit(self) -> None:
+            self.quit_calls += 1
+
+    class Page:
+        def __init__(self, driver: Driver) -> None:
+            self.driver = driver
+
+    class Process:
+        pid = 123
+
+        def __init__(self) -> None:
+            self.terminated = False
+
+        def poll(self) -> None:
+            return None if not self.terminated else 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+    driver = Driver()
+    process = Process()
+    launch = ChromeLaunch(Page(driver), process, process.pid, "127.0.0.1:9222")
+
+    launch.detach()
+
+    assert driver.quit_calls == 1
+    assert process.terminated is False
+
+    launch.close()
+    assert driver.quit_calls == 1
+    assert process.terminated is True
+
+
 def test_session_rejects_model_label_not_confirmed_by_dom(tmp_path: Path) -> None:
     class WrongModelPage(RecordingPage):
         def select_model(self, label: str) -> str:
@@ -198,3 +242,225 @@ def test_session_rejects_bare_app_url(tmp_path: Path) -> None:
 
     with pytest.raises(MvpError, match="conversation URL"):
         _run_page(tmp_path, BareUrlPage(tmp_path / "session.png"), (upload,))
+
+
+def test_account_verification_accepts_generic_account_aria_label() -> None:
+    class Element:
+        text = ""
+
+        def __init__(self, *, text: str = "", aria: str = "") -> None:
+            self.text = text
+            self.aria = aria
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def get_attribute(self, name: str) -> str:
+            return self.aria if name == "aria-label" else ""
+
+    class Driver:
+        current_url = "https://gemini.google.com/app"
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and "account" in selector.casefold():
+                return Element(aria="Account menu")
+            if selector == "body":
+                return Element(text="Signed in: nguyenkhanh@example.com\nGoogle AI Ultra")
+            raise AssertionError(f"unexpected selector: {kind} {selector}")
+
+    page = SeleniumGeminiPage(Driver())
+
+    result = page.verify_account()
+
+    assert result.account_sha256 == account_sha256("nguyenkhanh@example.com")
+    assert result.account_hint == "n***@example.com"
+    assert result.plan_label == "Google AI Ultra"
+
+
+def test_wait_until_ready_reads_manual_model_and_mode_without_selecting() -> None:
+    class Element:
+        def __init__(
+            self,
+            *,
+            text: str = "",
+            aria: str = "",
+            selected: str = "true",
+        ) -> None:
+            self.text = text
+            self.aria = aria
+            self.selected = selected
+            self.clicked = False
+
+        def click(self) -> None:
+            self.clicked = True
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def get_attribute(self, name: str) -> str:
+            return {
+                "aria-label": self.aria,
+                "aria-selected": self.selected,
+                "aria-checked": self.selected,
+            }.get(name, "")
+
+    class Driver:
+        current_url = "https://gemini.google.com/app"
+
+        def __init__(self) -> None:
+            self.account = Element(aria="Account menu")
+            self.model = Element(text="3.7 Flash", aria="3.7 Flash")
+            self.mode = Element(text="Tư duy mở rộng", aria="Tư duy mở rộng")
+            self.menu_clicks = 0
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and "account" in selector.casefold():
+                return self.account
+            if selector == "body":
+                return Element(
+                    text=(
+                        "Signed in: nguyenkhanh@example.com\n"
+                        "Google AI Ultra\n3.7 Flash\nTư duy mở rộng"
+                    )
+                )
+            raise AssertionError(f"unexpected selector: {kind} {selector}")
+
+        def find_elements(self, kind: str, selector: str) -> list[Element]:
+            if kind == "xpath" or kind == "css selector":
+                return [self.model, self.mode]
+            return []
+
+    driver = Driver()
+    result = SeleniumGeminiPage(driver, account_wait_seconds=0.1).wait_until_ready(
+        OperatorPolicy.required()
+    )
+
+    assert isinstance(result, BrowserReadiness)
+    assert result.account.account_sha256 == account_sha256("nguyenkhanh@example.com")
+    assert result.model_label == "3.7 Flash"
+    assert result.mode_label == "Tư duy mở rộng"
+    assert driver.menu_clicks == 0
+
+
+def test_wait_until_ready_rejects_wrong_manual_model() -> None:
+    class Element:
+        text = ""
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def get_attribute(self, name: str) -> str:
+            return "Account menu" if name == "aria-label" else ""
+
+    class Driver:
+        current_url = "https://gemini.google.com/app"
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and "account" in selector.casefold():
+                return Element()
+            if selector == "body":
+                element = Element()
+                element.text = (
+                    "Signed in: nguyenkhanh@example.com\nGoogle AI Ultra\n"
+                    "2.5 Pro\nTư duy mở rộng"
+                )
+                return element
+            raise AssertionError(f"unexpected selector: {kind} {selector}")
+
+        def find_elements(self, kind: str, selector: str) -> list[Element]:
+            return []
+
+    page = SeleniumGeminiPage(Driver(), account_wait_seconds=0.0)
+    with pytest.raises(GeminiBrowserError, match="model"):
+        page.wait_until_ready(OperatorPolicy.required())
+
+
+def test_session_resumes_existing_conversation_and_records_turn(tmp_path: Path) -> None:
+    class Page:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def open_new_chat(self) -> None:
+            self.events.append("new")
+
+        def open_conversation(self, url: str) -> None:
+            self.events.append(f"resume:{url}")
+
+        def wait_until_ready(self, policy: OperatorPolicy) -> BrowserReadiness:
+            self.events.append("ready")
+            return BrowserReadiness(
+                AccountObservation(
+                    account_sha256("nguyenkhanh@example.com"),
+                    "n***@example.com",
+                    "Google AI Ultra",
+                ),
+                policy.model_label,
+                policy.mode_label,
+            )
+
+        def upload(self, paths: tuple[Path, ...]) -> None:
+            self.events.append(f"upload:{len(paths)}")
+
+        def send_prompt(self, prompt: str) -> None:
+            self.events.append(f"send:{prompt}")
+
+        def wait_for_response(self) -> str:
+            self.events.append("wait")
+            return '{"phase":"SCRIPT"}'
+
+        def read_conversation_url(self) -> str:
+            return "https://gemini.google.com/app/chat-123"
+
+        def save_screenshot(self, path: Path) -> None:
+            Image.effect_noise((1280, 720), 64).convert("RGB").save(path)
+
+    upload = tmp_path / "packet.json"
+    upload.write_text("{}", encoding="utf-8")
+    page = Page()
+    first = run_gemini_session(
+        page,
+        policy=OperatorPolicy.required(),
+        account_hint="n***@example.com",
+        expected_account_sha256=account_sha256("nguyenkhanh@example.com"),
+        upload_paths=(upload,),
+        prompt="first",
+        screenshot_path=tmp_path / "session-1.png",
+        chrome_pid=123,
+    )
+    second = run_gemini_session(
+        page,
+        policy=OperatorPolicy.required(),
+        account_hint="n***@example.com",
+        expected_account_sha256=account_sha256("nguyenkhanh@example.com"),
+        upload_paths=(upload,),
+        prompt="second",
+        screenshot_path=tmp_path / "session-2.png",
+        chrome_pid=123,
+        conversation_url=first.observation.conversation_url,
+    )
+
+    assert isinstance(first, BrowserConversationResult)
+    assert isinstance(first.turns[0], BrowserTurn)
+    assert [event for event in page.events if event in {"new", "ready"}] == [
+        "new",
+        "ready",
+        "ready",
+    ]
+    assert "resume:https://gemini.google.com/app/chat-123" in page.events
+    assert second.observation.conversation_url == first.observation.conversation_url
+    assert first.turns[0].prompt_sha256

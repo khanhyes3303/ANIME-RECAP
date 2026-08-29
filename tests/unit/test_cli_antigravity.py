@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from anime_review_mvp import cli
+from anime_review_mvp.errors import MvpError
+from anime_review_mvp.gemini_session import GeminiSessionMetadata, GeminiSessionRegistry
 from anime_review_mvp.gemini_web import account_sha256
 from anime_review_mvp.jsonio import dump_json
 from anime_review_mvp.models import (
@@ -201,6 +203,88 @@ def test_gemini_web_parser_requires_action_run_and_phase() -> None:
     )
 
     assert (args.action, args.phase) == ("run", "final")
+
+
+def test_gemini_web_parser_accepts_continue_and_stop() -> None:
+    continue_args = cli._parser().parse_args(
+        [
+            "gemini-web",
+            "continue",
+            "--run",
+            "run",
+            "--phase",
+            "script",
+            "--prompt-file",
+            "feedback.txt",
+        ]
+    )
+    stop_args = cli._parser().parse_args(["gemini-web", "stop", "--run", "run"])
+
+    assert (continue_args.action, continue_args.prompt_file.name) == (
+        "continue",
+        "feedback.txt",
+    )
+    assert stop_args.action == "stop"
+
+
+def test_gemini_web_continue_rejects_prompt_outside_run(tmp_path: Path) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+    prompt = tmp_path / "outside-feedback.txt"
+    prompt.write_text("repair", encoding="utf-8")
+
+    with pytest.raises(MvpError, match="outside"):
+        cli._gemini_web_continue(run, "script", prompt)
+
+
+def test_gemini_web_stop_without_session_is_noop(tmp_path: Path) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+
+    assert cli._gemini_web_stop(run) == 0
+
+
+def test_final_gemini_web_pass_cleans_registered_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+    new_state(run, stage=Stage.CHO_GEMINI_FINAL)
+    calls: list[Path] = []
+    monkeypatch.setattr(cli, "run_operator_phase", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli, "_accept_operator_review", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(cli, "_gemini_web_stop", lambda path: calls.append(path) or 0)
+
+    assert cli._gemini_web_run(run, "final") == 0
+    assert calls == [run]
+
+
+def test_gemini_web_stop_closes_process_and_clears_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+    registry = GeminiSessionRegistry(tmp_path / ".local" / "gemini_operator_session.json")
+    registry.save(
+        GeminiSessionMetadata(
+            run.name,
+            123,
+            "127.0.0.1:9222",
+            "https://gemini.google.com/app/chat-123",
+            "2026-08-30T12:00:00+00:00",
+            {},
+        )
+    )
+
+    class Launch:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    launch = Launch()
+    monkeypatch.setattr(cli, "connect_managed_chrome", lambda _metadata: launch)
+
+    assert cli._gemini_web_stop(run) == 0
+    assert launch.closed is True
+    assert not registry.path.exists()
 
 
 def test_gemini_web_enroll_hashes_email_without_persisting_plaintext(

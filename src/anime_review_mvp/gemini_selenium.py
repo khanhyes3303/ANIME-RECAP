@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -10,7 +11,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
@@ -27,6 +28,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from .errors import MvpError
 from .gemini_operator import BrowserObservation, OperatorPolicy
+from .gemini_session import BrowserTurn, GeminiSessionMetadata
 from .gemini_web import account_sha256
 
 GEMINI_URL = "https://gemini.google.com/app"
@@ -48,6 +50,17 @@ RESPONSE_SELECTORS = (
     (By.CSS_SELECTOR, "div[data-test-id='response-content']"),
 )
 
+# Gemini changes the account control's element type and localized label across
+# releases. Keep these selectors deliberately broad, then require the account
+# email and Ultra plan to be visible before accepting the session.
+ACCOUNT_SELECTORS = (
+    (By.CSS_SELECTOR, "[aria-label*='account' i]"),
+    (By.CSS_SELECTOR, "[aria-label*='tài khoản' i]"),
+    (By.CSS_SELECTOR, "button[aria-label*='Google Account' i]"),
+    (By.CSS_SELECTOR, "a[aria-label*='Tài khoản Google' i]"),
+    (By.CSS_SELECTOR, "[data-email]"),
+)
+
 
 class GeminiBrowserError(MvpError):
     def __init__(self, code: str, message: str) -> None:
@@ -62,10 +75,33 @@ class AccountObservation:
     plan_label: str
 
 
+@dataclass(frozen=True, slots=True)
+class BrowserReadiness:
+    account: AccountObservation
+    model_label: str
+    mode_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserConversationResult:
+    observation: BrowserObservation
+    response: str
+    turns: tuple[BrowserTurn, ...]
+
+    def __iter__(self):
+        """Keep tuple-unpacking compatibility for existing callers."""
+        yield self.observation
+        yield self.response
+
+
 class GeminiPage(Protocol):
     def open_new_chat(self) -> None: ...
 
     def verify_account(self) -> AccountObservation: ...
+
+    def wait_until_ready(self, policy: OperatorPolicy) -> BrowserReadiness: ...
+
+    def open_conversation(self, url: str) -> None: ...
 
     def select_model(self, label: str) -> str: ...
 
@@ -155,18 +191,25 @@ def _reserve_local_port() -> int:
 @dataclass(slots=True)
 class ChromeLaunch:
     page: SeleniumGeminiPage
-    process: subprocess.Popen[bytes]
+    process: subprocess.Popen[bytes] | None
     chrome_pid: int
     debugger_address: str
-    profile_lock: ManagedProfileLock
+    profile_lock: ManagedProfileLock | None = None
+    _driver_closed: bool = field(default=False, init=False, repr=False)
+
+    def detach(self) -> None:
+        if not self._driver_closed:
+            self.page.driver.quit()
+            self._driver_closed = True
+        if self.profile_lock is not None:
+            self.profile_lock.release()
 
     def close(self) -> None:
         try:
-            self.page.driver.quit()
+            self.detach()
         finally:
-            if self.process.poll() is None:
+            if self.process is not None and self.process.poll() is None:
                 self.process.terminate()
-            self.profile_lock.release()
 
 
 def launch_managed_chrome(
@@ -217,15 +260,40 @@ def launch_managed_chrome(
         raise
 
 
+def connect_managed_chrome(metadata: GeminiSessionMetadata) -> ChromeLaunch:
+    """Attach Selenium to an existing visible Chrome owned by the registry."""
+    options = Options()
+    options.debugger_address = metadata.debugger_address
+    try:
+        driver = webdriver.Chrome(options=options)
+    except Exception as exc:
+        raise GeminiBrowserError(
+            "BROWSER_START_FAILED", "Could not attach to managed Gemini Chrome"
+        ) from exc
+    return ChromeLaunch(
+        SeleniumGeminiPage(driver),
+        None,
+        metadata.chrome_pid,
+        metadata.debugger_address,
+    )
+
+
 def _masked_email(email: str) -> str:
     local, domain = email.casefold().split("@", 1)
     return f"{local[:1]}***@{domain}"
 
 
 class SeleniumGeminiPage:
-    def __init__(self, driver: WebDriver, *, timeout_seconds: float = 30.0) -> None:
+    def __init__(
+        self,
+        driver: WebDriver,
+        *,
+        timeout_seconds: float = 30.0,
+        account_wait_seconds: float = 180.0,
+    ) -> None:
         self.driver = driver
         self._wait = WebDriverWait(driver, timeout_seconds)
+        self._account_wait_seconds = max(0.0, account_wait_seconds)
 
     def _click_first(self, selectors: tuple[tuple[str, str], ...], code: str) -> object:
         for selector in selectors:
@@ -249,29 +317,147 @@ class SeleniumGeminiPage:
                 continue
         raise GeminiBrowserError(code, f"Gemini element was not found: {code}")
 
+    def _try_click_first(
+        self,
+        selectors: tuple[tuple[str, str], ...],
+        *,
+        timeout_seconds: float = 0.75,
+    ) -> object | None:
+        """Click the first currently available selector without blocking a poll."""
+        for selector in selectors:
+            try:
+                element = WebDriverWait(self.driver, timeout_seconds).until(
+                    expected.element_to_be_clickable(selector)
+                )
+                element.click()
+                return element
+            except TimeoutException:
+                continue
+        return None
+
     def open_new_chat(self) -> None:
         self.driver.get(GEMINI_URL)
         self._wait.until(lambda driver: driver.current_url.startswith(GEMINI_URL))
 
+    def open_conversation(self, url: str) -> None:
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc != "gemini.google.com"
+            or not parsed.path.startswith("/app/")
+            or parsed.path.rstrip("/") == "/app"
+        ):
+            raise GeminiBrowserError("INVALID_EVIDENCE", "Gemini conversation URL is invalid")
+        self.driver.get(url)
+        self._wait.until(lambda driver: driver.current_url.startswith(url))
+
     def verify_account(self) -> AccountObservation:
+        # A managed Chrome profile may need a one-time interactive login. Keep
+        # that window alive while polling instead of failing after three
+        # seconds and closing it before the user can act.
+        deadline = time.monotonic() + self._account_wait_seconds
+        account_element: object | None = None
+        last_error = "Signed-in Google email and Ultra plan are not visible"
+        while True:
+            if account_element is None:
+                account_element = self._try_click_first(ACCOUNT_SELECTORS)
+            try:
+                body = WebDriverWait(self.driver, 1).until(
+                    expected.visibility_of_element_located((By.TAG_NAME, "body"))
+                )
+            except TimeoutException:
+                body = None
+
+            if body is not None:
+                details: list[str] = [str(getattr(body, "text", ""))]
+                if account_element is not None:
+                    details.extend(
+                        str(getattr(account_element, attribute, ""))
+                        for attribute in ("text",)
+                    )
+                    get_attribute = getattr(account_element, "get_attribute", None)
+                    if callable(get_attribute):
+                        details.extend(
+                            str(get_attribute(attribute) or "")
+                            for attribute in ("aria-label", "data-email", "title")
+                        )
+                text = "\n".join(details)
+                match = re.search(
+                    r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, re.IGNORECASE
+                )
+                plan = next(
+                    (line.strip() for line in text.splitlines() if "ultra" in line.casefold()),
+                    "",
+                )
+                if match is not None and plan:
+                    email = match.group(0)
+                    return AccountObservation(
+                        account_sha256(email), _masked_email(email), plan
+                    )
+                if match is not None:
+                    last_error = "Google AI Ultra plan is not visible"
+                elif account_element is not None:
+                    last_error = "Signed-in Google email is not visible"
+
+            if time.monotonic() >= deadline:
+                code = "ACCOUNT_MISMATCH" if "Ultra" in last_error else "LOGIN_REQUIRED"
+                raise GeminiBrowserError(code, last_error)
+            time.sleep(0.25)
+
+    def _visible_dom_text(self) -> str:
+        values: list[str] = []
+        try:
+            body = self.driver.find_element(By.TAG_NAME, "body")
+            values.append(str(getattr(body, "text", "")))
+        except (NoSuchElementException, TimeoutException):
+            pass
         selectors = (
-            (By.CSS_SELECTOR, "button[aria-label*='Tài khoản Google']"),
-            (By.CSS_SELECTOR, "button[aria-label*='Google Account']"),
-            (By.CSS_SELECTOR, "a[aria-label*='Tài khoản Google']"),
+            (By.CSS_SELECTOR, "button"),
+            (By.CSS_SELECTOR, "[role='button']"),
+            (By.CSS_SELECTOR, "[role='menuitem']"),
+            (By.CSS_SELECTOR, "[role='option']"),
+            (By.CSS_SELECTOR, "[aria-selected='true']"),
+            (By.CSS_SELECTOR, "[aria-checked='true']"),
         )
-        self._click_first(selectors, "LOGIN_REQUIRED")
-        body = self._wait.until(expected.visibility_of_element_located((By.TAG_NAME, "body")))
-        text = body.text
-        match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, re.IGNORECASE)
-        if match is None:
-            raise GeminiBrowserError("LOGIN_REQUIRED", "Signed-in Google email is not visible")
-        email = match.group(0)
-        plan = next((line.strip() for line in text.splitlines() if "ultra" in line.casefold()), "")
-        if not plan:
-            raise GeminiBrowserError("ACCOUNT_MISMATCH", "Google AI Ultra plan is not visible")
-        result = AccountObservation(account_sha256(email), _masked_email(email), plan)
-        email = ""
-        return result
+        for kind, selector in selectors:
+            for element in self.driver.find_elements(kind, selector):
+                try:
+                    if not element.is_displayed():
+                        continue
+                except AttributeError:
+                    pass
+                values.append(str(getattr(element, "text", "")))
+                get_attribute = getattr(element, "get_attribute", None)
+                if callable(get_attribute):
+                    values.extend(
+                        str(get_attribute(attribute) or "")
+                        for attribute in ("aria-label", "title")
+                    )
+        return "\n".join(values)
+
+    def wait_until_ready(self, policy: OperatorPolicy) -> BrowserReadiness:
+        account = self.verify_account()
+        deadline = time.monotonic() + self._account_wait_seconds
+        expected_model = policy.model_label.casefold()
+        expected_mode = policy.mode_label.casefold()
+        last_text = ""
+        while True:
+            last_text = self._visible_dom_text()
+            folded = last_text.casefold()
+            if expected_model in folded and expected_mode in folded:
+                return BrowserReadiness(account, policy.model_label, policy.mode_label)
+            if time.monotonic() >= deadline:
+                if expected_model not in folded:
+                    raise GeminiBrowserError(
+                        "MODEL_NOT_FOUND",
+                        f"Gemini model is not {policy.model_label}; "
+                        f"observed DOM: {last_text[:240]}",
+                    )
+                raise GeminiBrowserError(
+                    "MODEL_NOT_FOUND",
+                    f"Gemini mode is not {policy.mode_label}; observed DOM: {last_text[:240]}",
+                )
+            time.sleep(0.25)
 
     def _open_model_menu(self) -> None:
         selectors = (
@@ -376,30 +562,46 @@ def run_gemini_session(
     prompt: str,
     screenshot_path: Path,
     chrome_pid: int,
+    conversation_url: str | None = None,
     clock: Callable[[], str] | None = None,
-) -> tuple[BrowserObservation, str]:
+) -> BrowserConversationResult:
     now = clock or (lambda: datetime.now(UTC).isoformat())
     started_at = now()
-    page.open_new_chat()
-    account = page.verify_account()
+    if conversation_url:
+        open_conversation = getattr(page, "open_conversation", None)
+        if not callable(open_conversation):
+            raise GeminiBrowserError("INVALID_EVIDENCE", "Gemini page cannot resume conversation")
+        open_conversation(conversation_url)
+    else:
+        page.open_new_chat()
+    readiness = getattr(page, "wait_until_ready", None)
+    if callable(readiness):
+        observed = readiness(policy)
+        account = observed.account
+        model_label = observed.model_label
+        mode_label = observed.mode_label
+    else:
+        account = page.verify_account()
     if (
         account.account_sha256 != expected_account_sha256
         or account.account_hint != account_hint
     ):
         raise GeminiBrowserError("ACCOUNT_MISMATCH", "Gemini account does not match binding")
-    model_label = page.select_model(policy.model_label)
+    if not callable(readiness):
+        model_label = page.select_model(policy.model_label)
+        mode_label = page.select_mode(policy.mode_label)
     if model_label != policy.model_label:
         raise GeminiBrowserError(
             "MODEL_NOT_FOUND", f"Gemini model must be {policy.model_label}"
         )
-    mode_label = page.select_mode(policy.mode_label)
     if mode_label != policy.mode_label:
         raise GeminiBrowserError(
             "MODEL_NOT_FOUND", f"Gemini mode must be {policy.mode_label}"
         )
-    if not upload_paths or any(not path.is_file() for path in upload_paths):
+    if upload_paths and any(not path.is_file() for path in upload_paths):
         raise GeminiBrowserError("UPLOAD_FAILED", "Gemini upload files are missing")
-    page.upload(upload_paths)
+    if upload_paths:
+        page.upload(upload_paths)
     page.send_prompt(prompt)
     response = page.wait_for_response()
     if not response.strip():
@@ -416,18 +618,24 @@ def run_gemini_session(
         )
     page.save_screenshot(screenshot_path)
     finished_at = now()
-    return (
-        BrowserObservation(
-            account.account_sha256,
-            account.account_hint,
-            account.plan_label,
-            model_label,
-            mode_label,
-            conversation_url,
-            chrome_pid,
-            str(screenshot_path.resolve()),
-            started_at,
-            finished_at,
-        ),
-        response,
+    observation = BrowserObservation(
+        account.account_sha256,
+        account.account_hint,
+        account.plan_label,
+        model_label,
+        mode_label,
+        conversation_url,
+        chrome_pid,
+        str(screenshot_path.resolve()),
+        started_at,
+        finished_at,
     )
+    turn = BrowserTurn(
+        1,
+        hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        hashlib.sha256(response.encode("utf-8")).hexdigest(),
+        conversation_url,
+        started_at,
+        finished_at,
+    )
+    return BrowserConversationResult(observation, response, (turn,))
