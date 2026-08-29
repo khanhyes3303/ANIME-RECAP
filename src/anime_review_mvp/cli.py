@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .antigravity import (
@@ -30,9 +31,11 @@ from .gemini_operator import (
 from .gemini_packets import build_browser_packet
 from .gemini_selenium import (
     GeminiBrowserError,
+    connect_managed_chrome,
     launch_managed_chrome,
     run_gemini_session,
 )
+from .gemini_session import GeminiSessionMetadata, GeminiSessionRegistry
 from .gemini_web import (
     GeminiUltraProfileBinding,
     account_sha256,
@@ -829,6 +832,7 @@ def run_operator_phase(run_dir: Path, phase: str) -> CriticReviewDocument:
     packet = build_browser_packet(run_dir, phase_upper)
     root = _operator_root(run_dir)
     binding = load_profile_binding(root / ".local" / "gemini_ultra_profile.json")
+    registry = GeminiSessionRegistry(root / ".local" / "gemini_operator_session.json")
     ledger = _operator_ledger(run_dir)
     policy = OperatorPolicy.required()
     request = issue_request(
@@ -839,10 +843,29 @@ def run_operator_phase(run_dir: Path, phase: str) -> CriticReviewDocument:
     )
 
     def browser_session(operator_request, browser_packet):
-        launch = launch_managed_chrome(root)
+        metadata = registry.load()
+        if metadata is None:
+            launch = launch_managed_chrome(root)
+            metadata = GeminiSessionMetadata(
+                run_id=run_dir.resolve().name,
+                chrome_pid=launch.chrome_pid,
+                debugger_address=launch.debugger_address,
+                conversation_url=None,
+                started_at=datetime.now(UTC).isoformat(),
+                phase_turns={},
+            )
+            registry.save(metadata)
+        else:
+            metadata = registry.assert_attachable(run_dir.resolve().name)
+            launch = connect_managed_chrome(metadata)
         try:
+            turn_number = registry.increment_turn(
+                run_dir.resolve().name,
+                phase_upper,
+                max_turns=policy.max_turns,
+            )
             prompt = Path(browser_packet.prompt_path).read_text(encoding="utf-8")
-            return run_gemini_session(
+            result = run_gemini_session(
                 launch.page,
                 policy=policy,
                 account_hint=binding.account_hint,
@@ -857,9 +880,25 @@ def run_operator_phase(run_dir: Path, phase: str) -> CriticReviewDocument:
                     / "session.png"
                 ),
                 chrome_pid=launch.chrome_pid,
+                conversation_url=metadata.conversation_url,
             )
+            registry.update_conversation(
+                run_dir.resolve().name,
+                result.observation.conversation_url,
+            )
+            dump_json(
+                run_dir / "gemini_web" / "session.json",
+                {
+                    "run_id": run_dir.resolve().name,
+                    "conversation_url": result.observation.conversation_url,
+                    "phase": phase_upper,
+                    "turn_number": turn_number,
+                    "phase_turns": registry.load().phase_turns,
+                },
+            )
+            return result
         finally:
-            launch.close()
+            launch.detach()
 
     operator = GeminiWebOperator(
         run_dir=run_dir,

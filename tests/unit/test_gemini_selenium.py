@@ -9,7 +9,9 @@ from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_operator import OperatorPolicy
 from anime_review_mvp.gemini_selenium import (
     AccountObservation,
+    BrowserConversationResult,
     BrowserReadiness,
+    BrowserTurn,
     ChromeLaunch,
     GeminiBrowserError,
     ManagedProfileLock,
@@ -386,3 +388,79 @@ def test_wait_until_ready_rejects_wrong_manual_model() -> None:
     page = SeleniumGeminiPage(Driver(), account_wait_seconds=0.0)
     with pytest.raises(GeminiBrowserError, match="model"):
         page.wait_until_ready(OperatorPolicy.required())
+
+
+def test_session_resumes_existing_conversation_and_records_turn(tmp_path: Path) -> None:
+    class Page:
+        def __init__(self) -> None:
+            self.events: list[str] = []
+
+        def open_new_chat(self) -> None:
+            self.events.append("new")
+
+        def open_conversation(self, url: str) -> None:
+            self.events.append(f"resume:{url}")
+
+        def wait_until_ready(self, policy: OperatorPolicy) -> BrowserReadiness:
+            self.events.append("ready")
+            return BrowserReadiness(
+                AccountObservation(
+                    account_sha256("nguyenkhanh@example.com"),
+                    "n***@example.com",
+                    "Google AI Ultra",
+                ),
+                policy.model_label,
+                policy.mode_label,
+            )
+
+        def upload(self, paths: tuple[Path, ...]) -> None:
+            self.events.append(f"upload:{len(paths)}")
+
+        def send_prompt(self, prompt: str) -> None:
+            self.events.append(f"send:{prompt}")
+
+        def wait_for_response(self) -> str:
+            self.events.append("wait")
+            return '{"phase":"SCRIPT"}'
+
+        def read_conversation_url(self) -> str:
+            return "https://gemini.google.com/app/chat-123"
+
+        def save_screenshot(self, path: Path) -> None:
+            Image.effect_noise((1280, 720), 64).convert("RGB").save(path)
+
+    upload = tmp_path / "packet.json"
+    upload.write_text("{}", encoding="utf-8")
+    page = Page()
+    first = run_gemini_session(
+        page,
+        policy=OperatorPolicy.required(),
+        account_hint="n***@example.com",
+        expected_account_sha256=account_sha256("nguyenkhanh@example.com"),
+        upload_paths=(upload,),
+        prompt="first",
+        screenshot_path=tmp_path / "session-1.png",
+        chrome_pid=123,
+    )
+    second = run_gemini_session(
+        page,
+        policy=OperatorPolicy.required(),
+        account_hint="n***@example.com",
+        expected_account_sha256=account_sha256("nguyenkhanh@example.com"),
+        upload_paths=(upload,),
+        prompt="second",
+        screenshot_path=tmp_path / "session-2.png",
+        chrome_pid=123,
+        conversation_url=first.observation.conversation_url,
+    )
+
+    assert isinstance(first, BrowserConversationResult)
+    assert isinstance(first.turns[0], BrowserTurn)
+    assert [event for event in page.events if event in {"new", "ready"}] == [
+        "new",
+        "ready",
+        "ready",
+    ]
+    assert "resume:https://gemini.google.com/app/chat-123" in page.events
+    assert second.observation.conversation_url == first.observation.conversation_url
+    assert first.turns[0].prompt_sha256

@@ -10,13 +10,14 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlparse
 
 from PIL import Image
 
 from .errors import MvpError
 from .gemini_packets import GeminiBrowserPacket, verify_packet
+from .gemini_session import BrowserTurn
 from .jsonio import dump_json, load_json
 from .models import CriticReviewDocument
 from .workspace import assert_inside_run
@@ -44,10 +45,11 @@ class OperatorPolicy:
     mode_label: str
     plan_token: str
     minimum_session_seconds: float
+    max_turns: int = 6
 
     @classmethod
     def required(cls) -> OperatorPolicy:
-        return cls("3.7 Flash", "Tư duy mở rộng", "Ultra", 3.0)
+        return cls("3.7 Flash", "Tư duy mở rộng", "Ultra", 3.0, 6)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,12 +92,19 @@ class OperatorReceipt:
     critic_path: str
     critic_sha256: str
     operator_build_sha256: str
+    turns: tuple[BrowserTurn, ...] = ()
     ledger_signature: str = ""
+
+
+class BrowserSessionResult(Protocol):
+    observation: BrowserObservation
+    response: str
+    turns: tuple[BrowserTurn, ...]
 
 
 SessionRunner = Callable[
     [OperatorRequest, GeminiBrowserPacket],
-    tuple[BrowserObservation, str],
+    BrowserSessionResult | tuple[BrowserObservation, str],
 ]
 
 
@@ -188,6 +197,9 @@ class OperatorLedger:
                 if payload.get("nonce") == nonce:
                     raw = dict(payload)
                     raw["observation"] = BrowserObservation(**raw["observation"])
+                    raw["turns"] = tuple(
+                        BrowserTurn(**turn) for turn in raw.get("turns", ())
+                    )
                     matches.append((OperatorReceipt(**raw), signature))
         except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
             raise MvpError("operator ledger is malformed") from exc
@@ -368,7 +380,14 @@ class GeminiWebOperator:
         request_path = phase_dir / "operator_request.json"
         dump_json(request_path, request)
 
-        observation, dom_text = self.session_runner(request, packet)
+        session_result = self.session_runner(request, packet)
+        if isinstance(session_result, tuple):
+            observation, dom_text = session_result
+            turns: tuple[BrowserTurn, ...] = ()
+        else:
+            observation = session_result.observation
+            dom_text = session_result.response
+            turns = session_result.turns
         if observation.account_sha256 != self.binding.account_sha256:
             raise MvpError("Gemini observation does not match bound account")
         if observation.account_hint != self.binding.account_hint:
@@ -386,6 +405,7 @@ class GeminiWebOperator:
                     "conversation_url": observation.conversation_url,
                     "captured_at": datetime.now(UTC).isoformat(),
                     "dom_text": dom_text,
+                    "turns": [asdict(turn) for turn in turns],
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -434,6 +454,7 @@ class GeminiWebOperator:
             critic_path=str(critic_path.resolve()),
             critic_sha256=_sha256_file(critic_path),
             operator_build_sha256=self.operator_build_sha256,
+            turns=turns,
         )
         signature = self.ledger.append(unsigned)
         signed = replace(unsigned, ledger_signature=signature)

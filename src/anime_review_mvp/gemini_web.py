@@ -415,6 +415,19 @@ def load_operator_verified_review[T](
         raw_response=raw,
         critic=critic,
     )
+    if not receipt.turns:
+        raise MvpError("operator receipt contains no browser turns")
+    session_manifest = run_dir / "gemini_web" / "session.json"
+    try:
+        session_payload = json.loads(session_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MvpError("Gemini session manifest is missing or malformed") from exc
+    if (
+        not isinstance(session_payload, dict)
+        or session_payload.get("run_id") != run_dir.resolve().name
+        or session_payload.get("conversation_url") != receipt.observation.conversation_url
+    ):
+        raise MvpError("Gemini session manifest does not match operator receipt")
     return load_json(critic, review_cls)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -27,7 +28,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from .errors import MvpError
 from .gemini_operator import BrowserObservation, OperatorPolicy
-from .gemini_session import GeminiSessionMetadata
+from .gemini_session import BrowserTurn, GeminiSessionMetadata
 from .gemini_web import account_sha256
 
 GEMINI_URL = "https://gemini.google.com/app"
@@ -79,6 +80,18 @@ class BrowserReadiness:
     account: AccountObservation
     model_label: str
     mode_label: str
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserConversationResult:
+    observation: BrowserObservation
+    response: str
+    turns: tuple[BrowserTurn, ...]
+
+    def __iter__(self):
+        """Keep tuple-unpacking compatibility for existing callers."""
+        yield self.observation
+        yield self.response
 
 
 class GeminiPage(Protocol):
@@ -551,7 +564,7 @@ def run_gemini_session(
     chrome_pid: int,
     conversation_url: str | None = None,
     clock: Callable[[], str] | None = None,
-) -> tuple[BrowserObservation, str]:
+) -> BrowserConversationResult:
     now = clock or (lambda: datetime.now(UTC).isoformat())
     started_at = now()
     if conversation_url:
@@ -604,18 +617,24 @@ def run_gemini_session(
         )
     page.save_screenshot(screenshot_path)
     finished_at = now()
-    return (
-        BrowserObservation(
-            account.account_sha256,
-            account.account_hint,
-            account.plan_label,
-            model_label,
-            mode_label,
-            conversation_url,
-            chrome_pid,
-            str(screenshot_path.resolve()),
-            started_at,
-            finished_at,
-        ),
-        response,
+    observation = BrowserObservation(
+        account.account_sha256,
+        account.account_hint,
+        account.plan_label,
+        model_label,
+        mode_label,
+        conversation_url,
+        chrome_pid,
+        str(screenshot_path.resolve()),
+        started_at,
+        finished_at,
     )
+    turn = BrowserTurn(
+        1,
+        hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        hashlib.sha256(response.encode("utf-8")).hexdigest(),
+        conversation_url,
+        started_at,
+        finished_at,
+    )
+    return BrowserConversationResult(observation, response, (turn,))
