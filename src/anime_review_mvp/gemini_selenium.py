@@ -66,6 +66,8 @@ ACCOUNT_SELECTORS = (
     (By.CSS_SELECTOR, "[data-email]"),
 )
 
+USER_SELECTED_LABEL = "USER_SELECTED_NOT_VERIFIED"
+
 
 class GeminiBrowserError(MvpError):
     def __init__(self, code: str, message: str) -> None:
@@ -413,6 +415,9 @@ class SeleniumGeminiPage:
         self.driver.maximize_window()
         self.driver.execute_script("window.focus();")
 
+    def confirm_user_ready(self) -> None:
+        wait_for_user_ready()
+
     def _click_first(self, selectors: tuple[tuple[str, str], ...], code: str) -> object:
         for selector in selectors:
             try:
@@ -732,13 +737,7 @@ class SeleniumGeminiPage:
         textbox.click()
         textbox.send_keys(Keys.CONTROL, "a")
         textbox.send_keys(prompt)
-        self._click_first(
-            (
-                (By.CSS_SELECTOR, "button[aria-label*='Gửi']"),
-                (By.CSS_SELECTOR, "button[aria-label*='Send']"),
-            ),
-            "INVALID_RESPONSE",
-        )
+        textbox.send_keys(Keys.ENTER)
 
     def wait_for_response(self) -> str:
         def completed(_: WebDriver) -> str | bool:
@@ -770,6 +769,110 @@ class SeleniumGeminiPage:
             raise GeminiBrowserError("INVALID_EVIDENCE", "Gemini screenshot failed")
 
 
+def _ask_user_ready_dialog(message: str, timeout_seconds: float) -> bool:
+    if sys.platform != "win32":
+        return True
+    import tkinter as tk
+
+    confirmed = False
+    root = tk.Tk()
+    root.title("Gemini Web Operator")
+    root.attributes("-topmost", True)
+    root.resizable(False, False)
+    root.geometry("560x190")
+
+    def continue_run() -> None:
+        nonlocal confirmed
+        confirmed = True
+        root.destroy()
+
+    tk.Label(
+        root,
+        text=message,
+        font=("Segoe UI", 13),
+        wraplength=500,
+        justify="center",
+    ).pack(padx=24, pady=(30, 18))
+    tk.Button(
+        root,
+        text="Tiếp tục gửi file + prompt",
+        font=("Segoe UI", 11),
+        command=continue_run,
+        width=28,
+    ).pack(pady=8)
+    root.protocol("WM_DELETE_WINDOW", continue_run)
+    root.after(max(1, int(timeout_seconds * 1_000)), root.destroy)
+    root.lift()
+    root.focus_force()
+    root.mainloop()
+    return confirmed
+
+
+def wait_for_user_ready(
+    *,
+    ask: Callable[[str, float], bool] = _ask_user_ready_dialog,
+    initial_seconds: float = 180,
+    reminder_seconds: float = 120,
+) -> None:
+    if ask("Bạn đã đăng nhập và chọn model xong chưa?", initial_seconds):
+        return
+    if ask(
+        "Gemini vẫn đang chờ. Bấm Tiếp tục để gửi file và prompt.",
+        reminder_seconds,
+    ):
+        return
+    raise GeminiBrowserError(
+        "USER_CONFIRMATION_TIMEOUT",
+        "Không nhận được xác nhận của người dùng sau 5 phút",
+    )
+
+
+def capture_existing_gemini_response(
+    page: GeminiPage,
+    *,
+    conversation_url: str,
+    account_hint: str,
+    expected_account_sha256: str,
+    screenshot_path: Path,
+    chrome_pid: int,
+    started_at: str,
+    clock: Callable[[], str] | None = None,
+) -> BrowserConversationResult:
+    """Recover an already completed turn without uploading or sending again."""
+    show = getattr(page, "show", None)
+    if callable(show):
+        show()
+    page.open_conversation(conversation_url)
+    response = page.wait_for_response()
+    if not response.strip():
+        raise GeminiBrowserError("INVALID_RESPONSE", "Gemini response is empty")
+    observed_url = page.read_conversation_url()
+    parsed_url = urlparse(observed_url)
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.netloc != "gemini.google.com"
+        or not parsed_url.path.startswith("/app/")
+    ):
+        raise GeminiBrowserError(
+            "INVALID_EVIDENCE", "Gemini conversation URL is not a real chat"
+        )
+    page.save_screenshot(screenshot_path)
+    finished_at = (clock or (lambda: datetime.now(UTC).isoformat()))()
+    observation = BrowserObservation(
+        expected_account_sha256,
+        account_hint,
+        "USER_SELECTION_NOT_VERIFIED",
+        USER_SELECTED_LABEL,
+        USER_SELECTED_LABEL,
+        observed_url,
+        chrome_pid,
+        str(screenshot_path.resolve()),
+        started_at,
+        finished_at,
+    )
+    return BrowserConversationResult(observation, response, ())
+
+
 def run_gemini_session(
     page: GeminiPage,
     *,
@@ -795,34 +898,16 @@ def run_gemini_session(
         open_conversation(conversation_url)
     else:
         page.open_new_chat()
-    readiness = getattr(page, "wait_until_ready", None)
-    if callable(readiness):
-        observed = readiness(
-            policy,
-            expected_account_sha256=expected_account_sha256,
-            account_hint=account_hint,
-        )
-        account = observed.account
-        model_label = observed.model_label
-        mode_label = observed.mode_label
-    else:
-        account = page.verify_account()
-    if (
-        account.account_sha256 != expected_account_sha256
-        or account.account_hint != account_hint
-    ):
-        raise GeminiBrowserError("ACCOUNT_MISMATCH", "Gemini account does not match binding")
-    if not callable(readiness):
-        model_label = page.select_model(policy.model_label)
-        mode_label = page.select_mode(policy.mode_label)
-    if model_label != policy.model_label:
-        raise GeminiBrowserError(
-            "MODEL_NOT_FOUND", f"Gemini model must be {policy.model_label}"
-        )
-    if mode_label != policy.mode_label:
-        raise GeminiBrowserError(
-            "MODEL_NOT_FOUND", f"Gemini mode must be {policy.mode_label}"
-        )
+        confirm_ready = getattr(page, "confirm_user_ready", None)
+        if callable(confirm_ready):
+            confirm_ready()
+    account = AccountObservation(
+        expected_account_sha256,
+        account_hint,
+        "USER_SELECTION_NOT_VERIFIED",
+    )
+    model_label = USER_SELECTED_LABEL
+    mode_label = USER_SELECTED_LABEL
     if upload_paths and any(not path.is_file() for path in upload_paths):
         raise GeminiBrowserError("UPLOAD_FAILED", "Gemini upload files are missing")
     if upload_paths:

@@ -139,13 +139,27 @@ def build_script_evidence_media(
 
 
 def _prompt(phase: str, beat_ids: tuple[str, ...]) -> str:
-    verdicts = "MATCH, VOICE_AHEAD, VOICE_BEHIND, SCENE_MISMATCH, ACTION_MISMATCH"
+    verdicts = (
+        "NOT_APPLICABLE"
+        if phase == "SCRIPT"
+        else "MATCH, VOICE_AHEAD, VOICE_BEHIND, SCENE_MISMATCH, ACTION_MISMATCH"
+    )
+    example_verdict = "NOT_APPLICABLE" if phase == "SCRIPT" else "MATCH"
     return (
         f"Kiểm định phase {phase} cho đúng các beat: {', '.join(beat_ids)}. "
         "Đọc video và manifest đã tải lên theo thứ tự thời gian. Loại intro, opening, "
         "ending, credits và title card không phục vụ cốt truyện. So sánh hình, hành động "
-        "và lời review Việt; không đoán khi thiếu bằng chứng. Trả đúng một JSON object "
-        "theo CriticReviewDocument, đủ một beat_reviews cho mỗi beat, không markdown. "
+        "và lời review Việt; không đoán khi thiếu bằng chứng. Trả đúng một JSON object, "
+        "không markdown và không thêm trường ngoài schema sau: "
+        '{"phase":"SCRIPT hoặc VIDEO","producer_context_id":"chuỗi không rỗng",'
+        '"critic_context_id":"chuỗi không rỗng","beat_reviews":['
+        '{"beat_id":"beat-...","finding_codes":[],"evidence_refs":'
+        '["anchor_id từ anchors.json"],"observed_visual":"mô tả hình thấy thật",'
+        '"narration_summary":"tóm tắt lời review",'
+        f'"sync_verdict":"{example_verdict}","note":"nhận xét"}}]}}. '
+        "Phải đủ đúng một beat_reviews cho mỗi beat. evidence_refs luôn phải có ít nhất "
+        "một anchor_id có thật trong anchors.json. Không dùng các trường document_type, "
+        "policy_version, overall_verdict hoặc notes. "
         f"sync_verdict chỉ dùng: {verdicts}. Mọi verdict khác MATCH phải có cùng code "
         "trong finding_codes và evidence_refs phải trỏ đúng beat/timestamp burn-in."
     )
@@ -213,11 +227,18 @@ def build_browser_packet(
     packet_dir = _reset_packet_dir(run_dir, phase_upper)
     prompt_path = packet_dir / "prompt.txt"
     prompt_path.write_text(_prompt(phase_upper, selected_ids), encoding="utf-8")
+    evidence_files: tuple[Path, ...] = ()
     if phase_upper == "SCRIPT":
         media = packet_dir / "script_evidence.mp4"
         supplemental = packet_dir / "storyboard.json"
+        source_anchors = run_dir / "atomic_evidence" / "source" / "anchors.json"
+        if not source_anchors.is_file() or source_anchors.is_symlink():
+            raise MvpError("Gemini SCRIPT packet source anchors are missing")
+        anchors = packet_dir / "anchors.json"
         build_script_evidence_media(source, beats, media, runner)
         shutil.copy2(storyboard_path, supplemental)
+        shutil.copy2(source_anchors, anchors)
+        evidence_files = (anchors,)
     else:
         candidate = (
             run_dir / "proxy" / "review_proxy.mp4"
@@ -235,7 +256,7 @@ def build_browser_packet(
             raise MvpError(f"Gemini {phase_upper} packet mapping is missing")
         shutil.copy2(mapping, supplemental)
     manifest = packet_dir / "manifest.json"
-    content_files = (media, supplemental, prompt_path)
+    content_files = (media, supplemental, *evidence_files, prompt_path)
     _write_manifest(
         manifest,
         phase=phase_upper,
@@ -248,7 +269,10 @@ def build_browser_packet(
         str(media.resolve()),
         str(manifest.resolve()),
         str(prompt_path.resolve()),
-        (str(media.resolve()), str(supplemental.resolve()), str(manifest.resolve())),
+        tuple(
+            str(path.resolve())
+            for path in (media, supplemental, *evidence_files, manifest)
+        ),
         sha256_file(manifest),
         selected_ids,
     )

@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from PIL import Image
 from selenium.common.exceptions import (
-    ElementClickInterceptedException,
     NoSuchElementException,
     StaleElementReferenceException,
 )
+from selenium.webdriver.common.keys import Keys
 
 import anime_review_mvp.gemini_selenium as gemini_selenium
 from anime_review_mvp.errors import MvpError
@@ -36,6 +36,9 @@ class RecordingPage:
 
     def open_new_chat(self) -> None:
         self.events.append("open:new-chat")
+
+    def confirm_user_ready(self) -> None:
+        self.events.append("confirm:user-ready")
 
     def verify_account(self) -> AccountObservation:
         self.events.append("verify:account")
@@ -86,7 +89,9 @@ def _run_page(tmp_path: Path, page: RecordingPage, uploads: tuple[Path, ...]) ->
     )
 
 
-def test_session_selects_required_model_mode_uploads_and_reads_real_url(tmp_path: Path) -> None:
+def test_session_uses_user_confirmation_then_uploads_without_account_model_gate(
+    tmp_path: Path,
+) -> None:
     page = RecordingPage(tmp_path / "session.png")
     uploads = (tmp_path / "evidence.mp4", tmp_path / "manifest.json")
     for path in uploads:
@@ -108,9 +113,7 @@ def test_session_selects_required_model_mode_uploads_and_reads_real_url(tmp_path
 
     assert page.events == [
         "open:new-chat",
-        "verify:account",
-        "select:3.7 Flash",
-        "select:Tư duy mở rộng",
+        "confirm:user-ready",
         "upload:2",
         "send",
         "wait:complete",
@@ -120,6 +123,50 @@ def test_session_selects_required_model_mode_uploads_and_reads_real_url(tmp_path
     assert observation.conversation_url.endswith("real-chat-id")
     assert observation.chrome_pid == 123
     assert response.startswith("{")
+
+
+def test_user_ready_confirmation_reminds_once_then_continues() -> None:
+    calls: list[tuple[str, float]] = []
+
+    def ask(message: str, timeout_seconds: float) -> bool:
+        calls.append((message, timeout_seconds))
+        return len(calls) == 2
+
+    gemini_selenium.wait_for_user_ready(
+        ask=ask,
+        initial_seconds=180,
+        reminder_seconds=120,
+    )
+
+    assert calls == [
+        ("Bạn đã đăng nhập và chọn model xong chưa?", 180),
+        ("Gemini vẫn đang chờ. Bấm Tiếp tục để gửi file và prompt.", 120),
+    ]
+
+
+def test_capture_existing_response_does_not_upload_or_resend(tmp_path: Path) -> None:
+    page = RecordingPage(tmp_path / "session.png")
+    page.open_conversation = lambda url: page.events.append(f"resume:{url}")
+
+    result = gemini_selenium.capture_existing_gemini_response(
+        page,
+        conversation_url="https://gemini.google.com/app/chat-123",
+        account_hint="n***@example.com",
+        expected_account_sha256="a" * 64,
+        screenshot_path=tmp_path / "session.png",
+        chrome_pid=123,
+        started_at="2026-08-30T02:40:00+07:00",
+        clock=lambda: "2026-08-30T02:45:00+07:00",
+    )
+
+    assert page.events == [
+        "resume:https://gemini.google.com/app/chat-123",
+        "wait:complete",
+        "read:response",
+        "screenshot",
+    ]
+    assert result.response.startswith("{")
+    assert result.observation.model_label == "USER_SELECTED_NOT_VERIFIED"
 
 
 def test_session_restores_operator_window_before_navigation(tmp_path: Path) -> None:
@@ -137,22 +184,22 @@ def test_session_restores_operator_window_before_navigation(tmp_path: Path) -> N
     assert page.events[1] == "open:new-chat"
 
 
-def test_session_stops_before_model_selection_for_wrong_account(tmp_path: Path) -> None:
+def test_session_does_not_block_on_unverified_account(tmp_path: Path) -> None:
     page = RecordingPage(tmp_path / "session.png")
 
-    with pytest.raises(MvpError, match="account"):
-        run_gemini_session(
-            page,
-            policy=OperatorPolicy.required(),
-            account_hint="x***@example.com",
-            expected_account_sha256="f" * 64,
-            upload_paths=(),
-            prompt="Return JSON only",
-            screenshot_path=tmp_path / "session.png",
-            chrome_pid=123,
-        )
+    run_gemini_session(
+        page,
+        policy=OperatorPolicy.required(),
+        account_hint="x***@example.com",
+        expected_account_sha256="f" * 64,
+        upload_paths=(),
+        prompt="Return JSON only",
+        screenshot_path=tmp_path / "session.png",
+        chrome_pid=123,
+    )
 
-    assert page.events == ["open:new-chat", "verify:account"]
+    assert "verify:account" not in page.events
+    assert "send" in page.events
 
 
 def test_chrome_command_is_visible_and_uses_dedicated_profile(tmp_path: Path) -> None:
@@ -298,7 +345,7 @@ def test_ensure_managed_chrome_visible_reopens_background_only_operator(
     assert restored == [9001]
 
 
-def test_session_rejects_model_label_not_confirmed_by_dom(tmp_path: Path) -> None:
+def test_session_does_not_block_on_unverified_model(tmp_path: Path) -> None:
     class WrongModelPage(RecordingPage):
         def select_model(self, label: str) -> str:
             self.events.append(f"select:{label}")
@@ -307,8 +354,12 @@ def test_session_rejects_model_label_not_confirmed_by_dom(tmp_path: Path) -> Non
     upload = tmp_path / "packet.json"
     upload.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(MvpError, match="3.7 Flash"):
-        _run_page(tmp_path, WrongModelPage(tmp_path / "session.png"), (upload,))
+    page = WrongModelPage(tmp_path / "session.png")
+
+    _run_page(tmp_path, page, (upload,))
+
+    assert not any(event.startswith("select:") for event in page.events)
+    assert "send" in page.events
 
 
 def test_session_rejects_missing_upload_before_sending(tmp_path: Path) -> None:
@@ -571,7 +622,7 @@ def test_account_verification_rejects_bound_profile_without_ultra() -> None:
         )
 
 
-def test_session_passes_bound_account_to_manual_readiness(tmp_path: Path) -> None:
+def test_session_skips_bound_account_and_model_readiness_gate(tmp_path: Path) -> None:
     class BoundReadyPage(RecordingPage):
         def wait_until_ready(
             self,
@@ -602,7 +653,8 @@ def test_session_passes_bound_account_to_manual_readiness(tmp_path: Path) -> Non
         chrome_pid=123,
     )
 
-    assert "ready:bound" in page.events
+    assert "ready:bound" not in page.events
+    assert "send" in page.events
 
 
 def test_upload_chooses_local_file_after_opening_attachment_menu(
@@ -703,9 +755,12 @@ def test_upload_opens_current_gemini_upload_tools_menu(tmp_path: Path) -> None:
     assert driver.sent == [str(source.resolve())]
 
 
-def test_send_prompt_uses_dom_click_when_send_button_is_intercepted() -> None:
+def test_send_prompt_presses_enter_in_textbox_without_send_button_selector() -> None:
     class Textbox:
         text = ""
+
+        def __init__(self) -> None:
+            self.sent: list[object] = []
 
         def click(self) -> None:
             return None
@@ -717,32 +772,22 @@ def test_send_prompt_uses_dom_click_when_send_button_is_intercepted() -> None:
             return True
 
         def send_keys(self, *values: str) -> None:
-            return None
-
-    class SendButton(Textbox):
-        def click(self) -> None:
-            raise ElementClickInterceptedException("microphone wrapper overlaps button")
+            self.sent.extend(values)
 
     class Driver:
         def __init__(self) -> None:
-            self.dom_clicked = False
+            self.textbox = Textbox()
 
         def find_element(self, kind: str, selector: str):
             if "contenteditable" in selector:
-                return Textbox()
-            if "Gửi" in selector:
-                return SendButton()
+                return self.textbox
             raise NoSuchElementException(f"missing element: {kind} {selector}")
-
-        def execute_script(self, script: str, element: SendButton) -> None:
-            assert "click" in script
-            self.dom_clicked = True
 
     driver = Driver()
 
     SeleniumGeminiPage(driver).send_prompt("GEMINI_WEB_OPERATOR_OK")
 
-    assert driver.dom_clicked is True
+    assert driver.textbox.sent[-2:] == ["GEMINI_WEB_OPERATOR_OK", Keys.ENTER]
 
 
 def test_response_wait_is_independent_from_short_ui_timeout() -> None:
@@ -886,6 +931,9 @@ def test_session_resumes_existing_conversation_and_records_turn(tmp_path: Path) 
         def open_conversation(self, url: str) -> None:
             self.events.append(f"resume:{url}")
 
+        def confirm_user_ready(self) -> None:
+            self.events.append("confirm")
+
         def wait_until_ready(
             self,
             policy: OperatorPolicy,
@@ -951,11 +999,8 @@ def test_session_resumes_existing_conversation_and_records_turn(tmp_path: Path) 
 
     assert isinstance(first, BrowserConversationResult)
     assert isinstance(first.turns[0], BrowserTurn)
-    assert [event for event in page.events if event in {"new", "ready"}] == [
-        "new",
-        "ready",
-        "ready",
-    ]
+    assert [event for event in page.events if event in {"new", "ready"}] == ["new"]
+    assert [event for event in page.events if event == "confirm"] == ["confirm"]
     assert "resume:https://gemini.google.com/app/chat-123" in page.events
     assert second.observation.conversation_url == first.observation.conversation_url
     assert first.turns[0].prompt_sha256

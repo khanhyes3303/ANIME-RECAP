@@ -30,7 +30,9 @@ from .gemini_operator import (
 )
 from .gemini_packets import build_browser_packet
 from .gemini_selenium import (
+    BrowserConversationResult,
     GeminiBrowserError,
+    capture_existing_gemini_response,
     connect_managed_chrome,
     ensure_managed_chrome_visible,
     launch_managed_chrome,
@@ -890,36 +892,67 @@ def run_operator_phase(
                 prompt_path = assert_inside_run(prompt_override, run_dir)
                 upload_paths = ()
             prompt = prompt_path.read_text(encoding="utf-8")
-            result = run_gemini_session(
-                launch.page,
-                policy=policy,
-                account_hint=binding.account_hint,
-                expected_account_sha256=binding.account_sha256,
-                upload_paths=upload_paths,
-                prompt=prompt,
-                screenshot_path=(
-                    run_dir
-                    / "gemini_web"
-                    / phase_upper.casefold()
-                    / "screenshots"
-                    / "session.png"
-                ),
-                chrome_pid=launch.chrome_pid,
-                conversation_url=metadata.conversation_url,
+            screenshot_path = (
+                run_dir
+                / "gemini_web"
+                / phase_upper.casefold()
+                / "screenshots"
+                / "session.png"
             )
+            checkpoint_path = (
+                run_dir
+                / "gemini_web"
+                / phase_upper.casefold()
+                / f"browser_result_{sha256_file(prompt_path)}.json"
+            )
+            if checkpoint_path.is_file():
+                result = load_json(checkpoint_path, BrowserConversationResult)
+            elif (
+                metadata.conversation_url
+                and screenshot_path.is_file()
+                and not (run_dir / "gemini_web" / "session.json").is_file()
+            ):
+                result = capture_existing_gemini_response(
+                    launch.page,
+                    conversation_url=metadata.conversation_url,
+                    account_hint=binding.account_hint,
+                    expected_account_sha256=binding.account_sha256,
+                    screenshot_path=screenshot_path,
+                    chrome_pid=launch.chrome_pid,
+                    started_at=metadata.started_at,
+                )
+                dump_json(checkpoint_path, result)
+            else:
+                result = run_gemini_session(
+                    launch.page,
+                    policy=policy,
+                    account_hint=binding.account_hint,
+                    expected_account_sha256=binding.account_sha256,
+                    upload_paths=upload_paths,
+                    prompt=prompt,
+                    screenshot_path=screenshot_path,
+                    chrome_pid=launch.chrome_pid,
+                    conversation_url=metadata.conversation_url,
+                )
+                dump_json(checkpoint_path, result)
             registry.update_conversation(
                 run_dir.resolve().name,
                 result.observation.conversation_url,
             )
-            dump_json(
-                run_dir / "gemini_web" / "session.json",
-                {
+            (run_dir / "gemini_web" / "session.json").write_text(
+                json.dumps(
+                    {
                     "run_id": run_dir.resolve().name,
                     "conversation_url": result.observation.conversation_url,
                     "phase": phase_upper,
                     "turn_number": turn_number,
                     "phase_turns": registry.load().phase_turns,
-                },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
             )
             return result
         finally:

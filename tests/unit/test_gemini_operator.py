@@ -71,7 +71,7 @@ def test_rejects_the_exact_fabricated_antigravity_evidence(tmp_path: Path) -> No
         finished_at="2026-08-29T21:00:01+07:00",
     )
 
-    with pytest.raises(MvpError, match="3.7 Flash|screenshot|raw response"):
+    with pytest.raises(MvpError, match="quickly|screenshot|raw response"):
         validate_browser_evidence(
             observation,
             OperatorPolicy.required(),
@@ -91,12 +91,27 @@ def test_accepts_realistic_browser_evidence(tmp_path: Path) -> None:
     )
 
 
+def test_accepts_user_selected_account_and_model_without_verification(
+    tmp_path: Path,
+) -> None:
+    observation, raw, critic = _valid_evidence(tmp_path)
+
+    validate_browser_evidence(
+        replace(
+            observation,
+            plan_label="USER_SELECTION_NOT_VERIFIED",
+            model_label="USER_SELECTED_NOT_VERIFIED",
+            mode_label="USER_SELECTED_NOT_VERIFIED",
+        ),
+        OperatorPolicy.required(),
+        raw_response=raw,
+        critic=critic,
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     (
-        ("model_label", "Gemini 2.5 Pro Ultra", "3.7 Flash"),
-        ("mode_label", "Nhanh", "Tư duy mở rộng"),
-        ("plan_label", "Google AI Pro", "not Ultra"),
         ("conversation_url", "https://gemini.google.com/app", "real chat"),
         ("chrome_pid", 0, "PID"),
         ("finished_at", "2026-08-29T21:00:01+07:00", "quickly"),

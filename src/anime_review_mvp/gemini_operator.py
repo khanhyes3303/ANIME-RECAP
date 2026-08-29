@@ -274,12 +274,6 @@ def validate_browser_evidence(
     raw_response: Path,
     critic: Path,
 ) -> None:
-    if observation.model_label != policy.model_label:
-        raise MvpError(f"Gemini model must be {policy.model_label}")
-    if observation.mode_label != policy.mode_label:
-        raise MvpError(f"Gemini mode must be {policy.mode_label}")
-    if policy.plan_token.casefold() not in observation.plan_label.casefold():
-        raise MvpError("Gemini account is not Ultra")
     if not _SHA256.fullmatch(observation.account_sha256):
         raise MvpError("Gemini account fingerprint is invalid")
     if "***" not in observation.account_hint or "@" not in observation.account_hint:

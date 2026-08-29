@@ -130,6 +130,22 @@ def _packet_fixture(tmp_path: Path, phase: str, *, excluded: bool = False) -> Pa
             ]
         },
     )
+    _write_json(
+        run / "atomic_evidence/source/anchors.json",
+        {
+            "anchors": [
+                {
+                    "anchor_id": "beat-001-range-001-start",
+                    "span_id": "beat-001",
+                    "range_id": "range-001",
+                    "timeline": "SOURCE",
+                    "position": "START",
+                    "timestamp_ms": 1_000,
+                    "path": "frame-start.jpg",
+                }
+            ]
+        },
+    )
     new_state(run, stage=Stage.VIET_LOI, episode_dir=episode, source_video=source)
     if phase == "PROXY":
         candidate = run / "proxy/review_proxy.mp4"
@@ -177,6 +193,14 @@ def test_script_packet_rejects_source_range_overlapping_opening(tmp_path: Path) 
         build_browser_packet(run, "SCRIPT", runner=_fake_ffmpeg)
 
 
+def test_script_packet_uploads_engine_anchor_ids(tmp_path: Path) -> None:
+    run = _packet_fixture(tmp_path, "SCRIPT")
+
+    packet = build_browser_packet(run, "SCRIPT", runner=_fake_ffmpeg)
+
+    assert "anchors.json" in {Path(path).name for path in packet.upload_paths}
+
+
 def test_packet_detects_file_changed_after_manifest(tmp_path: Path) -> None:
     run = _packet_fixture(tmp_path, "PROXY")
     packet = build_browser_packet(run, "PROXY", runner=_fake_ffmpeg)
@@ -196,3 +220,21 @@ def test_packet_rejects_unknown_requested_beat(tmp_path: Path) -> None:
             beat_ids=("beat-999",),
             runner=_fake_ffmpeg,
         )
+
+
+def test_prompt_spells_out_exact_critic_json_contract(tmp_path: Path) -> None:
+    run = _packet_fixture(tmp_path, "SCRIPT")
+
+    packet = build_browser_packet(run, "SCRIPT", runner=_fake_ffmpeg)
+    prompt = Path(packet.prompt_path).read_text(encoding="utf-8")
+
+    for required_field in (
+        '"critic_context_id"',
+        '"observed_visual"',
+        '"narration_summary"',
+        '"note"',
+    ):
+        assert required_field in prompt
+    assert '"overall_verdict"' not in prompt
+    assert '"sync_verdict":"NOT_APPLICABLE"' in prompt
+    assert "anchor_id" in prompt
