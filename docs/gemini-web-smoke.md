@@ -21,8 +21,9 @@ Kỳ vọng:
    dùng cửa sổ Chrome thường đang mở.
 2. Người dùng tự đăng nhập đúng tài khoản Google AI Ultra và tự chọn `3.7 Flash` +
    `Tư duy mở rộng`.
-3. Operator chờ đến khi DOM hiển thị đúng account, Ultra, model và mode; nó không
-   bấm đổi model/mode.
+3. `enroll` là xác nhận thủ công một lần cho profile chuyên dụng. Operator chờ
+   DOM Gemini hiển thị account control, Ultra, model và mode; email trong menu
+   Chrome không bị đọc hoặc sao chép. Operator không bấm đổi model/mode.
 4. Packet nhỏ được tải lên, prompt được gửi, Gemini trả JSON trong chat thật.
 5. `gemini_web\session.json`, `raw_response.json`, screenshot và receipt được tạo;
    conversation URL khác trang `/app` trống và chat xuất hiện trong lịch sử.

@@ -101,9 +101,20 @@ class BrowserConversationResult:
 class GeminiPage(Protocol):
     def open_new_chat(self) -> None: ...
 
-    def verify_account(self) -> AccountObservation: ...
+    def verify_account(
+        self,
+        *,
+        expected_account_sha256: str | None = None,
+        account_hint: str | None = None,
+    ) -> AccountObservation: ...
 
-    def wait_until_ready(self, policy: OperatorPolicy) -> BrowserReadiness: ...
+    def wait_until_ready(
+        self,
+        policy: OperatorPolicy,
+        *,
+        expected_account_sha256: str | None = None,
+        account_hint: str | None = None,
+    ) -> BrowserReadiness: ...
 
     def open_conversation(self, url: str) -> None: ...
 
@@ -355,7 +366,12 @@ class SeleniumGeminiPage:
         self.driver.get(url)
         self._wait.until(lambda driver: driver.current_url.startswith(url))
 
-    def verify_account(self) -> AccountObservation:
+    def verify_account(
+        self,
+        *,
+        expected_account_sha256: str | None = None,
+        account_hint: str | None = None,
+    ) -> AccountObservation:
         # A managed Chrome profile may need a one-time interactive login. Keep
         # that window alive while polling instead of failing after three
         # seconds and closing it before the user can act.
@@ -405,7 +421,26 @@ class SeleniumGeminiPage:
                     return AccountObservation(
                         account_sha256(email), _masked_email(email), plan
                     )
-                if match is not None:
+                if (
+                    plan
+                    and account_element is not None
+                    and expected_account_sha256 is not None
+                    and account_hint is not None
+                ):
+                    # Enrollment is the one-time human confirmation for this
+                    # dedicated Chrome profile. Chrome's account menu is
+                    # outside the web-page DOM, so later sessions prove the
+                    # bound profile by its visible Gemini account control and
+                    # Ultra plan instead of fabricating an email observation.
+                    return AccountObservation(
+                        expected_account_sha256,
+                        account_hint,
+                        plan,
+                    )
+                if match is not None or (
+                    expected_account_sha256 is not None
+                    and account_element is not None
+                ):
                     last_error = "Google AI Ultra plan is not visible"
                 elif account_element is not None:
                     last_error = "Signed-in Google email is not visible"
@@ -446,8 +481,17 @@ class SeleniumGeminiPage:
                     )
         return "\n".join(values)
 
-    def wait_until_ready(self, policy: OperatorPolicy) -> BrowserReadiness:
-        account = self.verify_account()
+    def wait_until_ready(
+        self,
+        policy: OperatorPolicy,
+        *,
+        expected_account_sha256: str | None = None,
+        account_hint: str | None = None,
+    ) -> BrowserReadiness:
+        account = self.verify_account(
+            expected_account_sha256=expected_account_sha256,
+            account_hint=account_hint,
+        )
         deadline = time.monotonic() + self._account_wait_seconds
         expected_model = policy.model_label.casefold()
         expected_mode = policy.mode_label.casefold()
@@ -587,7 +631,11 @@ def run_gemini_session(
         page.open_new_chat()
     readiness = getattr(page, "wait_until_ready", None)
     if callable(readiness):
-        observed = readiness(policy)
+        observed = readiness(
+            policy,
+            expected_account_sha256=expected_account_sha256,
+            account_hint=account_hint,
+        )
         account = observed.account
         model_label = observed.model_label
         mode_label = observed.mode_label

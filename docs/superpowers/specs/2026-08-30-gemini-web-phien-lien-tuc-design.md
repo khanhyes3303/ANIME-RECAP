@@ -26,9 +26,11 @@ video. Gemini Web chỉ được truy cập qua Chrome/Selenium do operator qu�
 2. Operator khởi động hoặc gắn vào Chrome chuyên dụng ở chế độ visible. Nếu
    chưa có phiên hợp lệ, cửa sổ được giữ mở và hiển thị hướng dẫn để người dùng
    tự đăng nhập tài khoản Ultra.
-3. Người dùng tự chọn `3.7 Flash` và `Tư duy mở rộng`. Operator không bấm đổi
-   model/mode; nó chỉ đọc DOM hiện tại và chờ đến khi cả account, Ultra, model và
-   mode khớp cấu hình bất biến.
+3. `gemini-web enroll` là lần người dùng xác nhận thủ công tài khoản cho profile
+   Chrome chuyên dụng; engine chỉ lưu hash và account hint đã che. Ở các phiên
+   sau, operator yêu cầu DOM Gemini có account control và nhãn Ultra, rồi đối
+   chiếu với binding của profile. Người dùng tự chọn `3.7 Flash` và `Tư duy mở
+   rộng`; operator không bấm đổi model/mode.
 4. Ở phase đầu, operator mở một chat mới. Ở các phase sau, operator điều hướng
    về `conversation_url` đã ghi trong run và tiếp tục đúng chat đó.
 5. Operator tải đúng packet đã khóa hash, gửi prompt của phase, chờ câu trả lời
@@ -47,7 +49,9 @@ video. Gemini Web chỉ được truy cập qua Chrome/Selenium do operator qu�
 
 ### `SeleniumGeminiPage`
 
-- `wait_until_ready()` chờ email, nhãn Ultra, model và mode hiện trên DOM.
+- `wait_until_ready()` ưu tiên email nếu Gemini thực sự đưa email vào DOM. Khi
+  email chỉ nằm trong menu Chrome ngoài DOM, nó dùng binding đã enroll một lần
+  và vẫn bắt buộc account control, nhãn Ultra, model và mode hiện trên DOM.
 - `send_prompt(prompt)` và `wait_for_response()` thao tác từng lượt trong chat.
 - `open_new_chat()` chỉ được gọi khi run chưa có conversation URL.
 - `open_conversation(url)` tiếp tục chat đã lưu.

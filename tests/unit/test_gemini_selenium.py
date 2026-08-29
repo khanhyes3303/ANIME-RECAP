@@ -335,6 +335,113 @@ def test_account_verification_recovers_when_account_control_is_rerendered() -> N
     assert driver.account_calls >= 2
 
 
+def test_account_verification_accepts_bound_profile_when_ultra_is_visible() -> None:
+    class Element:
+        def __init__(self, *, text: str = "", aria: str = "") -> None:
+            self.text = text
+            self.aria = aria
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def get_attribute(self, name: str) -> str:
+            return self.aria if name == "aria-label" else ""
+
+    class Driver:
+        current_url = "https://gemini.google.com/app"
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and "account" in selector.casefold():
+                return Element(aria="Account menu")
+            if selector == "body":
+                return Element(text="Khánh Nguyễn\nUltra")
+            raise AssertionError(f"unexpected selector: {kind} {selector}")
+
+    result = SeleniumGeminiPage(Driver(), account_wait_seconds=0.0).verify_account(
+        expected_account_sha256="a" * 64,
+        account_hint="n***@gmail.com",
+    )
+
+    assert result == AccountObservation("a" * 64, "n***@gmail.com", "Ultra")
+
+
+def test_account_verification_rejects_bound_profile_without_ultra() -> None:
+    class Element:
+        text = ""
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def get_attribute(self, name: str) -> str:
+            return "Account menu" if name == "aria-label" else ""
+
+    class Driver:
+        current_url = "https://gemini.google.com/app"
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and "account" in selector.casefold():
+                return Element()
+            if selector == "body":
+                element = Element()
+                element.text = "Khánh Nguyễn\nGemini Free"
+                return element
+            raise AssertionError(f"unexpected selector: {kind} {selector}")
+
+    page = SeleniumGeminiPage(Driver(), account_wait_seconds=0.0)
+
+    with pytest.raises(GeminiBrowserError, match="Ultra"):
+        page.verify_account(
+            expected_account_sha256="a" * 64,
+            account_hint="n***@gmail.com",
+        )
+
+
+def test_session_passes_bound_account_to_manual_readiness(tmp_path: Path) -> None:
+    class BoundReadyPage(RecordingPage):
+        def wait_until_ready(
+            self,
+            policy: OperatorPolicy,
+            *,
+            expected_account_sha256: str,
+            account_hint: str,
+        ) -> BrowserReadiness:
+            self.events.append("ready:bound")
+            return BrowserReadiness(
+                AccountObservation(expected_account_sha256, account_hint, "Ultra"),
+                policy.model_label,
+                policy.mode_label,
+            )
+
+    upload = tmp_path / "packet.json"
+    upload.write_text("{}", encoding="utf-8")
+    page = BoundReadyPage(tmp_path / "session.png")
+
+    run_gemini_session(
+        page,
+        policy=OperatorPolicy.required(),
+        account_hint="n***@gmail.com",
+        expected_account_sha256="a" * 64,
+        upload_paths=(upload,),
+        prompt="Return JSON only",
+        screenshot_path=tmp_path / "session.png",
+        chrome_pid=123,
+    )
+
+    assert "ready:bound" in page.events
+
+
 def test_wait_until_ready_reads_manual_model_and_mode_without_selecting() -> None:
     class Element:
         def __init__(
@@ -453,8 +560,18 @@ def test_session_resumes_existing_conversation_and_records_turn(tmp_path: Path) 
         def open_conversation(self, url: str) -> None:
             self.events.append(f"resume:{url}")
 
-        def wait_until_ready(self, policy: OperatorPolicy) -> BrowserReadiness:
+        def wait_until_ready(
+            self,
+            policy: OperatorPolicy,
+            *,
+            expected_account_sha256: str | None = None,
+            account_hint: str | None = None,
+        ) -> BrowserReadiness:
             self.events.append("ready")
+            assert expected_account_sha256 == account_sha256(
+                "nguyenkhanh@example.com"
+            )
+            assert account_hint == "n***@example.com"
             return BrowserReadiness(
                 AccountObservation(
                     account_sha256("nguyenkhanh@example.com"),
