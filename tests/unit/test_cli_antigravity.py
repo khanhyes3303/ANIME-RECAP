@@ -413,6 +413,26 @@ def test_gemini_web_browser_failure_stops_run_for_human(
     assert next_action["code"] == "CAN_DANG_NHAP_GEMINI_ULTRA"
 
 
+def test_gemini_web_run_resumes_human_browser_stop_with_full_packet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-01"
+    new_state(run, stage=Stage.CAN_CON_NGUOI_XU_LY)
+    phases: list[str] = []
+
+    def run_phase(run_dir: Path, phase: str) -> object:
+        assert run_dir == run
+        phases.append(phase)
+        return object()
+
+    monkeypatch.setattr(cli, "run_operator_phase", run_phase)
+    monkeypatch.setattr(cli, "_accept_operator_review", lambda *_args: 0)
+
+    assert cli._gemini_web_run(run, "script") == 0
+    assert phases == ["SCRIPT"]
+    assert read_state(run).stage is Stage.CHO_GEMINI_SCRIPT
+
+
 def test_prepare_reuses_source_analysis_for_revision(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

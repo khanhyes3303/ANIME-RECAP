@@ -949,10 +949,13 @@ def _gemini_web_run(run_dir: Path, phase: str) -> int:
         "FINAL": (Stage.CHO_GEMINI_FINAL, Stage.CHO_GEMINI_FINAL),
     }[phase_upper]
     state = read_state(run_dir)
-    if state.stage is not expected[0]:
+    if state.stage is Stage.CAN_CON_NGUOI_XU_LY:
+        state = resume_browser_review(run_dir, phase_upper)
+    if state.stage is expected[0]:
+        if expected[0] is not expected[1]:
+            advance(run_dir, expected[0], expected[1])
+    elif state.stage is not expected[1]:
         raise MvpError(f"Gemini Web {phase.casefold()} run stage does not match")
-    if expected[0] is not expected[1]:
-        advance(run_dir, expected[0], expected[1])
     try:
         review = run_operator_phase(run_dir, phase_upper)
     except GeminiBrowserError as exc:

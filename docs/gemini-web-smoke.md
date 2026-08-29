@@ -59,4 +59,6 @@ uv run python run_episode.py gemini-web stop --run "<run_dir>"
 
 Kỳ vọng Chrome operator đóng và `.local\gemini_operator_session.json` bị xóa. Nếu
 Chrome/login/model gặp lỗi, không chạy stop; để cửa sổ mở, xử lý thủ công rồi chạy
-lại lệnh tương ứng. Không tạo receipt, critic, screenshot hoặc verdict bằng tay.
+lại chính lệnh `gemini-web run --phase <phase>`. Engine tự khôi phục stage
+`CAN_CON_NGUOI_XU_LY` và gửi lại packet đầy đủ; không dùng `continue` cho lượt đầu
+chưa có chat hợp lệ. Không tạo receipt, critic, screenshot hoặc verdict bằng tay.
