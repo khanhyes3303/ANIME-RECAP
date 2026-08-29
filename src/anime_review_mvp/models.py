@@ -254,12 +254,26 @@ class CriticBeatReview:
     beat_id: str
     finding_codes: tuple[str, ...]
     evidence_refs: tuple[str, ...]
+    observed_visual: str
+    narration_summary: str
+    sync_verdict: str
     note: str
 
     def __post_init__(self) -> None:
         _non_empty(self.beat_id, "critic beat_id")
         if not self.evidence_refs:
             raise MvpError("critic review requires evidence")
+        _non_empty(self.observed_visual, "critic observed_visual")
+        _non_empty(self.narration_summary, "critic narration_summary")
+        if self.sync_verdict not in {
+            "NOT_APPLICABLE",
+            "MATCH",
+            "VOICE_AHEAD",
+            "VOICE_BEHIND",
+            "SCENE_MISMATCH",
+            "ACTION_MISMATCH",
+        }:
+            raise MvpError("critic sync_verdict is invalid")
         _non_empty(self.note, "critic note")
 
 

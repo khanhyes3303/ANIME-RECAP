@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
@@ -12,6 +13,7 @@ from .models import (
     AtomicBeat,
     AtomicStoryboard,
     CriticReviewDocument,
+    FrameAnchorDocument,
     Shot,
     TruthDocument,
 )
@@ -137,6 +139,60 @@ def load_critic_review(
     if set(review_ids) != {beat.beat_id for beat in storyboard.beats}:
         raise MvpError("critic review must cover every atomic beat")
     return review
+
+
+def validate_critic_evidence(
+    review: CriticReviewDocument,
+    storyboard: AtomicStoryboard,
+    source_anchors: FrameAnchorDocument,
+    program_anchors: FrameAnchorDocument | None = None,
+) -> None:
+    if review.phase == "VIDEO" and program_anchors is None:
+        raise MvpError("VIDEO critic requires engine PROGRAM anchors")
+    if review.phase == "SCRIPT" and program_anchors is not None:
+        raise MvpError("SCRIPT critic must only use engine SOURCE anchors")
+
+    documents = (source_anchors,) if program_anchors is None else (source_anchors, program_anchors)
+    required_by_beat: dict[str, set[str]] = {beat.beat_id: set() for beat in storyboard.beats}
+    expected_ranges = {
+        (beat.beat_id, source_range.range_id)
+        for beat in storyboard.beats
+        for source_range in beat.source_ranges
+    }
+    timelines = ("SOURCE",) if program_anchors is None else ("SOURCE", "PROGRAM")
+    for document, timeline in zip(documents, timelines, strict=True):
+        positions: dict[tuple[str, str], set[str]] = {}
+        for anchor in document.anchors:
+            if anchor.timeline != timeline:
+                raise MvpError(f"engine {timeline} anchors contain another timeline")
+            key = (anchor.span_id, anchor.range_id)
+            if key not in expected_ranges:
+                raise MvpError(f"engine {timeline} anchors reference an unknown beat range")
+            positions.setdefault(key, set()).add(anchor.position)
+            required_by_beat[anchor.span_id].add(anchor.anchor_id)
+        for key in expected_ranges:
+            if positions.get(key) != {"START", "MIDDLE", "END"}:
+                raise MvpError(f"engine {timeline} anchors are incomplete")
+
+    reviews = {item.beat_id: item for item in review.beat_reviews}
+    observations = Counter(
+        " ".join(item.observed_visual.casefold().split()) for item in review.beat_reviews
+    )
+    if any(count >= 3 for count in observations.values()):
+        raise MvpError("critic contains canned observed_visual repeated for three beats")
+    for beat in storyboard.beats:
+        item = reviews[beat.beat_id]
+        if not required_by_beat[beat.beat_id] <= set(item.evidence_refs):
+            timelines = "SOURCE and PROGRAM" if review.phase == "VIDEO" else "SOURCE"
+            raise MvpError(f"critic review lacks engine {timelines} anchors")
+        if review.phase == "SCRIPT":
+            if item.sync_verdict != "NOT_APPLICABLE":
+                raise MvpError("SCRIPT critic sync verdict must be NOT_APPLICABLE")
+            continue
+        if item.sync_verdict == "NOT_APPLICABLE":
+            raise MvpError("VIDEO critic requires a sync verdict")
+        if item.sync_verdict != "MATCH" and item.sync_verdict not in item.finding_codes:
+            raise MvpError(f"critic verdict requires {item.sync_verdict} finding")
 
 
 def beat_cache_key(beat: AtomicBeat, voice_id: str, policy_version: str) -> str:

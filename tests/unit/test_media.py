@@ -9,6 +9,7 @@ import pytest
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.media import (
     detect_shots,
+    extract_atomic_source_anchors,
     extract_inspection_assets,
     extract_program_anchors,
     extract_span_anchors,
@@ -16,6 +17,8 @@ from anime_review_mvp.media import (
     transcribe_english,
 )
 from anime_review_mvp.models import (
+    AtomicBeat,
+    AtomicStoryboard,
     Claim,
     NarrationSpan,
     NarrationSpanDocument,
@@ -167,6 +170,57 @@ def test_extract_span_anchors_requests_start_middle_and_end(tmp_path: Path) -> N
         "2.500",
         "3.920",
     ]
+    assert (output_dir / "anchors.json").is_file()
+
+
+def test_extract_atomic_source_anchors_uses_each_beat_range(tmp_path: Path) -> None:
+    source = tmp_path / "episode.mp4"
+    source.write_bytes(b"media")
+    output_dir = tmp_path / "atomic-source"
+    runner = FakeRunner()
+    source_range = SpanSourceRange(
+        "range-001",
+        1_000,
+        4_000,
+        "scene-001",
+        "beat-001",
+        ("shot-001",),
+        ("event-001",),
+    )
+    board = AtomicStoryboard(
+        "ANTIGRAVITY",
+        "atomic-v2",
+        "producer-01",
+        (Claim("claim-001", "ACTION", "Jiro runs.", ("event-001",)),),
+        (
+            AtomicBeat(
+                "beat-001",
+                "scene-001",
+                ("event-001",),
+                ("claim-001",),
+                (source_range,),
+                "Jiro chạy qua cổng.",
+                ("Jiro",),
+                ("Jiro",),
+                "ACTION",
+                1_080,
+                2_700,
+                "Jiro lao qua cổng.",
+                ("shot-001.jpg",),
+                3_000,
+                None,
+                "",
+                "LOCKED",
+                (),
+            ),
+        ),
+    )
+
+    anchors = extract_atomic_source_anchors(source, board, output_dir, runner=runner)
+
+    assert [anchor.position for anchor in anchors.anchors] == ["START", "MIDDLE", "END"]
+    assert all(anchor.span_id == "beat-001" for anchor in anchors.anchors)
+    assert all(anchor.timeline == "SOURCE" for anchor in anchors.anchors)
     assert (output_dir / "anchors.json").is_file()
 
 

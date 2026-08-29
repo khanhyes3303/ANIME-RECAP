@@ -11,6 +11,7 @@ from typing import Any
 from .errors import MvpError
 from .jsonio import dump_json
 from .models import (
+    AtomicStoryboard,
     FrameAnchor,
     FrameAnchorDocument,
     NarrationSpanDocument,
@@ -24,6 +25,60 @@ from .models import (
 
 Runner = Callable[..., Any]
 _PTS_TIME = re.compile(r"pts_time:([0-9]+(?:\.[0-9]+)?)")
+
+
+def extract_atomic_source_anchors(
+    video: Path,
+    storyboard: AtomicStoryboard,
+    output_dir: Path,
+    *,
+    runner: Runner = subprocess.run,
+) -> FrameAnchorDocument:
+    if not video.is_file():
+        raise MvpError(f"anchor video does not exist: {video}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    anchors: list[FrameAnchor] = []
+    for beat in storyboard.beats:
+        for source_range in beat.source_ranges:
+            for position, timestamp_ms in zip(
+                ("START", "MIDDLE", "END"),
+                _anchor_timestamps(source_range.source_start_ms, source_range.source_end_ms),
+                strict=True,
+            ):
+                anchor_id = f"{beat.beat_id}-{source_range.range_id}-{position.casefold()}"
+                frame = output_dir / f"{anchor_id}.jpg"
+                _run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-v",
+                        "error",
+                        "-ss",
+                        f"{timestamp_ms / 1_000:.3f}",
+                        "-i",
+                        str(video),
+                        "-frames:v",
+                        "1",
+                        "-strict",
+                        "-2",
+                        str(frame),
+                    ],
+                    runner,
+                )
+                anchors.append(
+                    FrameAnchor(
+                        anchor_id,
+                        beat.beat_id,
+                        source_range.range_id,
+                        "SOURCE",
+                        position,
+                        timestamp_ms,
+                        str(frame.resolve()),
+                    )
+                )
+    result = FrameAnchorDocument(tuple(anchors))
+    dump_json(output_dir / "anchors.json", result)
+    return result
 
 
 def _run(command: list[str], runner: Runner) -> Any:
