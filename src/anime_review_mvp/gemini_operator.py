@@ -6,16 +6,36 @@ import json
 import math
 import re
 import secrets
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from PIL import Image
 
 from .errors import MvpError
+from .gemini_packets import GeminiBrowserPacket, verify_packet
+from .jsonio import dump_json, load_json
+from .models import CriticReviewDocument
+from .workspace import assert_inside_run
+
+if TYPE_CHECKING:
+    from .gemini_web import GeminiUltraProfileBinding
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError as exc:
+        raise MvpError(f"cannot hash operator file: {path}") from exc
+    return digest.hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +91,12 @@ class OperatorReceipt:
     critic_sha256: str
     operator_build_sha256: str
     ledger_signature: str = ""
+
+
+SessionRunner = Callable[
+    [OperatorRequest, GeminiBrowserPacket],
+    tuple[BrowserObservation, str],
+]
 
 
 def _canonical_json(payload: object) -> bytes:
@@ -270,3 +296,146 @@ def validate_browser_evidence(
     if raw_response.read_bytes() == critic.read_bytes():
         raise MvpError("Gemini raw response must differ from normalized critic")
     validate_session_screenshot(Path(observation.screenshot_path))
+
+
+def _parse_single_json_object(text: str) -> dict[str, Any]:
+    candidate = text.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", candidate, re.DOTALL | re.IGNORECASE)
+    if fenced:
+        candidate = fenced.group(1).strip()
+    decoder = json.JSONDecoder()
+    try:
+        value, end = decoder.raw_decode(candidate)
+    except json.JSONDecodeError as exc:
+        raise MvpError("Gemini response is not valid JSON") from exc
+    if candidate[end:].strip():
+        raise MvpError("Gemini response must contain exactly one JSON object")
+    if not isinstance(value, dict):
+        raise MvpError("Gemini response JSON root must be an object")
+    return value
+
+
+def _safe_run_file(path: Path, run_dir: Path, label: str) -> Path:
+    if path.is_symlink():
+        raise MvpError(f"operator {label} may not be a symlink")
+    try:
+        safe = assert_inside_run(path, run_dir)
+    except (MvpError, OSError) as exc:
+        raise MvpError(f"operator {label} is outside run") from exc
+    if not safe.is_file():
+        raise MvpError(f"operator {label} is missing")
+    return safe
+
+
+@dataclass(frozen=True, slots=True)
+class GeminiWebOperator:
+    run_dir: Path
+    binding: GeminiUltraProfileBinding
+    ledger: OperatorLedger
+    session_runner: SessionRunner
+    policy: OperatorPolicy
+    operator_build_sha256: str
+
+    def run(
+        self,
+        request: OperatorRequest,
+        packet: GeminiBrowserPacket,
+    ) -> OperatorReceipt:
+        run_dir = self.run_dir.resolve()
+        if request.run_id != run_dir.name or request.phase != packet.phase:
+            raise MvpError("operator request belongs to another run or phase")
+        expected = issue_request(
+            request.run_id,
+            request.phase,
+            request.artifact_sha256,
+            request.packet_sha256,
+            nonce=request.nonce,
+            issued_at=request.issued_at,
+        )
+        if expected.request_sha256 != request.request_sha256:
+            raise MvpError("operator request hash is invalid")
+        if not _SHA256.fullmatch(self.operator_build_sha256):
+            raise MvpError("operator build hash is invalid")
+        verify_packet(packet, run_dir)
+        if packet.packet_sha256 != request.packet_sha256:
+            raise MvpError("operator packet does not match request")
+        media = _safe_run_file(Path(packet.media_path), run_dir, "packet media")
+        if _sha256_file(media) != request.artifact_sha256:
+            raise MvpError("operator artifact hash does not match request")
+
+        phase_dir = run_dir / "gemini_web" / packet.phase.casefold()
+        phase_dir.mkdir(parents=True, exist_ok=True)
+        request_path = phase_dir / "operator_request.json"
+        dump_json(request_path, request)
+
+        observation, dom_text = self.session_runner(request, packet)
+        if observation.account_sha256 != self.binding.account_sha256:
+            raise MvpError("Gemini observation does not match bound account")
+        if observation.account_hint != self.binding.account_hint:
+            raise MvpError("Gemini observation account hint does not match binding")
+        screenshot = _safe_run_file(
+            Path(observation.screenshot_path), run_dir, "session screenshot"
+        )
+
+        raw_path = phase_dir / "raw_response.json"
+        raw_path.write_text(
+            json.dumps(
+                {
+                    "run_id": request.run_id,
+                    "phase": request.phase,
+                    "conversation_url": observation.conversation_url,
+                    "captured_at": datetime.now(UTC).isoformat(),
+                    "dom_text": dom_text,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        critic_path = phase_dir / f"critic_{packet.phase.casefold()}.json"
+        payload = _parse_single_json_object(dom_text)
+        critic_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        try:
+            review = load_json(critic_path, CriticReviewDocument)
+            expected_phase = "SCRIPT" if packet.phase == "SCRIPT" else "VIDEO"
+            if review.phase != expected_phase:
+                raise MvpError("Gemini critic phase does not match packet")
+            review_ids = tuple(item.beat_id for item in review.beat_reviews)
+            if len(review_ids) != len(set(review_ids)) or set(review_ids) != set(
+                packet.beat_ids
+            ):
+                raise MvpError("Gemini critic must cover every packet beat exactly once")
+            validate_browser_evidence(
+                observation,
+                self.policy,
+                raw_response=raw_path,
+                critic=critic_path,
+            )
+        except Exception:
+            critic_path.unlink(missing_ok=True)
+            raise
+
+        unsigned = OperatorReceipt(
+            run_id=request.run_id,
+            phase=request.phase,
+            nonce=request.nonce,
+            request_sha256=request.request_sha256,
+            artifact_sha256=request.artifact_sha256,
+            packet_sha256=request.packet_sha256,
+            observation=observation,
+            screenshot_sha256=_sha256_file(screenshot),
+            raw_response_path=str(raw_path.resolve()),
+            raw_response_sha256=_sha256_file(raw_path),
+            critic_path=str(critic_path.resolve()),
+            critic_sha256=_sha256_file(critic_path),
+            operator_build_sha256=self.operator_build_sha256,
+        )
+        signature = self.ledger.append(unsigned)
+        signed = replace(unsigned, ledger_signature=signature)
+        dump_json(phase_dir / "operator_receipt.json", signed)
+        return signed
