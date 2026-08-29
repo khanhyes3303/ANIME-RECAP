@@ -311,6 +311,12 @@ def test_antigravity_policy_requires_real_operator_and_forbids_fake_browser_arti
     combined = (policy + "\n" + prompt).casefold()
 
     assert "gemini-web run" in combined
+    assert "gemini-web continue" in combined
+    assert "gemini-web stop" in combined
+    assert "người dùng tự chọn" in combined
+    assert "cùng một chat" in combined
+    assert "engine tự mở chat mới" not in combined
+    assert "engine tự chọn" not in combined
     assert "web-verify accept" not in combined
     assert "không tự tạo receipt" in combined
     assert "không dùng ffmpeg tạo ảnh phiên" in combined
