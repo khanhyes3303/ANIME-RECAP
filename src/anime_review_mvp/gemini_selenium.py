@@ -1,0 +1,433 @@
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import socket
+import subprocess
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Protocol
+from urllib.parse import urlparse
+
+from selenium import webdriver
+from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.support import expected_conditions as expected
+from selenium.webdriver.support.ui import WebDriverWait
+
+from .errors import MvpError
+from .gemini_operator import BrowserObservation, OperatorPolicy
+from .gemini_web import account_sha256
+
+GEMINI_URL = "https://gemini.google.com/app"
+
+MODEL_SELECTORS = (
+    (By.XPATH, "//*[normalize-space()='3.7 Flash']"),
+    (By.XPATH, "//*[@role='menuitem'][.//*[normalize-space()='3.7 Flash']]"),
+)
+MODE_SELECTORS = (
+    (By.XPATH, "//*[normalize-space()='Tư duy mở rộng']"),
+    (By.XPATH, "//*[@role='menuitemcheckbox'][contains(.,'Tư duy mở rộng')]"),
+)
+PROMPT_SELECTORS = (
+    (By.CSS_SELECTOR, "div[contenteditable='true'][role='textbox']"),
+    (By.CSS_SELECTOR, "rich-textarea div[contenteditable='true']"),
+)
+RESPONSE_SELECTORS = (
+    (By.CSS_SELECTOR, "message-content"),
+    (By.CSS_SELECTOR, "div[data-test-id='response-content']"),
+)
+
+
+class GeminiBrowserError(MvpError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+@dataclass(frozen=True, slots=True)
+class AccountObservation:
+    account_sha256: str
+    account_hint: str
+    plan_label: str
+
+
+class GeminiPage(Protocol):
+    def open_new_chat(self) -> None: ...
+
+    def verify_account(self) -> AccountObservation: ...
+
+    def select_model(self, label: str) -> str: ...
+
+    def select_mode(self, label: str) -> str: ...
+
+    def upload(self, paths: tuple[Path, ...]) -> None: ...
+
+    def send_prompt(self, prompt: str) -> None: ...
+
+    def wait_for_response(self) -> str: ...
+
+    def read_conversation_url(self) -> str: ...
+
+    def save_screenshot(self, path: Path) -> None: ...
+
+
+class ManagedProfileLock:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._descriptor: int | None = None
+
+    def acquire(self) -> None:
+        if self._descriptor is not None:
+            raise MvpError("Gemini browser session is already active")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError as exc:
+            raise MvpError("Gemini browser session is already active") from exc
+        os.write(descriptor, str(os.getpid()).encode("ascii"))
+        self._descriptor = descriptor
+
+    def release(self) -> None:
+        if self._descriptor is None:
+            return
+        os.close(self._descriptor)
+        self._descriptor = None
+        with suppress(FileNotFoundError):
+            self.path.unlink()
+
+    def __enter__(self) -> ManagedProfileLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.release()
+
+
+def build_chrome_command(
+    chrome_path: Path,
+    profile_dir: Path,
+    debugger_port: int,
+) -> list[str]:
+    if debugger_port <= 0:
+        raise MvpError("Chrome debugger port must be positive")
+    return [
+        str(chrome_path),
+        f"--remote-debugging-port={debugger_port}",
+        f"--user-data-dir={profile_dir}",
+        "--new-window",
+        GEMINI_URL,
+    ]
+
+
+def locate_chrome() -> Path:
+    discovered = shutil.which("chrome.exe") or shutil.which("chrome")
+    candidates = (
+        Path(discovered) if discovered else None,
+        Path(os.environ.get("PROGRAMFILES", "C:/Program Files"))
+        / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("PROGRAMFILES(X86)", "C:/Program Files (x86)"))
+        / "Google/Chrome/Application/chrome.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Google/Chrome/Application/chrome.exe",
+    )
+    for candidate in candidates:
+        if candidate is not None and candidate.is_file():
+            return candidate.resolve()
+    raise MvpError("Google Chrome is not installed")
+
+
+def _reserve_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as handle:
+        handle.bind(("127.0.0.1", 0))
+        return int(handle.getsockname()[1])
+
+
+@dataclass(slots=True)
+class ChromeLaunch:
+    page: SeleniumGeminiPage
+    process: subprocess.Popen[bytes]
+    chrome_pid: int
+    debugger_address: str
+    profile_lock: ManagedProfileLock
+
+    def close(self) -> None:
+        try:
+            self.page.driver.quit()
+        finally:
+            if self.process.poll() is None:
+                self.process.terminate()
+            self.profile_lock.release()
+
+
+def launch_managed_chrome(
+    project_root: Path,
+    *,
+    chrome_path: Path | None = None,
+    timeout_seconds: float = 30.0,
+) -> ChromeLaunch:
+    local_dir = project_root.resolve() / ".local"
+    profile_lock = ManagedProfileLock(local_dir / "gemini_operator.lock")
+    profile_lock.acquire()
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        port = _reserve_local_port()
+        address = f"127.0.0.1:{port}"
+        command = build_chrome_command(
+            chrome_path or locate_chrome(),
+            local_dir / "gemini_ultra_chrome",
+            port,
+        )
+        process = subprocess.Popen(command)
+        deadline = time.monotonic() + timeout_seconds
+        version_url = f"http://{address}/json/version"
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise GeminiBrowserError("BROWSER_START_FAILED", "Chrome exited during startup")
+            try:
+                with urllib.request.urlopen(version_url, timeout=1):
+                    break
+            except (urllib.error.URLError, TimeoutError):
+                time.sleep(0.25)
+        else:
+            raise GeminiBrowserError("BROWSER_START_FAILED", "Chrome debugger did not start")
+        options = Options()
+        options.debugger_address = address
+        driver = webdriver.Chrome(options=options)
+        return ChromeLaunch(
+            SeleniumGeminiPage(driver),
+            process,
+            process.pid,
+            address,
+            profile_lock,
+        )
+    except Exception:
+        if process is not None and process.poll() is None:
+            process.terminate()
+        profile_lock.release()
+        raise
+
+
+def _masked_email(email: str) -> str:
+    local, domain = email.casefold().split("@", 1)
+    return f"{local[:1]}***@{domain}"
+
+
+class SeleniumGeminiPage:
+    def __init__(self, driver: WebDriver, *, timeout_seconds: float = 30.0) -> None:
+        self.driver = driver
+        self._wait = WebDriverWait(driver, timeout_seconds)
+
+    def _click_first(self, selectors: tuple[tuple[str, str], ...], code: str) -> object:
+        for selector in selectors:
+            try:
+                element = WebDriverWait(self.driver, 3).until(
+                    expected.element_to_be_clickable(selector)
+                )
+                element.click()
+                return element
+            except TimeoutException:
+                continue
+        raise GeminiBrowserError(code, f"Gemini element was not found: {code}")
+
+    def _visible_first(self, selectors: tuple[tuple[str, str], ...], code: str) -> object:
+        for selector in selectors:
+            try:
+                return WebDriverWait(self.driver, 3).until(
+                    expected.visibility_of_element_located(selector)
+                )
+            except TimeoutException:
+                continue
+        raise GeminiBrowserError(code, f"Gemini element was not found: {code}")
+
+    def open_new_chat(self) -> None:
+        self.driver.get(GEMINI_URL)
+        self._wait.until(lambda driver: driver.current_url.startswith(GEMINI_URL))
+
+    def verify_account(self) -> AccountObservation:
+        selectors = (
+            (By.CSS_SELECTOR, "button[aria-label*='Tài khoản Google']"),
+            (By.CSS_SELECTOR, "button[aria-label*='Google Account']"),
+            (By.CSS_SELECTOR, "a[aria-label*='Tài khoản Google']"),
+        )
+        self._click_first(selectors, "LOGIN_REQUIRED")
+        body = self._wait.until(expected.visibility_of_element_located((By.TAG_NAME, "body")))
+        text = body.text
+        match = re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", text, re.IGNORECASE)
+        if match is None:
+            raise GeminiBrowserError("LOGIN_REQUIRED", "Signed-in Google email is not visible")
+        email = match.group(0)
+        plan = next((line.strip() for line in text.splitlines() if "ultra" in line.casefold()), "")
+        if not plan:
+            raise GeminiBrowserError("ACCOUNT_MISMATCH", "Google AI Ultra plan is not visible")
+        result = AccountObservation(account_sha256(email), _masked_email(email), plan)
+        email = ""
+        return result
+
+    def _open_model_menu(self) -> None:
+        selectors = (
+            (By.CSS_SELECTOR, "button[aria-haspopup='menu']"),
+            (By.XPATH, "//button[contains(@aria-label,'mô hình')]"),
+            (By.XPATH, "//button[contains(.,'Flash') or contains(.,'Pro')]"),
+        )
+        self._click_first(selectors, "MODEL_NOT_FOUND")
+
+    def select_model(self, label: str) -> str:
+        self._open_model_menu()
+        selectors = tuple(
+            (kind, value.replace("3.7 Flash", label)) for kind, value in MODEL_SELECTORS
+        )
+        element = self._click_first(selectors, "MODEL_NOT_FOUND")
+        visible = str(getattr(element, "text", "")).strip()
+        if label not in visible:
+            raise GeminiBrowserError("MODEL_NOT_FOUND", f"Gemini model is not {label}")
+        return label
+
+    def select_mode(self, label: str) -> str:
+        self._open_model_menu()
+        selectors = tuple(
+            (kind, value.replace("Tư duy mở rộng", label)) for kind, value in MODE_SELECTORS
+        )
+        element = self._click_first(selectors, "MODEL_NOT_FOUND")
+        visible = str(getattr(element, "text", "")).strip()
+        if label not in visible:
+            raise GeminiBrowserError("MODEL_NOT_FOUND", f"Gemini mode is not {label}")
+        return label
+
+    def upload(self, paths: tuple[Path, ...]) -> None:
+        if not paths or any(not path.is_file() for path in paths):
+            raise GeminiBrowserError("UPLOAD_FAILED", "Gemini upload files are missing")
+        try:
+            upload = self.driver.find_element(By.CSS_SELECTOR, "input[type='file']")
+        except NoSuchElementException:
+            self._click_first(
+                (
+                    (By.CSS_SELECTOR, "button[aria-label*='Tải tệp']"),
+                    (By.CSS_SELECTOR, "button[aria-label*='Thêm tệp']"),
+                    (By.XPATH, "//button[contains(.,'+')]"),
+                ),
+                "UPLOAD_FAILED",
+            )
+            try:
+                upload = self.driver.find_element(By.CSS_SELECTOR, "input[type='file']")
+            except NoSuchElementException as exc:
+                raise GeminiBrowserError("UPLOAD_FAILED", "Gemini file input is absent") from exc
+        upload.send_keys("\n".join(str(path.resolve()) for path in paths))
+
+    def send_prompt(self, prompt: str) -> None:
+        if not prompt.strip():
+            raise GeminiBrowserError("INVALID_RESPONSE", "Gemini prompt is empty")
+        textbox = self._visible_first(PROMPT_SELECTORS, "INVALID_RESPONSE")
+        textbox.click()
+        textbox.send_keys(Keys.CONTROL, "a")
+        textbox.send_keys(prompt)
+        self._click_first(
+            (
+                (By.CSS_SELECTOR, "button[aria-label*='Gửi']"),
+                (By.CSS_SELECTOR, "button[aria-label*='Send']"),
+            ),
+            "INVALID_RESPONSE",
+        )
+
+    def wait_for_response(self) -> str:
+        def completed(_: WebDriver) -> str | bool:
+            responses: list[object] = []
+            for kind, value in RESPONSE_SELECTORS:
+                responses.extend(self.driver.find_elements(kind, value))
+            text = str(getattr(responses[-1], "text", "")).strip() if responses else ""
+            stopping = self.driver.find_elements(
+                By.CSS_SELECTOR,
+                "button[aria-label*='Dừng'],button[aria-label*='Stop']",
+            )
+            return text if text and not stopping else False
+
+        try:
+            return str(self._wait.until(completed))
+        except TimeoutException as exc:
+            raise GeminiBrowserError(
+                "INVALID_RESPONSE", "Gemini response did not complete"
+            ) from exc
+
+    def read_conversation_url(self) -> str:
+        return self.driver.current_url
+
+    def save_screenshot(self, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.driver.save_screenshot(str(path)):
+            raise GeminiBrowserError("INVALID_EVIDENCE", "Gemini screenshot failed")
+
+
+def run_gemini_session(
+    page: GeminiPage,
+    *,
+    policy: OperatorPolicy,
+    account_hint: str,
+    expected_account_sha256: str,
+    upload_paths: tuple[Path, ...],
+    prompt: str,
+    screenshot_path: Path,
+    chrome_pid: int,
+    clock: Callable[[], str] | None = None,
+) -> tuple[BrowserObservation, str]:
+    now = clock or (lambda: datetime.now(UTC).isoformat())
+    started_at = now()
+    page.open_new_chat()
+    account = page.verify_account()
+    if (
+        account.account_sha256 != expected_account_sha256
+        or account.account_hint != account_hint
+    ):
+        raise GeminiBrowserError("ACCOUNT_MISMATCH", "Gemini account does not match binding")
+    model_label = page.select_model(policy.model_label)
+    if model_label != policy.model_label:
+        raise GeminiBrowserError(
+            "MODEL_NOT_FOUND", f"Gemini model must be {policy.model_label}"
+        )
+    mode_label = page.select_mode(policy.mode_label)
+    if mode_label != policy.mode_label:
+        raise GeminiBrowserError(
+            "MODEL_NOT_FOUND", f"Gemini mode must be {policy.mode_label}"
+        )
+    if not upload_paths or any(not path.is_file() for path in upload_paths):
+        raise GeminiBrowserError("UPLOAD_FAILED", "Gemini upload files are missing")
+    page.upload(upload_paths)
+    page.send_prompt(prompt)
+    response = page.wait_for_response()
+    if not response.strip():
+        raise GeminiBrowserError("INVALID_RESPONSE", "Gemini response is empty")
+    conversation_url = page.read_conversation_url()
+    parsed_url = urlparse(conversation_url)
+    if (
+        parsed_url.scheme != "https"
+        or parsed_url.netloc != "gemini.google.com"
+        or not parsed_url.path.startswith("/app/")
+    ):
+        raise GeminiBrowserError(
+            "INVALID_EVIDENCE", "Gemini conversation URL is not a real chat"
+        )
+    page.save_screenshot(screenshot_path)
+    finished_at = now()
+    return (
+        BrowserObservation(
+            account.account_sha256,
+            account.account_hint,
+            account.plan_label,
+            model_label,
+            mode_label,
+            conversation_url,
+            chrome_pid,
+            str(screenshot_path.resolve()),
+            started_at,
+            finished_at,
+        ),
+        response,
+    )

@@ -15,15 +15,12 @@ from anime_review_mvp.models import (
     Claim,
     CriticBeatReview,
     CriticReviewDocument,
-    DenseEvidenceDocument,
-    DenseFrame,
     Event,
     FrameAnchor,
     FrameAnchorDocument,
     Shot,
     ShotDocument,
     SourceRef,
-    SpanEdlDocument,
     SpanSourceRange,
     TranscriptDocument,
     TruthDocument,
@@ -198,15 +195,15 @@ def test_render_parser_accepts_explicit_proxy_quality() -> None:
     assert args.quality == "proxy"
 
 
-def test_web_verify_parser_requires_action_run_and_phase() -> None:
+def test_gemini_web_parser_requires_action_run_and_phase() -> None:
     args = cli._parser().parse_args(
-        ["web-verify", "prepare", "--run", "run", "--phase", "final"]
+        ["gemini-web", "run", "--run", "run", "--phase", "final"]
     )
 
-    assert (args.action, args.phase) == ("prepare", "final")
+    assert (args.action, args.phase) == ("run", "final")
 
 
-def test_web_verify_enroll_hashes_email_without_persisting_plaintext(
+def test_gemini_web_enroll_hashes_email_without_persisting_plaintext(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run, episode = _prepared_storyboard_run(tmp_path)
@@ -214,7 +211,7 @@ def test_web_verify_enroll_hashes_email_without_persisting_plaintext(
 
     assert cli.main(
         [
-            "web-verify",
+            "gemini-web",
             "enroll",
             "--run",
             str(run),
@@ -230,59 +227,14 @@ def test_web_verify_enroll_hashes_email_without_persisting_plaintext(
     assert "Ultra@Example.com" not in binding_path.read_text(encoding="utf-8")
 
 
-def test_web_verify_prepare_writes_hashed_script_bundle(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    run, _ = _prepared_storyboard_run(tmp_path)
-    advance(run, Stage.LAP_STORYBOARD, Stage.VIET_LOI)
-
-    def fake_dense(
-        video: Path,
-        storyboard: AtomicStoryboard | None,
-        edl: SpanEdlDocument | None,
-        output_dir: Path,
-        timeline: str,
-        **_: object,
-    ) -> DenseEvidenceDocument:
-        frame_path = output_dir / "beat-001-source-00001000.jpg"
-        frame_path.parent.mkdir(parents=True, exist_ok=True)
-        frame_path.write_bytes(b"frame")
-        result = DenseEvidenceDocument(
-            timeline,
-            (
-                DenseFrame(
-                    "frame-001",
-                    "beat-001",
-                    "range-001",
-                    timeline,
-                    1_000,
-                    str(frame_path),
-                    "a" * 64,
-                ),
-            ),
+def test_gemini_web_prepare_no_longer_exists() -> None:
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(
+            ["gemini-web", "prepare", "--run", "run", "--phase", "script"]
         )
-        dump_json(output_dir / "manifest.json", result)
-        return result
-
-    def fake_sheets(evidence: DenseEvidenceDocument, output_dir: Path, **_: object) -> None:
-        output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "beat-001-source-001.jpg").write_bytes(b"sheet")
-
-    monkeypatch.setattr(cli, "extract_dense_beat_evidence", fake_dense)
-    monkeypatch.setattr(cli, "build_contact_sheets", fake_sheets)
-
-    assert cli.main(
-        ["web-verify", "prepare", "--run", str(run), "--phase", "script"]
-    ) == 0
-
-    request_path = run / "gemini_web" / "script" / "request.json"
-    payload = json.loads(request_path.read_text(encoding="utf-8"))
-    assert payload["phase"] == "SCRIPT"
-    assert payload["beat_ids"] == ["beat-001"]
-    assert payload["evidence_paths"]
 
 
-def test_web_verify_accept_blocks_script_findings_before_tts(
+def test_operator_acceptance_blocks_script_findings_before_tts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run, _ = _prepared_storyboard_run(tmp_path)
@@ -316,10 +268,9 @@ def test_web_verify_accept_blocks_script_findings_before_tts(
             ),
         ),
     )
-    monkeypatch.setattr(cli, "_load_verified_critic", lambda *_: review)
     monkeypatch.setattr(cli, "validate_critic_evidence", lambda *_: None)
 
-    assert cli.main(["web-verify", "accept", "--run", str(run), "--phase", "script"]) == 1
+    assert cli._accept_operator_review(run, "script", review) == 1
     assert read_state(run).stage is Stage.SUA_BEAT
     assert not (Path(read_state(run).episode_dir) / "TTS" / "atomic_tts_manifest.json").exists()
 
@@ -348,6 +299,34 @@ def test_prompt_command_writes_resolved_operator_prompt(tmp_path: Path) -> None:
 def test_prompt_parser_accepts_run_path() -> None:
     args = cli._parser().parse_args(["prompt", "--run", "run"])
     assert args.run == Path("run")
+
+
+def test_manual_web_accept_no_longer_exists() -> None:
+    with pytest.raises(SystemExit):
+        cli._parser().parse_args(
+            ["web-verify", "accept", "--run", "run", "--phase", "script"]
+        )
+
+
+def test_gemini_web_browser_failure_stops_run_for_human(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from anime_review_mvp.gemini_selenium import GeminiBrowserError
+
+    run = tmp_path / "Tam_dang_xu_ly" / "run-01"
+    new_state(run, stage=Stage.VIET_LOI)
+
+    def fail(*_: object, **__: object) -> object:
+        raise GeminiBrowserError("LOGIN_REQUIRED", "login")
+
+    monkeypatch.setattr(cli, "run_operator_phase", fail)
+
+    assert cli.main(
+        ["gemini-web", "run", "--run", str(run), "--phase", "script"]
+    ) == 1
+    assert read_state(run).stage is Stage.CAN_CON_NGUOI_XU_LY
+    next_action = json.loads((run / "next_action.json").read_text(encoding="utf-8"))
+    assert next_action["code"] == "CAN_DANG_NHAP_GEMINI_ULTRA"
 
 
 def test_prepare_reuses_source_analysis_for_revision(

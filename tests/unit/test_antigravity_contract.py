@@ -303,3 +303,16 @@ def test_policy_hash_covers_every_runtime_python_module(tmp_path: Path) -> None:
     model.write_text("VERSION = 2\n", encoding="utf-8")
 
     assert antigravity_module.calculate_policy_sha256(tmp_path) != before
+
+
+def test_antigravity_policy_requires_real_operator_and_forbids_fake_browser_artifacts() -> None:
+    policy = Path("Bo_nao_Antigravity/GEMINI.md").read_text(encoding="utf-8")
+    prompt = Path("Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md").read_text(encoding="utf-8")
+    combined = (policy + "\n" + prompt).casefold()
+
+    assert "gemini-web run" in combined
+    assert "web-verify accept" not in combined
+    assert "không tự tạo receipt" in combined
+    assert "không dùng ffmpeg tạo ảnh phiên" in combined
+    assert "3.7 flash" in combined
+    assert "tư duy mở rộng" in combined

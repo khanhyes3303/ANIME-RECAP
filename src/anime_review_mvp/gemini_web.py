@@ -342,6 +342,82 @@ def load_verified_web_review[T](run_dir: Path, phase: str, review_cls: type[T]) 
     return load_json(review_path, review_cls)
 
 
+def load_operator_verified_review[T](
+    run_dir: Path,
+    phase: str,
+    review_cls: type[T],
+    *,
+    ledger: object,
+) -> T:
+    """Load a critic result only when it is bound to a signed operator transaction."""
+    from .gemini_operator import (
+        OperatorLedger,
+        OperatorPolicy,
+        OperatorReceipt,
+        OperatorRequest,
+        validate_browser_evidence,
+        verify_operator_receipt,
+    )
+
+    if not isinstance(ledger, OperatorLedger):
+        raise MvpError("operator ledger is invalid")
+    phase_upper = phase.upper()
+    if phase_upper not in _PHASES:
+        raise MvpError("operator review phase is invalid")
+    phase_dir = run_dir / "gemini_web" / phase_upper.casefold()
+    request = load_json(phase_dir / "operator_request.json", OperatorRequest)
+    receipt = load_json(phase_dir / "operator_receipt.json", OperatorReceipt)
+    verify_operator_receipt(receipt, ledger, expected_request=request)
+    if request.run_id != run_dir.resolve().name or request.phase != phase_upper:
+        raise MvpError("operator request belongs to another run or phase")
+
+    critic = _safe_run_file(Path(receipt.critic_path), run_dir, "operator critic")
+    raw = _safe_run_file(Path(receipt.raw_response_path), run_dir, "operator raw response")
+    screenshot = _safe_run_file(
+        Path(receipt.observation.screenshot_path), run_dir, "operator screenshot"
+    )
+    expected_critic = phase_dir / f"critic_{phase_upper.casefold()}.json"
+    if critic.resolve() != expected_critic.resolve():
+        raise MvpError("operator critic path is not engine-declared")
+    hashes = (
+        (critic, receipt.critic_sha256, "critic"),
+        (raw, receipt.raw_response_sha256, "raw response"),
+        (screenshot, receipt.screenshot_sha256, "screenshot"),
+    )
+    for path, expected_hash, label in hashes:
+        if sha256_file(path) != expected_hash:
+            raise MvpError(f"operator {label} hash does not match receipt")
+
+    manifest = _safe_run_file(
+        phase_dir / "operator_packet" / "manifest.json",
+        run_dir,
+        "operator packet",
+    )
+    if sha256_file(manifest) != request.packet_sha256:
+        raise MvpError("operator packet hash does not match request")
+    try:
+        packet_payload = json.loads(manifest.read_text(encoding="utf-8"))
+        files = packet_payload["files"]
+        if packet_payload["phase"] != phase_upper or not files:
+            raise MvpError("operator packet identity is invalid")
+        for item in files:
+            path = _safe_run_file(Path(item["path"]), run_dir, "operator packet file")
+            if sha256_file(path) != item["sha256"]:
+                raise MvpError("operator packet file hash does not match")
+        if files[0]["sha256"] != request.artifact_sha256:
+            raise MvpError("operator artifact hash does not match request")
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise MvpError("operator packet is malformed") from exc
+
+    validate_browser_evidence(
+        receipt.observation,
+        OperatorPolicy.required(),
+        raw_response=raw,
+        critic=critic,
+    )
+    return load_json(critic, review_cls)
+
+
 def verify_request_dependencies(run_dir: Path, request: GeminiWebRequest) -> None:
     artifact = _safe_project_file(Path(request.artifact_path), run_dir, "artifact")
     if sha256_file(artifact) != request.artifact_sha256:

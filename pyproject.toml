@@ -10,6 +10,8 @@ requires-python = ">=3.12"
 dependencies = [
   "httpx>=0.27,<1",
   "openai-whisper==20250625",
+  "pillow>=11,<13",
+  "selenium>=4.35,<5",
 ]
 
 [dependency-groups]
