@@ -290,3 +290,15 @@ def test_operator_prompt_renderer_inserts_exact_job_path(tmp_path: Path) -> None
 
     assert str((run / "cong_viec_antigravity.json").resolve()) in rendered
     assert "<ĐƯỜNG_DẪN_RUN>" not in rendered
+
+
+def test_policy_hash_covers_every_runtime_python_module(tmp_path: Path) -> None:
+    runtime = tmp_path / "src" / "anime_review_mvp"
+    runtime.mkdir(parents=True)
+    model = runtime / "models.py"
+    model.write_text("VERSION = 1\n", encoding="utf-8")
+    before = antigravity_module.calculate_policy_sha256(tmp_path)
+
+    model.write_text("VERSION = 2\n", encoding="utf-8")
+
+    assert antigravity_module.calculate_policy_sha256(tmp_path) != before

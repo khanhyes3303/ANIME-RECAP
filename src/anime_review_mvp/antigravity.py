@@ -49,13 +49,23 @@ class OperatorJob:
 
 def calculate_policy_sha256(root: Path) -> str:
     digest = hashlib.sha256()
-    relative_paths = (
+    fixed_paths = (
         Path("Bo_nao_Antigravity/GEMINI.md"),
         Path("Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md"),
         Path("pyproject.toml"),
-        Path("src/anime_review_mvp/atomic.py"),
-        Path("src/anime_review_mvp/audit.py"),
-        Path("src/anime_review_mvp/validation.py"),
+        Path("uv.lock"),
+        Path("run_episode.py"),
+    )
+    discovered = (
+        *(path.relative_to(root) for path in (root / "src" / "anime_review_mvp").glob("*.py")),
+        *(
+            path.relative_to(root)
+            for path in (root / "Bo_nao_Antigravity").rglob("*")
+            if path.is_file()
+        ),
+    )
+    relative_paths = tuple(
+        sorted(set((*fixed_paths, *discovered)), key=lambda item: item.as_posix())
     )
     for relative in relative_paths:
         path = root / relative
