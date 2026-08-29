@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
-from selenium.common.exceptions import StaleElementReferenceException
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    NoSuchElementException,
+    StaleElementReferenceException,
+)
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_operator import OperatorPolicy
@@ -371,6 +375,68 @@ def test_account_verification_accepts_bound_profile_when_ultra_is_visible() -> N
     assert result == AccountObservation("a" * 64, "n***@gmail.com", "Ultra")
 
 
+def test_bound_profile_never_clicks_notebook_with_account_in_label() -> None:
+    class Element:
+        def __init__(self, driver, *, text: str = "") -> None:
+            self.driver = driver
+            self.text = text
+
+        def click(self) -> None:
+            self.driver.notebook_clicked = True
+            self.driver.current_url = "https://gemini.google.com/notebook/notebook-id"
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def get_attribute(self, name: str) -> str:
+            if name == "aria-label":
+                return "YouTube Authentication and Account Management Gateway"
+            return ""
+
+    class Driver:
+        current_url = "https://gemini.google.com/app"
+
+        def __init__(self) -> None:
+            self.notebook_clicked = False
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and "account" in selector.casefold():
+                return Element(self)
+            if selector == "body":
+                return Element(self, text="Khánh Nguyễn\nUltra")
+            raise NoSuchElementException(f"missing element: {kind} {selector}")
+
+    driver = Driver()
+
+    result = SeleniumGeminiPage(driver, account_wait_seconds=0.0).verify_account(
+        expected_account_sha256="a" * 64,
+        account_hint="n***@gmail.com",
+    )
+
+    assert result == AccountObservation("a" * 64, "n***@gmail.com", "Ultra")
+    assert driver.notebook_clicked is False
+    assert driver.current_url == "https://gemini.google.com/app"
+
+
+def test_account_verification_rejects_notebook_surface() -> None:
+    class Driver:
+        current_url = "https://gemini.google.com/notebook/notebook-id"
+
+    page = SeleniumGeminiPage(Driver(), account_wait_seconds=0.0)
+
+    with pytest.raises(GeminiBrowserError) as raised:
+        page.verify_account(
+            expected_account_sha256="a" * 64,
+            account_hint="n***@gmail.com",
+        )
+
+    assert raised.value.code == "WRONG_GEMINI_SURFACE"
+    assert "/app" in str(raised.value)
+
+
 def test_account_verification_rejects_bound_profile_without_ultra() -> None:
     class Element:
         text = ""
@@ -440,6 +506,146 @@ def test_session_passes_bound_account_to_manual_readiness(tmp_path: Path) -> Non
     )
 
     assert "ready:bound" in page.events
+
+
+def test_upload_chooses_local_file_after_opening_attachment_menu(
+    tmp_path: Path,
+) -> None:
+    class Element:
+        def __init__(self, *, on_click=None, sent: list[str] | None = None) -> None:
+            self.on_click = on_click
+            self.sent = sent
+
+        def click(self) -> None:
+            if self.on_click is not None:
+                self.on_click()
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def send_keys(self, value: str) -> None:
+            if self.sent is None:
+                raise AssertionError("send_keys called on a non-input element")
+            self.sent.append(value)
+
+    class Driver:
+        def __init__(self) -> None:
+            self.menu_open = False
+            self.file_input_ready = False
+            self.sent: list[str] = []
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and selector == "input[type='file']":
+                if not self.file_input_ready:
+                    raise NoSuchElementException("file input is not mounted")
+                return Element(sent=self.sent)
+            if kind == "css selector" and "Tải tệp" in selector:
+                return Element(on_click=lambda: setattr(self, "menu_open", True))
+            if kind == "xpath" and "Tải tệp lên" in selector and self.menu_open:
+                return Element(
+                    on_click=lambda: setattr(self, "file_input_ready", True)
+                )
+            raise NoSuchElementException(f"missing element: {kind} {selector}")
+
+    source = tmp_path / "operator-smoke.txt"
+    source.write_text("smoke", encoding="utf-8")
+    driver = Driver()
+
+    SeleniumGeminiPage(driver).upload((source,))
+
+    assert driver.sent == [str(source.resolve())]
+
+
+def test_upload_opens_current_gemini_upload_tools_menu(tmp_path: Path) -> None:
+    class Element:
+        def __init__(self, *, on_click=None, sent: list[str] | None = None) -> None:
+            self.on_click = on_click
+            self.sent = sent
+
+        def click(self) -> None:
+            if self.on_click is not None:
+                self.on_click()
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def send_keys(self, value: str) -> None:
+            if self.sent is None:
+                raise AssertionError("send_keys called on a non-input element")
+            self.sent.append(value)
+
+    class Driver:
+        def __init__(self) -> None:
+            self.menu_open = False
+            self.sent: list[str] = []
+
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == "css selector" and selector == "input[type='file']":
+                if not self.menu_open:
+                    raise NoSuchElementException("file input is not mounted")
+                return Element(sent=self.sent)
+            if (
+                kind == "css selector"
+                and "Nội dung tải lên và công cụ" in selector
+            ):
+                return Element(on_click=lambda: setattr(self, "menu_open", True))
+            raise NoSuchElementException(f"missing element: {kind} {selector}")
+
+    source = tmp_path / "operator-smoke.txt"
+    source.write_text("smoke", encoding="utf-8")
+    driver = Driver()
+
+    SeleniumGeminiPage(driver).upload((source,))
+
+    assert driver.sent == [str(source.resolve())]
+
+
+def test_send_prompt_uses_dom_click_when_send_button_is_intercepted() -> None:
+    class Textbox:
+        text = ""
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def send_keys(self, *values: str) -> None:
+            return None
+
+    class SendButton(Textbox):
+        def click(self) -> None:
+            raise ElementClickInterceptedException("microphone wrapper overlaps button")
+
+    class Driver:
+        def __init__(self) -> None:
+            self.dom_clicked = False
+
+        def find_element(self, kind: str, selector: str):
+            if "contenteditable" in selector:
+                return Textbox()
+            if "Gửi" in selector:
+                return SendButton()
+            raise NoSuchElementException(f"missing element: {kind} {selector}")
+
+        def execute_script(self, script: str, element: SendButton) -> None:
+            assert "click" in script
+            self.dom_clicked = True
+
+    driver = Driver()
+
+    SeleniumGeminiPage(driver).send_prompt("GEMINI_WEB_OPERATOR_OK")
+
+    assert driver.dom_clicked is True
 
 
 def test_wait_until_ready_reads_manual_model_and_mode_without_selecting() -> None:

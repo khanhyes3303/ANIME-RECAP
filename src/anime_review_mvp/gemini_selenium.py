@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 from selenium import webdriver
 from selenium.common.exceptions import (
+    ElementClickInterceptedException,
     NoSuchElementException,
     StaleElementReferenceException,
     TimeoutException,
@@ -54,13 +55,12 @@ RESPONSE_SELECTORS = (
     (By.CSS_SELECTOR, "div[data-test-id='response-content']"),
 )
 
-# Gemini changes the account control's element type and localized label across
-# releases. Keep these selectors deliberately broad, then require the account
-# email and Ultra plan to be visible before accepting the session.
+# Only target explicit Google account controls. A generic "account" selector
+# can match user content such as a Notebook title and navigate away from chat.
 ACCOUNT_SELECTORS = (
-    (By.CSS_SELECTOR, "[aria-label*='account' i]"),
-    (By.CSS_SELECTOR, "[aria-label*='tài khoản' i]"),
     (By.CSS_SELECTOR, "button[aria-label*='Google Account' i]"),
+    (By.CSS_SELECTOR, "a[aria-label*='Google Account' i]"),
+    (By.CSS_SELECTOR, "button[aria-label*='Tài khoản Google' i]"),
     (By.CSS_SELECTOR, "a[aria-label*='Tài khoản Google' i]"),
     (By.CSS_SELECTOR, "[data-email]"),
 )
@@ -298,6 +298,15 @@ def _masked_email(email: str) -> str:
     return f"{local[:1]}***@{domain}"
 
 
+def _is_gemini_chat_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == "gemini.google.com"
+        and (parsed.path.rstrip("/") == "/app" or parsed.path.startswith("/app/"))
+    )
+
+
 class SeleniumGeminiPage:
     def __init__(
         self,
@@ -316,7 +325,13 @@ class SeleniumGeminiPage:
                 element = WebDriverWait(self.driver, 3).until(
                     expected.element_to_be_clickable(selector)
                 )
-                element.click()
+                try:
+                    element.click()
+                except ElementClickInterceptedException:
+                    # Gemini's persistent microphone wrapper can overlap the
+                    # visual centre of the send button. Dispatch the same DOM
+                    # click only after Selenium proves the target is enabled.
+                    self.driver.execute_script("arguments[0].click();", element)
                 return element
             except (StaleElementReferenceException, TimeoutException):
                 continue
@@ -352,7 +367,13 @@ class SeleniumGeminiPage:
 
     def open_new_chat(self) -> None:
         self.driver.get(GEMINI_URL)
-        self._wait.until(lambda driver: driver.current_url.startswith(GEMINI_URL))
+        try:
+            self._wait.until(lambda driver: _is_gemini_chat_url(driver.current_url))
+        except TimeoutException as exc:
+            raise GeminiBrowserError(
+                "WRONG_GEMINI_SURFACE",
+                "Gemini normal chat /app is required; Notebook is not supported",
+            ) from exc
 
     def open_conversation(self, url: str) -> None:
         parsed = urlparse(url)
@@ -372,14 +393,22 @@ class SeleniumGeminiPage:
         expected_account_sha256: str | None = None,
         account_hint: str | None = None,
     ) -> AccountObservation:
+        if not _is_gemini_chat_url(str(self.driver.current_url)):
+            raise GeminiBrowserError(
+                "WRONG_GEMINI_SURFACE",
+                "Gemini normal chat /app is required; Notebook is not supported",
+            )
         # A managed Chrome profile may need a one-time interactive login. Keep
         # that window alive while polling instead of failing after three
         # seconds and closing it before the user can act.
         deadline = time.monotonic() + self._account_wait_seconds
         account_element: object | None = None
+        bound_profile = (
+            expected_account_sha256 is not None and account_hint is not None
+        )
         last_error = "Signed-in Google email and Ultra plan are not visible"
         while True:
-            if account_element is None:
+            if account_element is None and not bound_profile:
                 account_element = self._try_click_first(ACCOUNT_SELECTORS)
             try:
                 body = WebDriverWait(self.driver, 1).until(
@@ -423,9 +452,7 @@ class SeleniumGeminiPage:
                     )
                 if (
                     plan
-                    and account_element is not None
-                    and expected_account_sha256 is not None
-                    and account_hint is not None
+                    and bound_profile
                 ):
                     # Enrollment is the one-time human confirmation for this
                     # dedicated Chrome profile. Chrome's account menu is
@@ -438,8 +465,7 @@ class SeleniumGeminiPage:
                         plan,
                     )
                 if match is not None or (
-                    expected_account_sha256 is not None
-                    and account_element is not None
+                    bound_profile
                 ):
                     last_error = "Google AI Ultra plan is not visible"
                 elif account_element is not None:
@@ -552,16 +578,57 @@ class SeleniumGeminiPage:
         except NoSuchElementException:
             self._click_first(
                 (
+                    (
+                        By.CSS_SELECTOR,
+                        "button[aria-label*='Nội dung tải lên và công cụ']",
+                    ),
+                    (
+                        By.CSS_SELECTOR,
+                        "button[aria-label*='Upload content and tools' i]",
+                    ),
                     (By.CSS_SELECTOR, "button[aria-label*='Tải tệp']"),
                     (By.CSS_SELECTOR, "button[aria-label*='Thêm tệp']"),
+                    (By.CSS_SELECTOR, "button[aria-label*='Đính kèm']"),
+                    (By.CSS_SELECTOR, "button[aria-label*='Add file' i]"),
+                    (By.CSS_SELECTOR, "button[aria-label*='Attach' i]"),
                     (By.XPATH, "//button[contains(.,'+')]"),
                 ),
                 "UPLOAD_FAILED",
             )
             try:
                 upload = self.driver.find_element(By.CSS_SELECTOR, "input[type='file']")
-            except NoSuchElementException as exc:
-                raise GeminiBrowserError("UPLOAD_FAILED", "Gemini file input is absent") from exc
+            except NoSuchElementException:
+                self._click_first(
+                    (
+                        (
+                            By.XPATH,
+                            "//*[@role='menuitem' or self::button]"
+                            "[contains(.,'Tải tệp lên')]",
+                        ),
+                        (
+                            By.XPATH,
+                            "//*[@role='menuitem' or self::button]"
+                            "[contains(.,'Tải lên từ thiết bị')]",
+                        ),
+                        (
+                            By.XPATH,
+                            "//*[@role='menuitem' or self::button]"
+                            "[contains(.,'Upload files') or "
+                            "contains(.,'Upload from device')]",
+                        ),
+                    ),
+                    "UPLOAD_FAILED",
+                )
+                try:
+                    upload = WebDriverWait(self.driver, 3).until(
+                        expected.presence_of_element_located(
+                            (By.CSS_SELECTOR, "input[type='file']")
+                        )
+                    )
+                except TimeoutException as exc:
+                    raise GeminiBrowserError(
+                        "UPLOAD_FAILED", "Gemini file input is absent"
+                    ) from exc
         upload.send_keys("\n".join(str(path.resolve()) for path in paths))
 
     def send_prompt(self, prompt: str) -> None:
