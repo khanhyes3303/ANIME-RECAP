@@ -15,6 +15,8 @@ from anime_review_mvp.models import (
     CriticBeatReview,
     CriticReviewDocument,
     Event,
+    FrameAnchor,
+    FrameAnchorDocument,
     SceneBeat,
     ScenePacket,
     ScenePacketDocument,
@@ -61,9 +63,9 @@ def _storyboard() -> AtomicStoryboard:
                 ("Jiro",),
                 "ACTION",
                 1_000,
-                2_000,
+                148_000,
                 "Jiro lao qua cổng.",
-                ("frame-1000.jpg",),
+                ("shot-0001.jpg",),
                 NARRATION_DURATION_MS,
                 None,
                 "",
@@ -75,12 +77,64 @@ def _storyboard() -> AtomicStoryboard:
 
 
 def _critic(phase: str) -> CriticReviewDocument:
+    source_refs = (
+        "beat-001-range-001-start",
+        "beat-001-range-001-middle",
+        "beat-001-range-001-end",
+    )
+    evidence_refs = source_refs
+    verdict = "NOT_APPLICABLE"
+    if phase == "VIDEO":
+        evidence_refs += (
+            "beat-001-range-001-program-start",
+            "beat-001-range-001-program-middle",
+            "beat-001-range-001-program-end",
+        )
+        verdict = "MATCH"
     return CriticReviewDocument(
         phase,
         "producer-acceptance",
         f"critic-{phase.casefold()}",
-        (CriticBeatReview("beat-001", (), ("frame-1000.jpg",), "Khớp hình và lời."),),
+        (
+            CriticBeatReview(
+                "beat-001",
+                (),
+                evidence_refs,
+                "Jiro đang chạy qua cổng.",
+                "Jiro lao qua cổng.",
+                verdict,
+                "Đã đối chiếu đủ anchor của beat-001.",
+            ),
+        ),
     )
+
+
+def _fake_anchors(
+    _video: Path,
+    document: object,
+    output: Path,
+) -> FrameAnchorDocument:
+    timeline = "SOURCE" if isinstance(document, AtomicStoryboard) else "PROGRAM"
+    program = "-program" if timeline == "PROGRAM" else ""
+    anchors = FrameAnchorDocument(
+        tuple(
+            FrameAnchor(
+                f"beat-001-range-001{program}-{position.casefold()}",
+                "beat-001",
+                "range-001",
+                timeline,
+                position,
+                timestamp,
+                str(output / f"{position.casefold()}.jpg"),
+            )
+            for position, timestamp in zip(
+                ("START", "MIDDLE", "END"), (1_000, 211_000, 420_999), strict=True
+            )
+        )
+    )
+    output.mkdir(parents=True, exist_ok=True)
+    dump_json(output / "anchors.json", anchors)
+    return anchors
 
 
 def test_one_antigravity_run_reaches_final_without_codex_artifact(
@@ -154,7 +208,8 @@ def test_one_antigravity_run_reaches_final_without_codex_artifact(
 
     monkeypatch.setattr(cli, "synthesize_atomic_beats", fake_tts)
     monkeypatch.setattr(cli, "render_review", fake_render)
-    monkeypatch.setattr(cli, "extract_program_anchors", lambda *args, **kwargs: None)
+    monkeypatch.setattr(cli, "extract_atomic_source_anchors", _fake_anchors)
+    monkeypatch.setattr(cli, "extract_program_anchors", _fake_anchors)
 
     assert (
         cli.main(
