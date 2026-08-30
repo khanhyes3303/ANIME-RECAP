@@ -514,6 +514,47 @@ def reject_proxy_state(
     return state
 
 
+def migrate_rejected_run(run_dir: Path, revision: int = 2) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.HOAN_THANH:
+        raise MvpError("only a completed run can migrate after user rejection")
+    if revision < 2:
+        raise MvpError("migrated editorial revision must be at least 2")
+    state = replace(
+        state,
+        stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+        locked_situation_ids=(),
+        current_situation_id="situation-001",
+        editor_task_id="",
+        editorial_revision=revision,
+        approved_proxy_sha256="",
+        approved_artifact_sha256="",
+        proxy_rejection_note="user-rejected",
+        last_local_repair_fingerprint="",
+        last_local_repair_codes=(),
+    )
+    _write_state(state)
+    return state
+
+
+def fallback_to_legacy_observation(run_dir: Path) -> RunState:
+    """Resume the checked-in v1 CLI path when a legacy truth artifact is submitted."""
+    state = read_state(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+        raise MvpError("legacy fallback requires the initial Antigravity wait stage")
+    if state.locked_situation_ids or state.repair_history:
+        raise MvpError("a progressed v2 run cannot fall back to the legacy workflow")
+    state = replace(
+        state,
+        stage=Stage.QUAN_SAT,
+        editor_task_id="",
+        editorial_revision=0,
+        current_situation_id="",
+    )
+    _write_state(state)
+    return state
+
+
 def record_local_repair(
     run_dir: Path,
     situation_ids: tuple[str, ...],

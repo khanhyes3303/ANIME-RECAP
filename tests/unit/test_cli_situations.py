@@ -140,9 +140,11 @@ def test_prepare_writes_local_situation_editor_packet(
     assert cli._prepare(run) == 0
 
     packet = json.loads((run / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
-    assert packet["required_outputs"] == ["situations.json", "narration_plan.json"]
+    assert packet["required_outputs"] == [
+        "situation_draft.json", "narration_draft.json"
+    ]
     assert "frame_manifest_path" in packet
-    assert read_state(run).stage is Stage.QUAN_SAT
+    assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
 
 
 def _local_artifacts(tmp_path: Path) -> tuple[Path, Path]:

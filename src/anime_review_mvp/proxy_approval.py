@@ -30,6 +30,7 @@ class ProxyApproval:
     proxy_path: str
     proxy_sha256: str
     editorial_sha256: str
+    editorial_paths: tuple[str, ...]
     approved_at_utc: str
 
 
@@ -82,6 +83,7 @@ def approve_proxy(
         str(proxy_path.resolve()),
         proxy_hash,
         editorial_hash,
+        tuple(str(path.resolve()) for path in editorial_paths),
         now_utc(),
     )
     atomic_dump_json(run_dir / "proxy_approval.json", approval)
@@ -91,14 +93,15 @@ def approve_proxy(
 
 def require_approved_artifacts(
     run_dir: Path,
-    editorial_paths: tuple[Path, ...],
+    editorial_paths: tuple[Path, ...] = (),
 ) -> ProxyApproval:
-    approval = load_json(run_dir / "proxy_approval.json", ProxyApproval)
     state = read_state(run_dir)
     if not state.approved_proxy_sha256 or not state.approved_artifact_sha256:
         raise MvpError("proxy approval is required before final render")
+    approval = load_json(run_dir / "proxy_approval.json", ProxyApproval)
+    checked_paths = editorial_paths or tuple(Path(path) for path in approval.editorial_paths)
     if (
-        content_sha256(editorial_paths) != approval.editorial_sha256
+        content_sha256(checked_paths) != approval.editorial_sha256
         or state.approved_artifact_sha256 != approval.editorial_sha256
     ):
         raise MvpError("APPROVED_ARTIFACT_HASH_CHANGED")
