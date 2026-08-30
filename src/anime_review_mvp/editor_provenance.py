@@ -5,7 +5,7 @@ import json
 import os
 import shutil
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import MvpError
@@ -22,6 +22,11 @@ class EditorTask:
     input_paths: tuple[str, ...]
     input_sha256: str
     allowed_outputs: tuple[str, ...]
+    task_kind: str = field(default="SITUATION", metadata={"json_optional": True})
+
+    def __post_init__(self) -> None:
+        if self.task_kind not in {"SITUATION", "STRUCTURE"}:
+            raise MvpError("EDITOR_TASK_INVALID")
 
 
 @dataclass(frozen=True)
@@ -63,22 +68,35 @@ def create_editor_task(
     situation_id: str,
     revision: int,
     input_paths: tuple[Path, ...],
+    *,
+    task_kind: str = "SITUATION",
+    task_id: str | None = None,
+    allowed_outputs: tuple[str, ...] = (
+        "situation_draft.json",
+        "narration_draft.json",
+    ),
+    expected_stage: str = "ANTIGRAVITY_EDITORIAL",
 ) -> EditorTask:
-    if revision < 1 or not input_paths:
+    if revision < 1 or not input_paths or not allowed_outputs:
         raise MvpError("EDITOR_TASK_INVALID")
     resolved_inputs = tuple(path.resolve() for path in input_paths)
     task = EditorTask(
-        task_id=f"{situation_id}-revision-{revision:03d}",
+        task_id=task_id or f"{situation_id}-revision-{revision:03d}",
         run_id=run_id,
         situation_id=situation_id,
         revision=revision,
-        expected_stage="ANTIGRAVITY_EDITORIAL",
+        expected_stage=expected_stage,
         input_paths=tuple(str(path) for path in resolved_inputs),
         input_sha256=_input_sha256(resolved_inputs),
-        allowed_outputs=("situation_draft.json", "narration_draft.json"),
+        allowed_outputs=allowed_outputs,
+        task_kind=task_kind,
     )
     atomic_dump_json(run_dir / "editor_tasks" / f"{task.task_id}.json", task)
     return task
+
+
+def load_editor_task(path: Path) -> EditorTask:
+    return load_json(path, EditorTask)
 
 
 def load_editor_ledger(path: Path) -> tuple[AcceptedEditorialRevision, ...]:
@@ -110,7 +128,9 @@ def accept_antigravity_submission(
     run_dir: Path, task_id: str, staging_dir: Path
 ) -> AcceptedEditorialRevision:
     task_path = run_dir / "editor_tasks" / f"{task_id}.json"
-    task = load_json(task_path, EditorTask)
+    task = load_editor_task(task_path)
+    if task.task_kind != "SITUATION":
+        raise MvpError("EDITOR_TASK_KIND_INVALID")
     ledger_path = run_dir / "editor_ledger.jsonl"
     if any(
         record.situation_id == task.situation_id and record.revision >= task.revision

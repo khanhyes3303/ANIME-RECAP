@@ -8,6 +8,7 @@ import pytest
 from anime_review_mvp.editor_provenance import (
     accept_antigravity_submission,
     create_editor_task,
+    load_editor_task,
     load_editor_ledger,
     require_antigravity_provenance,
 )
@@ -50,6 +51,22 @@ def test_accept_antigravity_submission_records_engine_owned_provenance(
     assert json.loads(
         (accepted_dir / "narration_draft.json").read_text(encoding="utf-8")
     )["owner"] == "CODEX"
+
+
+def test_legacy_editor_task_without_kind_loads_as_situation(tmp_path: Path) -> None:
+    task_path = tmp_path / "task.json"
+    task_path.write_text(
+        '{"task_id":"situation-001-revision-001","run_id":"run-001",'
+        '"situation_id":"situation-001","revision":1,'
+        '"expected_stage":"ANTIGRAVITY_EDITORIAL","input_paths":["a.json"],'
+        '"input_sha256":"' + "a" * 64 + '",'
+        '"allowed_outputs":["situation_draft.json","narration_draft.json"]}',
+        encoding="utf-8",
+    )
+
+    task = load_editor_task(task_path)
+
+    assert task.task_kind == "SITUATION"
 
 
 def test_accept_rejects_changed_editor_inputs(tmp_path: Path) -> None:
