@@ -63,12 +63,16 @@ class Situation:
     previous_situation_id: str | None
     next_situation_id: str | None
     confidence: float
+    action_role: str = "MAIN_ACTION"
+    future_payoff: str = ""
 
     def __post_init__(self) -> None:
         _non_empty(self.situation_id, "situation_id")
         _positive_interval(self.source_start_ms, self.source_end_ms, "situation")
         if self.story_role not in {"MAIN_PLOT", "SUPPORTING_PLOT"}:
             raise MvpError("situation story_role is invalid")
+        if self.action_role not in {"MAIN_ACTION", "SUPPORTING_ACTION", "DECORATIVE"}:
+            raise MvpError("situation action_role is invalid")
         if not self.characters:
             raise MvpError("situation requires characters")
         _non_empty(self.setup, "situation setup")
