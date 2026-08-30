@@ -1,23 +1,20 @@
-# Prompt một lần chạy Antigravity
+# Prompt dự phòng — job quyết định task
 
-Xử lý duy nhất tập anime trong job:
+Xử lý duy nhất job sau:
 
 ```text
 <ĐƯỜNG_DẪN_RUN>\cong_viec_antigravity.json
 ```
 
-Đọc toàn bộ `Bo_nao_Antigravity/GEMINI.md` và job. Chỉ xử lý task/situation hiện tại;
-ghi `situation_draft.json` cùng `narration_draft.json` vào đúng `allowed_staging_dir`.
-Nộp qua lệnh `accept-antigravity` trong `next_action.json`; engine sẽ tạo TTS, timeline
-và quyết định PASS.
+Đọc `Bo_nao_Antigravity/GEMINI.md`, sau đó đọc `task_kind`, `required_outputs`,
+`allowed_staging_dir` và input paths trong job. Đây là nguồn chỉ dẫn duy nhất:
 
-Ưu tiên thông tin và diễn biến cốt truyện. Không giữ hành động chỉ vì đẹp. Không dùng
-nhịp giây cố định; mọi khoảng được lấy phải có khoảng nguồn bị bỏ thật sự sau nó.
-Viết lời Việt dân dã, tự nhiên và thô tục vừa ngữ cảnh, không bịa sự kiện.
+- `STRUCTURE` chỉ tạo `situation_index_draft.json`.
+- `SITUATION` chỉ tạo `situation_draft.json` và `narration_draft.json`.
 
-Mỗi range phải đồng nhất `semantic_event_id`, `action_phase`, `story_purpose` ở mọi shot;
-tách range nếu ý nghĩa shot thay đổi. Mỗi cue phải có `visual_anchor_source_ms` và đủ
-transcript/frame/shot evidence để người chưa biết anime vẫn hiểu.
+Transcript có thể rỗng đối với cảnh visual-only; khi đó dùng frame/shot và không bịa lời
+thoại. Chỉ thực hiện lệnh trong `next_action.json`. Không tự cài công cụ, không gọi
+Gemini Web và không đọc artifact revision cũ để suy đoán nhiệm vụ. Validator local quyết
+định PASS.
 
-Chỉ thực hiện lệnh được ghi trong `next_action.json`. Không tự sửa mã, test, policy,
-`run_state.json`, video nguồn hoặc tự cài công cụ. Validator local quyết định PASS.
+Run hiện tại: `<run_dir>`

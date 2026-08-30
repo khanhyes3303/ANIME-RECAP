@@ -1,62 +1,47 @@
-# Anime Review MVP — Antigravity-first
+# Anime Review MVP — Antigravity situation-first
 
-Pipeline tối giản cho một tập anime dub tiếng Anh mỗi run. Antigravity tự phân tích,
-viết review, tạo TTS, dựng proxy, tự phản biện và render video cuối. Codex chỉ thiết
-kế/sửa bộ não sau phản hồi; không biên tập từng tập.
+Mỗi run xử lý đúng một tập anime. Antigravity là biên tập viên nội dung duy nhất; engine
+cục bộ tạo TTS, timeline, EDL, proxy, kiểm định và render. Gemini Web không thuộc luồng
+mặc định.
 
-Thành phẩm dài 7–12 phút, chỉ có TTS Việt `BV074_streaming`; không audio nguồn, BGM,
-caption, batch, ZIP hoặc ChatGPT Web.
+## Yêu cầu
 
-## Cài đặt
+Python 3.12+, `uv`, FFmpeg và FFprobe phải có sẵn trong `PATH`. Hệ thống không tự cài
+thiếu sót; nó dừng và nêu chính xác công cụ người dùng cần cài.
 
-Yêu cầu Python 3.12+, `uv`, FFmpeg và FFprobe trong `PATH`:
+## Khởi tạo
 
 ```powershell
 uv sync --dev
-$env:ANIME_RECAP_TIKTOK_SESSION = "SESSION_CUA_BAN"
-```
-
-## Tạo run cho một tập
-
-```powershell
 uv run python run_episode.py start --anime "Ten Anime" --season 1 --episode 1 --video "D:\Tap01.mp4"
+uv run python run_episode.py prepare --run "<duong_dan_run>"
 ```
 
-Nếu tập đã có thành phẩm, thêm `--revision`. Sau khi chạy `prepare`, sinh prompt đã
-gắn đúng đường dẫn:
+`prepare` phân tích transcript, shot và frame rồi tạo task `STRUCTURE`. File duy nhất cần
+gửi cho Antigravity là nội dung `PROMPT_GUI_ANTIGRAVITY.txt` trong run. Có thể in đường
+dẫn chính xác mà không ghi đè prompt đặc thù bằng:
 
 ```powershell
-uv run python run_episode.py prompt --run "<đường_dẫn_run>"
+uv run python run_episode.py prompt --run "<duong_dan_run>"
 ```
 
-Chỉ dán nội dung tệp `PROMPT_GUI_ANTIGRAVITY.txt` được in ra. Không dán trực tiếp
-`Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md` vì đó là mẫu còn placeholder.
-
-Lần đầu, sau khi profile Chrome riêng được Antigravity mở, bạn tự đăng nhập đúng
-Google AI Ultra rồi enroll fingerprint (email chỉ đọc từ stdin, không ghi plaintext):
-
-```powershell
-uv run python run_episode.py web-verify enroll --run "<đường_dẫn_run>" --account-hint "u***@gmail.com"
-```
-
-Luồng duy nhất là:
+## Luồng duy nhất
 
 ```text
-prepare → truth/scene → atomic storyboard → Gemini Ultra Web (script)
-→ TTS cache → atomic EDL → proxy 360p → Gemini Ultra Web (proxy)
-→ final render → Gemini Ultra Web (final) → engine audit
+prepare
+→ Antigravity chia situation index từ transcript + frame
+→ engine chấp nhận index
+→ Antigravity biên tập tuần tự từng situation
+→ local validator tạo/kiểm TTS + semantic timeline + EDL
+→ proxy
+→ người dùng duyệt
+→ final render + engine audit
 ```
 
-Mỗi phase dùng `web-verify prepare` để tạo request/contact sheet và `web-verify accept`
-để kiểm receipt, account fingerprint, hash và verdict. Không dùng Gemini API, MCP,
-tài khoản thường hoặc fallback model.
-
-Beat lỗi được sửa riêng; cache nằm trong
-`Kho_Anime/<Anime>/Mua_XX/Tap_XXX/_Cache`. Thành phẩm ở:
+Mỗi job khai báo `task_kind`, `required_outputs` và `allowed_staging_dir`. Không dùng file
+mẫu, task cũ, artifact trong `revisions` hoặc tài liệu lịch sử để đoán việc hiện tại.
+Thành phẩm cuối nằm tại:
 
 ```text
 Kho_Anime/<Anime>/Mua_XX/Tap_XXX/Thanh_pham/review_anime.mp4
 ```
-
-Antigravity không được sửa bộ não, code, dependency hoặc Git. Khi cần đổi kiến trúc,
-nó báo `BRAIN_CHANGE_REQUESTED` để Codex xử lý.

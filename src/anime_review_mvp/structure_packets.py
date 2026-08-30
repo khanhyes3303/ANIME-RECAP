@@ -20,6 +20,7 @@ class StructureEditorPacket:
     shots: ShotDocument
     frame_manifest_path: str
     required_outputs: tuple[str, ...] = ("situation_index_draft.json",)
+    task_kind: str = "STRUCTURE"
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or self.revision < 1:
@@ -28,6 +29,8 @@ class StructureEditorPacket:
             raise MvpError("structure frame manifest and staging paths are required")
         if self.required_outputs != ("situation_index_draft.json",):
             raise MvpError("structure task output contract is invalid")
+        if self.task_kind != "STRUCTURE":
+            raise MvpError("structure packet task kind is invalid")
 
 
 def create_structure_task(
@@ -85,6 +88,9 @@ def render_structure_editor_prompt(packet: StructureEditorPacket) -> str:
 Task `{packet.task_id}` chỉ lập chỉ mục tình huống từ transcript, shots và frame
 manifest `{packet.frame_manifest_path}`. Không viết lời review, không chọn EDL, không
 tạo TTS và không sửa mã nguồn hay run_state.json.
+
+Transcript có thể rỗng ở cảnh visual-only. Khi đó phải dùng frame/shot làm bằng chứng
+và không được bịa lời thoại. Nếu có transcript liên quan thì phải tham chiếu đúng index.
 
 Một tình huống kết thúc khi mục tiêu, địa điểm, nhóm nhân vật, quan hệ nhân quả,
 hành động có ý nghĩa hoặc kết quả thay đổi. Cùng là cảnh đánh nhau vẫn phải tách nếu

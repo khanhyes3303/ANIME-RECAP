@@ -31,6 +31,7 @@ class SituationEditorPacket:
     )
     accepted_index_sha256: str = field(default="", metadata={"json_optional": True})
     scope_path: str = field(default="", metadata={"json_optional": True})
+    task_kind: str = "SITUATION"
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or not self.situation_id.strip() or self.revision < 1:
@@ -41,6 +42,8 @@ class SituationEditorPacket:
             raise MvpError("situation editor outputs do not match the local contract")
         if bool(self.accepted_index_sha256) != bool(self.scope_path):
             raise MvpError("situation scope hash and path must be supplied together")
+        if self.task_kind != "SITUATION":
+            raise MvpError("situation packet task kind is invalid")
 
 
 def build_situation_editor_packet(

@@ -62,6 +62,7 @@ def test_structure_prompt_separates_boundaries_without_writing_narration(
     )
     prompt = render_structure_editor_prompt(packet)
 
+    assert packet.task_kind == "STRUCTURE"
     assert "situation_index_draft.json" in prompt
     assert "transcript_segment_indexes" in prompt
     assert "boundary_reason" in prompt
@@ -69,5 +70,7 @@ def test_structure_prompt_separates_boundaries_without_writing_narration(
     assert '"source_sha256"' in prompt
     assert "opening" in prompt.casefold()
     assert "không viết lời review" in prompt.casefold()
+    assert "visual-only" in prompt.casefold()
+    assert "transcript có thể rỗng" in prompt.casefold()
     assert "narration_draft.json" not in prompt
     assert "Gemini Web" not in prompt

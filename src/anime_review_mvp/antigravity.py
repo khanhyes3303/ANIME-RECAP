@@ -92,8 +92,13 @@ def _validate_operator_policy(policy_dir: Path) -> None:
         return
     policy = policy_path.read_text(encoding="utf-8").casefold()
     required = (
+        "task_kind",
+        "required_outputs",
+        "situation_index_draft.json",
         "situation_draft.json",
         "narration_draft.json",
+        "visual-only",
+        "transcript có thể rỗng",
         "xử lý tuần tự",
         "không tự cài",
         "antigravity là biên tập viên duy nhất",

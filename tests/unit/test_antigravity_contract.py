@@ -14,10 +14,7 @@ from anime_review_mvp.antigravity import (
     load_truth,
 )
 from anime_review_mvp.errors import MvpError
-from anime_review_mvp.jsonio import load_json
 from anime_review_mvp.models import (
-    AtomicStoryboard,
-    CriticReviewDocument,
     Shot,
     SourceRef,
     TranscriptDocument,
@@ -265,19 +262,6 @@ def test_scene_packet_loader_rejects_extra_fields(tmp_path: Path) -> None:
         load_scene_packets(_write(tmp_path / "scene_packets.json", payload))
 
 
-def test_atomic_operator_templates_follow_strict_runtime_contract() -> None:
-    root = Path("Bo_nao_Antigravity") / "mau"
-
-    storyboard = load_json(root / "atomic_storyboard.json", AtomicStoryboard)
-    script_review = load_json(root / "critic_script.json", CriticReviewDocument)
-    video_review = load_json(root / "critic_video.json", CriticReviewDocument)
-
-    assert storyboard.owner == "ANTIGRAVITY"
-    assert script_review.phase == "SCRIPT"
-    assert video_review.phase == "VIDEO"
-    assert script_review.critic_context_id != storyboard.producer_context_id
-
-
 def test_operator_prompt_renderer_inserts_exact_job_path(tmp_path: Path) -> None:
     run = tmp_path / "Tam_dang_xu_ly" / "run-001"
     run.mkdir(parents=True)
@@ -310,12 +294,19 @@ def test_antigravity_policy_requires_local_situation_workflow() -> None:
     prompt = Path("Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md").read_text(encoding="utf-8")
     combined = (policy + "\n" + prompt).casefold()
 
+    assert "task_kind" in combined
+    assert "required_outputs" in combined
+    assert "structure" in combined
+    assert "situation_index_draft.json" in combined
+    assert "situation" in combined
     assert "situation_draft.json" in combined
     assert "narration_draft.json" in combined
     assert "semantic_event_id" in combined
     assert "visual_anchor_source_ms" in combined
     assert "transcript" in combined
     assert "frame" in combined
+    assert "visual-only" in combined
+    assert "transcript có thể rỗng" in combined
     assert "xử lý tuần tự" in combined
     assert "không tự cài" in combined
     assert "gemini-web run" not in combined

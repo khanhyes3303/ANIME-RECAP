@@ -80,6 +80,7 @@ def test_packet_preserves_prior_context_without_inventing_it(tmp_path: Path) -> 
     )
 
     assert packet.prior_context.last_outcome == ""
+    assert packet.task_kind == "SITUATION"
     assert packet.required_outputs == ("situation_draft.json", "narration_draft.json")
 
 

@@ -110,7 +110,10 @@ from .situation_validation import validate_narration_plan, validate_situations
 from .situations import (
     CueTtsManifest,
     EditorialPolicy,
+    NarrationClaim,
     NarrationPlan,
+    NarrationUnit,
+    Situation,
     SituationDocument,
     SituationTtsManifest,
     StoryContext,
@@ -1122,11 +1125,14 @@ def _prompt(run_dir: Path) -> int:
     job_path = run_dir / "cong_viec_antigravity.json"
     if not job_path.is_file():
         raise MvpError("run has no cong_viec_antigravity.json; run prepare first")
+    output = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
+    if output.is_file() and output.read_text(encoding="utf-8").strip():
+        print(output.resolve())
+        return 0
     rendered = render_operator_prompt(
         run_dir,
         root / "Bo_nao_Antigravity" / "PROMPT_MOT_LAN_CHAY.md",
     )
-    output = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
     output.write_text(rendered, encoding="utf-8")
     print(output.resolve())
     return 0
@@ -2309,8 +2315,15 @@ def _accept_antigravity_command(
         raise MvpError("Antigravity submission must contain exactly the active situation")
     situations_path = episode / "Su_that" / "situations.json"
     plan_path = episode / "Kich_ban" / "narration_plan.json"
-    prior_situations = (
+    unfiltered_situations = (
         load_situations(situations_path).situations if situations_path.is_file() else ()
+    )
+    prior_plan = load_narration_plan(plan_path) if plan_path.is_file() else None
+    prior_situations, prior_units, prior_claims = _filter_current_revision_artifacts(
+        unfiltered_situations,
+        prior_plan,
+        {item.situation_id for item in index.situations if not item.excluded},
+        run_dir / "accepted_editorial",
     )
     merged_situations = tuple(
         item for item in prior_situations if item.situation_id != accepted.situation_id
@@ -2318,10 +2331,9 @@ def _accept_antigravity_command(
     merged_situations = tuple(
         sorted(merged_situations, key=lambda item: item.source_start_ms)
     )
-    prior_plan = load_narration_plan(plan_path) if plan_path.is_file() else None
     kept_units = tuple(
         unit
-        for unit in (() if prior_plan is None else prior_plan.units)
+        for unit in prior_units
         if unit.situation_id != accepted.situation_id
     )
     merged_units = (*kept_units, *narration_draft.units)
@@ -2331,7 +2343,7 @@ def _accept_antigravity_command(
     claim_by_id = {
         claim.claim_id: claim
         for claim in (
-            *(() if prior_plan is None else prior_plan.claims),
+            *prior_claims,
             *narration_draft.claims,
         )
         if claim.claim_id in used_claim_ids
@@ -2383,6 +2395,9 @@ def _migrate_run(run_dir: Path, reason: str) -> int:
     state, episode = _episode(run_dir)
     if reason == "require-situation-index":
         prior_task_id = state.editor_task_id
+        archived_task_path = _archive_pre_index_revision(
+            run_dir, episode, prior_task_id
+        )
         migrate_to_structure_index(run_dir)
         if prior_task_id:
             superseded = run_dir / "superseded_tasks" / f"{prior_task_id}.json"
@@ -2392,9 +2407,7 @@ def _migrate_run(run_dir: Path, reason: str) -> int:
                     {
                         "task_id": prior_task_id,
                         "reason": "WHOLE_EPISODE_INPUT_NOT_SCOPED",
-                        "preserved_task_path": str(
-                            (run_dir / "editor_tasks" / f"{prior_task_id}.json").resolve()
-                        ),
+                        "preserved_task_path": str(archived_task_path or ""),
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -2438,6 +2451,98 @@ def _migrate_run(run_dir: Path, reason: str) -> int:
     _write_next(run_dir, "Chạy editor-task để Antigravity tạo revision 2.")
     print(revision_root)
     return 0
+
+
+def _filter_current_revision_artifacts(
+    prior_situations: tuple[Situation, ...],
+    prior_plan: NarrationPlan | None,
+    valid_situation_ids: set[str],
+    accepted_root: Path,
+) -> tuple[
+    tuple[Situation, ...], tuple[NarrationUnit, ...], tuple[NarrationClaim, ...]
+]:
+    accepted_ids = {
+        situation_id
+        for situation_id in valid_situation_ids
+        if (accepted_root / situation_id).is_dir()
+    }
+    situations = tuple(
+        item for item in prior_situations if item.situation_id in accepted_ids
+    )
+    units = tuple(
+        unit
+        for unit in (() if prior_plan is None else prior_plan.units)
+        if unit.situation_id in accepted_ids
+    )
+    used_claim_ids = {
+        claim_id for unit in units for cue in unit.cues for claim_id in cue.claim_ids
+    }
+    claims = tuple(
+        claim
+        for claim in (() if prior_plan is None else prior_plan.claims)
+        if claim.claim_id in used_claim_ids
+    )
+    return situations, units, claims
+
+
+def _archive_pre_index_revision(
+    run_dir: Path, episode: Path, prior_task_id: str
+) -> Path | None:
+    """Move generated pre-index outputs aside so a new revision starts clean."""
+    run_root = run_dir.resolve()
+    episode_root = episode.resolve()
+    archive = run_root / "revisions" / "revision-001" / "legacy_active"
+
+    def move(source: Path, base: Path, bucket: str) -> Path | None:
+        if not source.exists():
+            return None
+        resolved = source.resolve()
+        base_resolved = base.resolve()
+        if not resolved.is_relative_to(base_resolved):
+            raise MvpError(f"refusing to archive path outside expected root: {resolved}")
+        destination = archive / bucket / resolved.relative_to(base_resolved)
+        if destination.exists():
+            raise MvpError(f"revision archive destination already exists: {destination}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(resolved), str(destination))
+        return destination
+
+    for directory_name in ("Su_that", "Kich_ban", "TTS", "Thanh_pham", "Bao_cao"):
+        directory = episode_root / directory_name
+        if directory.is_dir():
+            for child in tuple(directory.iterdir()):
+                move(child, episode_root, "episode")
+    plan_dir = episode_root / "Ke_hoach_canh"
+    if plan_dir.is_dir():
+        for child in tuple(plan_dir.iterdir()):
+            if child.name != "editorial_policy.json":
+                move(child, episode_root, "episode")
+
+    run_outputs = (
+        "proxy",
+        "local_evidence",
+        "final_visual_audit",
+        "title_audit",
+        "crv_proxy_audit",
+        "crv_final_sync_audit",
+        "crv_final_sync_audio",
+        "final_candidate.mp4",
+        "final_render_result.json",
+        "adaptive_edl.json",
+        "semantic_timeline.json",
+        "aligned_narration.wav",
+        "cue_tts_manifest.json",
+    )
+    for name in run_outputs:
+        move(run_root / name, run_root, "run")
+
+    archived_task = None
+    if prior_task_id:
+        archived_task = move(
+            run_root / "editor_tasks" / f"{prior_task_id}.json", run_root, "task"
+        )
+        move(run_root / "editor_staging" / prior_task_id, run_root, "task_staging")
+    return archived_task
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -55,6 +55,68 @@ def _empty_run(tmp_path: Path) -> Path:
     return run
 
 
+def test_migrate_to_structure_archives_old_revision_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _empty_run(tmp_path)
+    state = read_state(run)
+    episode = Path(state.episode_dir)
+    task_id = "situation-001-revision-002"
+    new_state(
+        run,
+        stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+        episode_dir=episode,
+        source_video=Path(state.source_video),
+    )
+    cli.begin_editor_task(run, task_id, "situation-001", 2)
+    old_task = run / "editor_tasks" / f"{task_id}.json"
+    old_task.parent.mkdir(parents=True)
+    old_task.write_text('{"old":true}\n', encoding="utf-8")
+    stale_episode = episode / "Kich_ban" / "narration_plan.json"
+    stale_episode.write_text('{"old":true}\n', encoding="utf-8")
+    policy = episode / "Ke_hoach_canh" / "editorial_policy.json"
+    policy.write_text('{"keep":true}\n', encoding="utf-8")
+    stale_run = run / "proxy" / "review_proxy.mp4"
+    stale_run.parent.mkdir(parents=True)
+    stale_run.write_bytes(b"old proxy")
+    monkeypatch.setattr(cli, "_structure_task_command", lambda _run: 0)
+
+    assert cli._migrate_run(run, "require-situation-index") == 0
+
+    archive = run / "revisions" / "revision-001" / "legacy_active"
+    assert (archive / "episode" / "Kich_ban" / "narration_plan.json").is_file()
+    assert (archive / "run" / "proxy" / "review_proxy.mp4").is_file()
+    assert (archive / "task" / "editor_tasks" / f"{task_id}.json").is_file()
+    assert not stale_episode.exists()
+    assert not stale_run.exists()
+    assert not old_task.exists()
+    assert policy.is_file()
+    assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
+
+
+def test_prior_episode_artifacts_are_ignored_without_current_acceptance(
+    tmp_path: Path,
+) -> None:
+    run, episode = _local_artifacts(tmp_path)
+    prior_situations = cli.load_situations(
+        episode / "Kich_ban" / "situations.json"
+    ).situations
+    prior_plan = cli.load_narration_plan(
+        episode / "Kich_ban" / "narration_plan.json"
+    )
+
+    situations, units, claims = cli._filter_current_revision_artifacts(
+        prior_situations,
+        prior_plan,
+        {"situation-001"},
+        run / "accepted_editorial",
+    )
+
+    assert situations == ()
+    assert units == ()
+    assert claims == ()
+
+
 def test_parser_exposes_local_situation_artifacts_and_audit() -> None:
     situation = cli._parser().parse_args(
         ["validate", "--run", "run", "--artifact", "situations"]

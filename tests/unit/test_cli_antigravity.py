@@ -485,6 +485,28 @@ def test_prompt_command_writes_resolved_operator_prompt(tmp_path: Path) -> None:
     assert str(run.resolve()) in rendered
 
 
+def test_prompt_command_preserves_task_specific_prompt(tmp_path: Path) -> None:
+    root = tmp_path
+    run, _ = _prepared_storyboard_run(root)
+    brain = root / "Bo_nao_Antigravity"
+    brain.mkdir()
+    (brain / "PROMPT_MOT_LAN_CHAY.md").write_text(
+        "STALE TEMPLATE <ĐƯỜNG_DẪN_RUN>\\cong_viec_antigravity.json\n",
+        encoding="utf-8",
+    )
+    (run / "cong_viec_antigravity.json").write_text(
+        '{"task_kind":"STRUCTURE","required_outputs":["situation_index_draft.json"]}\n',
+        encoding="utf-8",
+    )
+    output = run / "PROMPT_GUI_ANTIGRAVITY.txt"
+    exact_prompt = "EXACT STRUCTURE PROMPT: situation_index_draft.json\n"
+    output.write_text(exact_prompt, encoding="utf-8")
+
+    assert cli.main(["prompt", "--run", str(run)]) == 0
+
+    assert output.read_text(encoding="utf-8") == exact_prompt
+
+
 def test_prompt_parser_accepts_run_path() -> None:
     args = cli._parser().parse_args(["prompt", "--run", "run"])
     assert args.run == Path("run")
