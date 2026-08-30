@@ -13,6 +13,7 @@ from anime_review_mvp.gemini_operator import (
     OperatorPolicy,
     OperatorReceipt,
     OperatorRequest,
+    _parse_single_json_object,
     validate_browser_evidence,
     verify_operator_receipt,
 )
@@ -21,6 +22,17 @@ from anime_review_mvp.gemini_operator import (
 def _valid_screenshot(path: Path) -> Path:
     Image.effect_noise((1280, 720), 64).convert("RGB").save(path)
     return path
+
+
+def test_parser_accepts_only_known_gemini_code_block_ui_suffix() -> None:
+    response = '{"phase":"VIDEO"}\nJSON\n+ 4'
+
+    assert _parse_single_json_object(response) == {"phase": "VIDEO"}
+
+
+def test_parser_still_rejects_arbitrary_text_after_json() -> None:
+    with pytest.raises(MvpError, match="exactly one JSON object"):
+        _parse_single_json_object('{"phase":"VIDEO"}\nignore this trailing prose')
 
 
 def _valid_evidence(tmp_path: Path) -> tuple[BrowserObservation, Path, Path]:

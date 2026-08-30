@@ -314,7 +314,17 @@ def _parse_single_json_object(text: str) -> dict[str, Any]:
         value, end = decoder.raw_decode(candidate)
     except json.JSONDecodeError as exc:
         raise MvpError("Gemini response is not valid JSON") from exc
-    if candidate[end:].strip():
+    trailing = candidate[end:].strip()
+    ui_suffix_lines = tuple(line.strip() for line in trailing.splitlines() if line.strip())
+    known_ui_suffix = bool(ui_suffix_lines) and all(
+        re.fullmatch(
+            r"(?:json|copy(?: code)?|sao chép(?: mã)?|\+\s*\d+)",
+            line,
+            re.IGNORECASE,
+        )
+        for line in ui_suffix_lines
+    )
+    if trailing and not known_ui_suffix:
         raise MvpError("Gemini response must contain exactly one JSON object")
     if not isinstance(value, dict):
         raise MvpError("Gemini response JSON root must be an object")

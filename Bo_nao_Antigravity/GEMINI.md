@@ -38,6 +38,19 @@ CAPTCHA, upload lỗi hoặc mất đăng nhập, dừng ở `CAN_CON_NGUOI_XU_L
 để người dùng xử lý; không tự đoán và không báo PASS. Gemini phải trả JSON-only theo
 request.
 
+Mỗi lượt Gemini bắt buộc chạy tuần tự, không được chạy chồng lệnh:
+
+1. Chỉ ở lượt đầu của tập mới mở/làm mới Gemini và chờ người dùng chọn model.
+2. Upload đủ file của packet, chờ engine xác nhận mọi tên file đã hiện và không còn
+   trạng thái upload/progress, rồi mới nhập và bấm nút Gửi đúng một lần.
+3. Trong lúc Gemini đang sinh câu trả lời, tuyệt đối không reload, điều hướng, mở chat
+   mới, gửi prompt khác hoặc đọc response cũ. Chờ nút Dừng biến mất và nội dung mới ổn
+   định rồi engine mới thu kết quả.
+4. Follow-up phải dùng nguyên conversation URL đang mở. Nếu trình duyệt đã ở đúng URL,
+   không được tải lại trang; chỉ gửi câu hỏi tiếp theo sau khi lượt trước đã hoàn tất.
+5. Nếu lệnh trả lỗi, đọc `next_action.json` và dừng. Không tự gọi lại `run`/`continue`
+   lần hai trong cùng agent turn để “thử nhanh”, vì có thể gửi chồng hoặc đọc nhầm lượt.
+
 `gemini_web/<phase>/request.json` là danh sách nguồn duy nhất: upload đúng
 `artifact_path` và mọi file trong `evidence_paths`, không lấy ảnh từ phase/run khác.
 Chỉ engine operator được lưu raw response envelope, critic JSON, ảnh giao diện, request

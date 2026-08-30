@@ -59,6 +59,9 @@ class RecordingPage:
     def upload(self, paths: tuple[Path, ...]) -> None:
         self.events.append(f"upload:{len(paths)}")
 
+    def wait_for_uploads_ready(self, paths: tuple[Path, ...]) -> None:
+        self.events.append(f"upload-ready:{len(paths)}")
+
     def send_prompt(self, prompt: str) -> None:
         assert prompt == "Return JSON only"
         self.events.append("send")
@@ -115,6 +118,7 @@ def test_session_uses_user_confirmation_then_uploads_without_account_model_gate(
         "open:new-chat",
         "confirm:user-ready",
         "upload:2",
+        "upload-ready:2",
         "send",
         "wait:complete",
         "read:response",
@@ -755,7 +759,61 @@ def test_upload_opens_current_gemini_upload_tools_menu(tmp_path: Path) -> None:
     assert driver.sent == [str(source.resolve())]
 
 
-def test_send_prompt_presses_enter_in_textbox_without_send_button_selector() -> None:
+def test_open_conversation_does_not_reload_the_active_chat() -> None:
+    class Driver:
+        current_url = "https://gemini.google.com/app/chat-123"
+
+        def __init__(self) -> None:
+            self.opened: list[str] = []
+
+        def get(self, url: str) -> None:
+            self.opened.append(url)
+
+    driver = Driver()
+
+    SeleniumGeminiPage(driver).open_conversation(driver.current_url)
+
+    assert driver.opened == []
+
+
+def test_upload_waits_until_every_attachment_is_visible_and_not_busy(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "manifest.json"
+    second = tmp_path / "script_evidence.mp4"
+    first.write_text("{}", encoding="utf-8")
+    second.write_bytes(b"video")
+
+    class Body:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class Driver:
+        def __init__(self) -> None:
+            self.polls = 0
+
+        def find_element(self, kind: str, selector: str) -> Body:
+            if selector != "body":
+                raise NoSuchElementException(selector)
+            self.polls += 1
+            if self.polls == 1:
+                return Body("manifest.json")
+            return Body("manifest.json script_evidence.mp4")
+
+        def find_elements(self, kind: str, selector: str) -> list[object]:
+            if self.polls < 2:
+                return [object()]
+            return []
+
+    driver = Driver()
+    page = SeleniumGeminiPage(driver, upload_wait_seconds=1.0)
+
+    page.wait_for_uploads_ready((first, second))
+
+    assert driver.polls >= 2
+
+
+def test_send_prompt_clicks_send_button_instead_of_pressing_enter() -> None:
     class Textbox:
         text = ""
 
@@ -774,20 +832,96 @@ def test_send_prompt_presses_enter_in_textbox_without_send_button_selector() -> 
         def send_keys(self, *values: str) -> None:
             self.sent.extend(values)
 
+    class SendButton:
+        def __init__(self) -> None:
+            self.clicked = False
+
+        def click(self) -> None:
+            self.clicked = True
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
     class Driver:
         def __init__(self) -> None:
             self.textbox = Textbox()
+            self.send_button = SendButton()
 
         def find_element(self, kind: str, selector: str):
             if "contenteditable" in selector:
                 return self.textbox
+            if "send-button" in selector:
+                return self.send_button
             raise NoSuchElementException(f"missing element: {kind} {selector}")
+
+        def find_elements(self, kind: str, selector: str):
+            return []
 
     driver = Driver()
 
     SeleniumGeminiPage(driver).send_prompt("GEMINI_WEB_OPERATOR_OK")
 
-    assert driver.textbox.sent[-2:] == ["GEMINI_WEB_OPERATOR_OK", Keys.ENTER]
+    assert driver.textbox.sent[-1] == "GEMINI_WEB_OPERATOR_OK"
+    assert Keys.ENTER not in driver.textbox.sent
+    assert driver.send_button.clicked is True
+
+
+def test_response_wait_does_not_return_the_previous_turn() -> None:
+    class Response:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class Driver:
+        def __init__(self) -> None:
+            self.response_text = "old response"
+
+        def find_element(self, kind: str, selector: str):
+            if "contenteditable" in selector:
+                class Textbox:
+                    text = ""
+
+                    def click(self) -> None:
+                        return None
+
+                    def is_displayed(self) -> bool:
+                        return True
+
+                    def is_enabled(self) -> bool:
+                        return True
+
+                    def send_keys(self, *values: str) -> None:
+                        return None
+
+                return Textbox()
+            if "send-button" in selector:
+                class SendButton:
+                    def click(inner_self) -> None:
+                        return None
+
+                    def is_displayed(inner_self) -> bool:
+                        return True
+
+                    def is_enabled(inner_self) -> bool:
+                        return True
+
+                return SendButton()
+            raise NoSuchElementException(selector)
+
+        def find_elements(self, kind: str, selector: str):
+            if "response-content" in selector:
+                return [Response(self.response_text)]
+            return []
+
+    page = SeleniumGeminiPage(
+        Driver(), timeout_seconds=0.0, response_wait_seconds=0.0
+    )
+    page.send_prompt("new prompt")
+
+    with pytest.raises(GeminiBrowserError, match="did not complete"):
+        page.wait_for_response()
 
 
 def test_response_wait_is_independent_from_short_ui_timeout() -> None:
@@ -808,9 +942,32 @@ def test_response_wait_is_independent_from_short_ui_timeout() -> None:
         Driver(),
         timeout_seconds=0.0,
         response_wait_seconds=1.0,
+        response_stable_seconds=0.0,
     )
 
     assert page.wait_for_response() == "GEMINI_WEB_OPERATOR_OK"
+
+
+def test_response_uses_dom_text_content_instead_of_visual_line_wrapping() -> None:
+    class Response:
+        text = '{"note":"line\nwrapped"}'
+
+        def get_attribute(self, name: str) -> str:
+            if name == "textContent":
+                return '{"note":"line wrapped"}'
+            return ""
+
+    class Driver:
+        def find_elements(self, kind: str, selector: str):
+            if "response-content" in selector:
+                return [Response()]
+            return []
+
+    page = SeleniumGeminiPage(
+        Driver(), response_wait_seconds=1.0, response_stable_seconds=0.0
+    )
+
+    assert page.wait_for_response() == '{"note":"line wrapped"}'
 
 
 def test_wait_until_ready_reads_manual_model_and_mode_without_selecting() -> None:

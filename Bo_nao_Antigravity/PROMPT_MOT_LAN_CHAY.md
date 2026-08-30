@@ -31,8 +31,11 @@ Nếu Gemini trả JSON/schema hoặc finding chưa đạt, tạo prompt feedbac
 uv run python run_episode.py gemini-web continue --run "<run_dir>" --phase "<phase>" --prompt-file "<run_dir>\gemini_web\<phase>\follow_up_prompt.txt"
 ```
 
-Lệnh `continue` luôn nối vào conversation URL hiện tại; không mở chat mới và không
-upload lại file nếu feedback chỉ yêu cầu sửa. Khi tập hoàn tất và audit PASS, dọn phiên:
+Lệnh `continue` luôn nối vào conversation URL hiện tại; không mở chat mới, không tải
+lại trang nếu đúng chat đang mở và không upload lại file nếu feedback chỉ yêu cầu sửa.
+Mỗi lượt phải đợi upload hoàn tất trước khi bấm Gửi, sau đó không tác động Chrome cho
+đến khi Gemini trả lời xong. Không chạy hai lệnh `gemini-web run`/`continue` đồng thời
+hoặc gọi lại ngay khi lượt trước chưa hoàn tất. Khi tập hoàn tất và audit PASS, dọn phiên:
 
 ```powershell
 uv run python run_episode.py gemini-web stop --run "<run_dir>"

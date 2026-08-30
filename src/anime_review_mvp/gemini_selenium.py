@@ -65,6 +65,21 @@ ACCOUNT_SELECTORS = (
     (By.CSS_SELECTOR, "a[aria-label*='Tài khoản Google' i]"),
     (By.CSS_SELECTOR, "[data-email]"),
 )
+SEND_SELECTORS = (
+    (By.CSS_SELECTOR, "button[data-test-id='send-button']"),
+    (By.CSS_SELECTOR, "button[aria-label*='Gửi']"),
+    (By.CSS_SELECTOR, "button[aria-label*='Send' i]"),
+)
+UPLOAD_BUSY_SELECTORS = (
+    (By.CSS_SELECTOR, "[role='progressbar']"),
+    (By.CSS_SELECTOR, "[aria-label*='Đang tải']"),
+    (By.CSS_SELECTOR, "[aria-label*='Uploading' i]"),
+    (By.CSS_SELECTOR, "[data-test-id*='upload-progress']"),
+)
+STOP_SELECTORS = (
+    (By.CSS_SELECTOR, "button[aria-label*='Dừng']"),
+    (By.CSS_SELECTOR, "button[aria-label*='Stop' i]"),
+)
 
 USER_SELECTED_LABEL = "USER_SELECTED_NOT_VERIFIED"
 
@@ -128,6 +143,8 @@ class GeminiPage(Protocol):
     def select_mode(self, label: str) -> str: ...
 
     def upload(self, paths: tuple[Path, ...]) -> None: ...
+
+    def wait_for_uploads_ready(self, paths: tuple[Path, ...]) -> None: ...
 
     def send_prompt(self, prompt: str) -> None: ...
 
@@ -398,12 +415,17 @@ class SeleniumGeminiPage:
         *,
         timeout_seconds: float = 30.0,
         account_wait_seconds: float = 180.0,
+        upload_wait_seconds: float = 300.0,
         response_wait_seconds: float = 900.0,
+        response_stable_seconds: float = 2.0,
     ) -> None:
         self.driver = driver
         self._wait = WebDriverWait(driver, timeout_seconds)
         self._account_wait_seconds = max(0.0, account_wait_seconds)
+        self._upload_wait_seconds = max(0.0, upload_wait_seconds)
         self._response_wait_seconds = max(0.0, response_wait_seconds)
+        self._response_stable_seconds = max(0.0, response_stable_seconds)
+        self._response_baseline: tuple[str, ...] | None = None
 
     def show(self) -> None:
         handles = self.driver.window_handles
@@ -483,6 +505,13 @@ class SeleniumGeminiPage:
             or parsed.path.rstrip("/") == "/app"
         ):
             raise GeminiBrowserError("INVALID_EVIDENCE", "Gemini conversation URL is invalid")
+        current = urlparse(str(self.driver.current_url))
+        if (
+            current.scheme == parsed.scheme
+            and current.netloc == parsed.netloc
+            and current.path.rstrip("/") == parsed.path.rstrip("/")
+        ):
+            return
         self.driver.get(url)
         self._wait.until(lambda driver: driver.current_url.startswith(url))
 
@@ -730,31 +759,87 @@ class SeleniumGeminiPage:
                     ) from exc
         upload.send_keys("\n".join(str(path.resolve()) for path in paths))
 
+    def wait_for_uploads_ready(self, paths: tuple[Path, ...]) -> None:
+        expected_names = tuple(path.name.casefold() for path in paths)
+
+        def uploads_ready(_: WebDriver) -> bool:
+            try:
+                visible_text = str(
+                    getattr(self.driver.find_element(By.TAG_NAME, "body"), "text", "")
+                ).casefold()
+            except NoSuchElementException:
+                return False
+            if not all(name in visible_text for name in expected_names):
+                return False
+            return not any(
+                self.driver.find_elements(kind, selector)
+                for kind, selector in UPLOAD_BUSY_SELECTORS
+            )
+
+        try:
+            WebDriverWait(self.driver, self._upload_wait_seconds).until(uploads_ready)
+        except TimeoutException as exc:
+            raise GeminiBrowserError(
+                "UPLOAD_FAILED", "Gemini attachments did not finish uploading"
+            ) from exc
+
+    def _response_snapshot(self) -> tuple[str, ...]:
+        texts: list[str] = []
+        for kind, value in RESPONSE_SELECTORS:
+            for element in self.driver.find_elements(kind, value):
+                get_attribute = getattr(element, "get_attribute", None)
+                raw_text = (
+                    get_attribute("textContent")
+                    if callable(get_attribute)
+                    else getattr(element, "text", "")
+                )
+                text = str(raw_text or getattr(element, "text", "")).strip()
+                if text and text not in texts:
+                    texts.append(text)
+        return tuple(texts)
+
     def send_prompt(self, prompt: str) -> None:
         if not prompt.strip():
             raise GeminiBrowserError("INVALID_RESPONSE", "Gemini prompt is empty")
+        self._response_baseline = self._response_snapshot()
         textbox = self._visible_first(PROMPT_SELECTORS, "INVALID_RESPONSE")
         textbox.click()
         textbox.send_keys(Keys.CONTROL, "a")
         textbox.send_keys(prompt)
-        textbox.send_keys(Keys.ENTER)
+        self._click_first(SEND_SELECTORS, "PROMPT_NOT_SENT")
 
     def wait_for_response(self) -> str:
+        baseline = self._response_baseline
+        stable_text = ""
+        stable_since = 0.0
+
         def completed(_: WebDriver) -> str | bool:
-            responses: list[object] = []
-            for kind, value in RESPONSE_SELECTORS:
-                responses.extend(self.driver.find_elements(kind, value))
-            text = str(getattr(responses[-1], "text", "")).strip() if responses else ""
-            stopping = self.driver.find_elements(
-                By.CSS_SELECTOR,
-                "button[aria-label*='Dừng'],button[aria-label*='Stop']",
+            nonlocal stable_since, stable_text
+            snapshot = self._response_snapshot()
+            is_new_turn = baseline is None or snapshot != baseline
+            text = snapshot[-1] if snapshot else ""
+            stopping = any(
+                self.driver.find_elements(kind, selector)
+                for kind, selector in STOP_SELECTORS
             )
-            return text if text and not stopping else False
+            if not text or not is_new_turn or stopping:
+                stable_text = ""
+                stable_since = 0.0
+                return False
+            now = time.monotonic()
+            if text != stable_text:
+                stable_text = text
+                stable_since = now
+            if now - stable_since < self._response_stable_seconds:
+                return False
+            return text
 
         try:
-            return str(
+            response = str(
                 WebDriverWait(self.driver, self._response_wait_seconds).until(completed)
             )
+            self._response_baseline = None
+            return response
         except TimeoutException as exc:
             raise GeminiBrowserError(
                 "INVALID_RESPONSE", "Gemini response did not complete"
@@ -912,6 +997,9 @@ def run_gemini_session(
         raise GeminiBrowserError("UPLOAD_FAILED", "Gemini upload files are missing")
     if upload_paths:
         page.upload(upload_paths)
+        wait_for_uploads = getattr(page, "wait_for_uploads_ready", None)
+        if callable(wait_for_uploads):
+            wait_for_uploads(upload_paths)
     page.send_prompt(prompt)
     response = page.wait_for_response()
     if not response.strip():
