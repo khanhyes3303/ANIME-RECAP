@@ -534,6 +534,7 @@ def route_editor_repair(
             last_local_repair_fingerprint=fingerprint,
             last_local_repair_codes=codes,
             editor_task_id="",
+            editorial_revision=max(1, state.editorial_revision + 1),
         )
     _write_state(state)
     return state

@@ -284,6 +284,20 @@ def test_v2_content_repair_routes_to_antigravity(tmp_path: Path) -> None:
     assert state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
     assert state.current_situation_id == "situation-004"
     assert state.repair_history[-1].owner == "ANTIGRAVITY"
+    assert state.editorial_revision == 1
+
+
+def test_v2_content_repair_increments_revision_for_retry(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG)
+    state = route_editor_repair(
+        run, ("situation-005",), ("SEMANTIC_TIMELINE_DOES_NOT_FIT",), "a" * 64
+    )
+    assert state.editorial_revision == 1
+    state = route_editor_repair(
+        run, ("situation-005",), ("SEMANTIC_TIMELINE_DOES_NOT_FIT",), "b" * 64
+    )
+    assert state.editorial_revision == 2
 
 
 def test_v2_requires_structure_index_before_situation_editor(tmp_path: Path) -> None:
