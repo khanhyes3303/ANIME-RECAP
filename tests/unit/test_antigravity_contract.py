@@ -310,8 +310,10 @@ def test_antigravity_policy_requires_local_situation_workflow() -> None:
     prompt = Path("Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md").read_text(encoding="utf-8")
     combined = (policy + "\n" + prompt).casefold()
 
-    assert "situations.json" in combined
-    assert "narration_plan.json" in combined
+    assert "situation_draft.json" in combined
+    assert "narration_draft.json" in combined
+    assert "semantic_event_id" in combined
+    assert "visual_anchor_source_ms" in combined
     assert "transcript" in combined
     assert "frame" in combined
     assert "xử lý tuần tự" in combined

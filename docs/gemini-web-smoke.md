@@ -5,6 +5,10 @@ pipeline situation-first mặc định. Run local đi từ `prepare` đến `aud
 engine` mà không mở Chrome; phản hồi Gemini không được phép tạo PASS hoặc thay đổi
 trạng thái của run local.
 
+Luồng mới dùng task Antigravity theo từng situation, cue-level TTS, semantic timeline và
+phê duyệt proxy bằng hash. Không dùng smoke test này để thay thế `audit --phase situation`,
+`audit --phase proxy` hoặc thao tác duyệt trực tiếp của người dùng.
+
 Smoke test chỉ dùng một run legacy nhỏ đã có packet hợp lệ. Không dùng video BLACK
 TORCH đầy đủ cho lần đầu và không dán mật khẩu/cookie vào terminal.
 

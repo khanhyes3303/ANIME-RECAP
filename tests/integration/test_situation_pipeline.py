@@ -6,8 +6,14 @@ from pathlib import Path
 import pytest
 
 from anime_review_mvp.adaptive_edl import build_adaptive_edl
+from anime_review_mvp.editor_provenance import (
+    accept_antigravity_submission,
+    create_editor_task,
+)
+from anime_review_mvp.errors import MvpError
 from anime_review_mvp.local_audit import build_local_audit
 from anime_review_mvp.models import Event, FrameAnchor, FrameAnchorDocument, Shot, TruthDocument
+from anime_review_mvp.proxy_approval import approve_proxy, require_approved_artifacts
 from anime_review_mvp.render import RenderResult
 from anime_review_mvp.situation_validation import (
     validate_narration_plan,
@@ -24,6 +30,15 @@ from anime_review_mvp.situations import (
     SituationDocument,
     SituationTts,
     SituationTtsManifest,
+)
+from anime_review_mvp.workflow import (
+    Stage,
+    accept_editor_revision,
+    advance,
+    begin_editor_task,
+    lock_editor_situation,
+    new_state,
+    read_state,
 )
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -218,3 +233,48 @@ def test_same_engine_handles_dialogue_and_action(fixture_name: str) -> None:
     assert len(omitted_gaps) == 3
     assert all(gap >= 500 for gap in omitted_gaps)
     assert all(0.8 <= segment.playback_rate <= 1.3 for segment in edl.segments)
+
+
+def test_v2_run_requires_antigravity_submission_and_user_proxy_approval(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "run"
+    new_state(run)
+    advance(run, Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG)
+    advance(run, Stage.TRICH_XUAT_BANG_CHUNG, Stage.CHO_ANTIGRAVITY_TINH_HUONG)
+    transcript = run / "transcript.json"
+    frames = run / "frames.json"
+    transcript.write_text('{"text":"Jiro về nhà"}', encoding="utf-8")
+    frames.write_text('{"shots":["shot-001"]}', encoding="utf-8")
+    task = create_editor_task(
+        run, "run-001", "situation-001", 1, (transcript, frames)
+    )
+    begin_editor_task(run, task.task_id, task.situation_id, task.revision)
+    staging = run / "editor_staging" / task.task_id
+    staging.mkdir(parents=True)
+    situation = staging / "situation_draft.json"
+    narration = staging / "narration_draft.json"
+    situation.write_text('{"situation_id":"situation-001"}', encoding="utf-8")
+    narration.write_text('{"cue_id":"cue-001"}', encoding="utf-8")
+    accepted = accept_antigravity_submission(run, task.task_id, staging)
+    accept_editor_revision(run, task.task_id, accepted.revision)
+    advance(run, Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG)
+    advance(run, Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG)
+    advance(
+        run,
+        Stage.LAP_TIMELINE_TINH_HUONG,
+        Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
+    )
+    lock_editor_situation(run, "situation-001")
+    advance(run, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY)
+    advance(run, Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY)
+    advance(run, Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
+    with pytest.raises(MvpError, match="proxy approval"):
+        advance(run, Stage.CHO_NGUOI_DUNG_DUYET_PROXY, Stage.DUNG_VIDEO_CUOI)
+
+    proxy = run / "proxy" / "review_proxy.mp4"
+    proxy.parent.mkdir()
+    proxy.write_bytes(b"proxy")
+    approval = approve_proxy(run, proxy, (situation, narration))
+    assert read_state(run).stage is Stage.DUNG_VIDEO_CUOI
+    assert require_approved_artifacts(run, (situation, narration)) == approval
