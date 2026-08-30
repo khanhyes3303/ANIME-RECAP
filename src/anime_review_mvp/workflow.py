@@ -33,6 +33,9 @@ class Stage(StrEnum):
     DUNG_VIDEO_CUOI = "DUNG_VIDEO_CUOI"
     CHO_GEMINI_FINAL = "CHO_GEMINI_FINAL"
     KIEM_DINH_ENGINE = "KIEM_DINH_ENGINE"
+    LAP_TINH_HUONG = "LAP_TINH_HUONG"
+    CAN_HINH_VOICE = "CAN_HINH_VOICE"
+    KIEM_DINH_LOCAL = "KIEM_DINH_LOCAL"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,21 +63,26 @@ class RunState:
     source_video: str = ""
     repair_history: tuple[RepairRecord, ...] = ()
     stage_metrics: tuple[StageMetric, ...] = ()
+    locked_situation_ids: tuple[str, ...] = ()
+    current_situation_id: str = ""
+    last_local_repair_fingerprint: str = ""
+    last_local_repair_codes: tuple[str, ...] = ()
 
 
 _NEXT_STAGE = {
     Stage.CHUAN_BI: Stage.QUAN_SAT,
-    Stage.QUAN_SAT: Stage.LAP_STORYBOARD,
-    Stage.LAP_STORYBOARD: Stage.VIET_LOI,
-    Stage.VIET_LOI: Stage.CHO_GEMINI_SCRIPT,
+    Stage.QUAN_SAT: Stage.LAP_TINH_HUONG,
+    Stage.LAP_TINH_HUONG: Stage.VIET_LOI,
+    Stage.VIET_LOI: Stage.TAO_TTS,
     Stage.CHO_GEMINI_SCRIPT: Stage.PHAN_BIEN_KICH_BAN,
     Stage.PHAN_BIEN_KICH_BAN: Stage.TAO_TTS,
-    Stage.TAO_TTS: Stage.CAN_TTS,
-    Stage.CAN_TTS: Stage.DUNG_PROXY,
-    Stage.DUNG_PROXY: Stage.PHAN_BIEN_VIDEO,
+    Stage.TAO_TTS: Stage.CAN_HINH_VOICE,
+    Stage.CAN_HINH_VOICE: Stage.DUNG_PROXY,
+    Stage.DUNG_PROXY: Stage.KIEM_DINH_LOCAL,
+    Stage.KIEM_DINH_LOCAL: Stage.DUNG_VIDEO_CUOI,
     Stage.PHAN_BIEN_VIDEO: Stage.CHO_GEMINI_PROXY,
     Stage.CHO_GEMINI_PROXY: Stage.DUNG_VIDEO_CUOI,
-    Stage.DUNG_VIDEO_CUOI: Stage.CHO_GEMINI_FINAL,
+    Stage.DUNG_VIDEO_CUOI: Stage.KIEM_DINH_ENGINE,
     Stage.CHO_GEMINI_FINAL: Stage.KIEM_DINH_ENGINE,
     Stage.KIEM_DINH_ENGINE: Stage.HOAN_THANH,
     # Legacy runs already at the old final-audit stage remain resumable.
@@ -82,6 +90,13 @@ _NEXT_STAGE = {
 }
 
 _LEGACY_TRANSITIONS = {
+    (Stage.QUAN_SAT, Stage.LAP_STORYBOARD),
+    (Stage.LAP_STORYBOARD, Stage.VIET_LOI),
+    (Stage.VIET_LOI, Stage.CHO_GEMINI_SCRIPT),
+    (Stage.TAO_TTS, Stage.CAN_TTS),
+    (Stage.CAN_TTS, Stage.DUNG_PROXY),
+    (Stage.DUNG_PROXY, Stage.PHAN_BIEN_VIDEO),
+    (Stage.DUNG_VIDEO_CUOI, Stage.CHO_GEMINI_FINAL),
     (Stage.QUAN_SAT, Stage.VIET_KICH_BAN),
     (Stage.VIET_KICH_BAN, Stage.KIEM_DINH_KICH_BAN),
     (Stage.KIEM_DINH_KICH_BAN, Stage.CODEX_BIEN_TAP),
@@ -119,6 +134,8 @@ def _write_state(state: RunState) -> None:
         }
         for metric in state.stage_metrics
     ]
+    payload["locked_situation_ids"] = list(state.locked_situation_ids)
+    payload["last_local_repair_codes"] = list(state.last_local_repair_codes)
     _state_path(state.run_dir).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -145,7 +162,7 @@ def new_state(
 def read_state(run_dir: Path) -> RunState:
     try:
         raw = json.loads(_state_path(run_dir).read_text(encoding="utf-8"))
-        expected = {
+        legacy_fields = {
             "run_dir",
             "stage",
             "episode_dir",
@@ -153,7 +170,14 @@ def read_state(run_dir: Path) -> RunState:
             "repair_history",
             "stage_metrics",
         }
-        if set(raw) != expected:
+        current_fields = {
+            *legacy_fields,
+            "locked_situation_ids",
+            "current_situation_id",
+            "last_local_repair_fingerprint",
+            "last_local_repair_codes",
+        }
+        if frozenset(raw) not in {frozenset(legacy_fields), frozenset(current_fields)}:
             raise MvpError("run state fields do not match the contract")
         return RunState(
             run_dir=Path(raw["run_dir"]),
@@ -179,6 +203,10 @@ def read_state(run_dir: Path) -> RunState:
                 )
                 for item in raw["stage_metrics"]
             ),
+            locked_situation_ids=tuple(raw.get("locked_situation_ids", ())),
+            current_situation_id=raw.get("current_situation_id", ""),
+            last_local_repair_fingerprint=raw.get("last_local_repair_fingerprint", ""),
+            last_local_repair_codes=tuple(raw.get("last_local_repair_codes", ())),
         )
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise MvpError(f"cannot read run state: {run_dir}") from exc
@@ -256,6 +284,75 @@ def record_stage_metric(
         changed_beat_ids,
     )
     state = replace(state, stage_metrics=(*state.stage_metrics, metric))
+    _write_state(state)
+    return state
+
+
+def lock_situation(
+    run_dir: Path,
+    situation_id: str,
+    *,
+    next_situation_id: str = "",
+) -> RunState:
+    normalized = situation_id.strip()
+    if not normalized:
+        raise MvpError("situation ID is required before locking")
+    state = read_state(run_dir)
+    if state.stage is not Stage.CAN_HINH_VOICE:
+        raise MvpError("situation can only lock after image/voice alignment")
+    if normalized in state.locked_situation_ids:
+        raise MvpError("situation is already locked")
+    state = replace(
+        state,
+        locked_situation_ids=(*state.locked_situation_ids, normalized),
+        current_situation_id=next_situation_id.strip(),
+    )
+    _write_state(state)
+    return state
+
+
+def record_local_repair(
+    run_dir: Path,
+    situation_ids: tuple[str, ...],
+    codes: tuple[str, ...],
+    fingerprint: str,
+) -> RunState:
+    state = read_state(run_dir)
+    if state.stage in {Stage.HOAN_THANH, Stage.CAN_CON_NGUOI_XU_LY}:
+        raise MvpError("run already requires human handling or is complete")
+    if not situation_ids or not codes:
+        raise MvpError("local repair requires situation IDs and finding codes")
+    if len(fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in fingerprint
+    ):
+        raise MvpError("local repair fingerprint must be a lowercase SHA-256")
+    if (
+        state.last_local_repair_fingerprint == fingerprint
+        and state.last_local_repair_codes == codes
+    ):
+        history = (
+            *state.repair_history,
+            RepairRecord(
+                "LOCAL_EDITOR",
+                ("KHONG_CO_TIEN_TRIEN",),
+                "LOCAL",
+                situation_ids,
+            ),
+        )
+        state = replace(state, stage=Stage.CAN_CON_NGUOI_XU_LY, repair_history=history)
+    else:
+        history = (
+            *state.repair_history,
+            RepairRecord("LOCAL_EDITOR", codes, "LOCAL", situation_ids),
+        )
+        state = replace(
+            state,
+            stage=Stage.VIET_LOI,
+            repair_history=history,
+            current_situation_id=situation_ids[0],
+            last_local_repair_fingerprint=fingerprint,
+            last_local_repair_codes=codes,
+        )
     _write_state(state)
     return state
 

@@ -9,10 +9,12 @@ from anime_review_mvp.workflow import (
     RunState,
     Stage,
     advance,
+    lock_situation,
     mark_human_required,
     new_state,
     read_state,
     record_beat_repair,
+    record_local_repair,
     record_repair,
     record_stage_metric,
     resume_beat_repair,
@@ -163,3 +165,72 @@ def test_resume_beat_repair_returns_to_the_smallest_required_stage(tmp_path: Pat
     resumed = resume_beat_repair(state.run_dir, "VIDEO")
 
     assert resumed.stage is Stage.TAO_TTS
+
+
+def test_local_state_path_has_no_browser_gate(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run)
+    path = (
+        (Stage.CHUAN_BI, Stage.QUAN_SAT),
+        (Stage.QUAN_SAT, Stage.LAP_TINH_HUONG),
+        (Stage.LAP_TINH_HUONG, Stage.VIET_LOI),
+        (Stage.VIET_LOI, Stage.TAO_TTS),
+        (Stage.TAO_TTS, Stage.CAN_HINH_VOICE),
+        (Stage.CAN_HINH_VOICE, Stage.DUNG_PROXY),
+        (Stage.DUNG_PROXY, Stage.KIEM_DINH_LOCAL),
+        (Stage.KIEM_DINH_LOCAL, Stage.DUNG_VIDEO_CUOI),
+        (Stage.DUNG_VIDEO_CUOI, Stage.KIEM_DINH_ENGINE),
+    )
+    for expected, target in path:
+        advance(run, expected, target)
+
+    assert read_state(run).stage is Stage.KIEM_DINH_ENGINE
+
+
+def test_second_identical_local_repair_stops_no_progress(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_LOCAL)
+    first = record_local_repair(
+        run,
+        ("situation-003",),
+        ("VOICE_SCENE_MISMATCH",),
+        "a" * 64,
+    )
+    second = record_local_repair(
+        run,
+        ("situation-003",),
+        ("VOICE_SCENE_MISMATCH",),
+        "a" * 64,
+    )
+
+    assert first.stage is Stage.VIET_LOI
+    assert second.stage is Stage.CAN_CON_NGUOI_XU_LY
+    assert second.repair_history[-1].codes == ("KHONG_CO_TIEN_TRIEN",)
+
+
+def test_lock_situation_records_progress_and_next_unit(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.CAN_HINH_VOICE)
+
+    state = lock_situation(run, "situation-001", next_situation_id="situation-002")
+
+    assert state.locked_situation_ids == ("situation-001",)
+    assert state.current_situation_id == "situation-002"
+
+
+def test_read_state_upgrades_legacy_schema(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "run_state.json").write_text(
+        '{"run_dir":"'
+        + str(run).replace("\\", "\\\\")
+        + '","stage":"CHUAN_BI","episode_dir":"","source_video":"",'
+        '"repair_history":[],"stage_metrics":[]}',
+        encoding="utf-8",
+    )
+
+    state = read_state(run)
+
+    assert state.locked_situation_ids == ()
+    assert state.current_situation_id == ""
+    assert state.last_local_repair_fingerprint == ""
