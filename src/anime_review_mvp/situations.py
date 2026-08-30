@@ -65,6 +65,8 @@ class Situation:
     confidence: float
     action_role: str = "MAIN_ACTION"
     future_payoff: str = ""
+    cause_or_goal: str = ""
+    audience_summary: str = ""
 
     def __post_init__(self) -> None:
         _non_empty(self.situation_id, "situation_id")
@@ -95,6 +97,30 @@ class SituationDocument:
         _non_empty(self.policy_version, "situation policy_version")
         if not self.situations:
             raise MvpError("situation document requires situations")
+        if self.policy_version == "situation-v2":
+            for situation in self.situations:
+                if not situation.cause_or_goal.strip() or not situation.audience_summary.strip():
+                    raise MvpError("v2 situation requires cause_or_goal and audience_summary")
+
+
+_ACTION_PHASES = {
+    "SETUP", "CAUSE", "APPROACH", "ACTION", "OUTCOME", "REACTION", "BRIDGE"
+}
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticShotUse:
+    shot_id: str
+    semantic_event_id: str
+    action_phase: str
+    story_purpose: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.shot_id, "semantic shot_id")
+        _non_empty(self.semantic_event_id, "semantic event_id")
+        if self.action_phase not in _ACTION_PHASES:
+            raise MvpError("semantic action_phase is invalid")
+        _non_empty(self.story_purpose, "semantic story_purpose")
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +134,10 @@ class EvidenceRange:
     transcript_refs: tuple[str, ...]
     frame_refs: tuple[str, ...]
     story_fact: str
+    semantic_event_id: str = ""
+    action_phase: str = ""
+    story_purpose: str = ""
+    shot_uses: tuple[SemanticShotUse, ...] = ()
 
     def __post_init__(self) -> None:
         _non_empty(self.range_id, "evidence range_id")
@@ -121,6 +151,65 @@ class EvidenceRange:
 
 
 @dataclass(frozen=True, slots=True)
+class NarrationClaim:
+    claim_id: str
+    text: str
+    event_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        _non_empty(self.claim_id, "claim_id")
+        _non_empty(self.text, "claim text")
+        if not self.event_ids:
+            raise MvpError("narration claim requires event IDs")
+
+
+@dataclass(frozen=True, slots=True)
+class NarrationCue:
+    cue_id: str
+    situation_id: str
+    text: str
+    claim_ids: tuple[str, ...]
+    visual_anchor_source_ms: int
+    anchor_kind: str
+    transcript_refs: tuple[str, ...]
+    frame_refs: tuple[str, ...]
+    shot_ids: tuple[str, ...]
+    introduces_characters: tuple[str, ...]
+    mentions_characters: tuple[str, ...]
+    introduces_terms: tuple[str, ...]
+    mentions_terms: tuple[str, ...]
+    visual_preroll_ms: int = 500
+    visual_postroll_ms: int = 300
+
+    def __post_init__(self) -> None:
+        _non_empty(self.cue_id, "cue_id")
+        _non_empty(self.situation_id, "cue situation_id")
+        _non_empty(self.text, "cue text")
+        if not self.claim_ids:
+            raise MvpError("narration cue requires claims")
+        if self.visual_anchor_source_ms < 0:
+            raise MvpError("visual anchor timestamp must not be negative")
+        if self.anchor_kind not in {
+            "SETUP", "CHARACTER_INTRO", "CAUSE", "ACTION", "REVEAL", "OUTCOME", "BRIDGE"
+        }:
+            raise MvpError("visual anchor kind is invalid")
+        if not self.transcript_refs or not self.frame_refs or not self.shot_ids:
+            raise MvpError("narration cue requires transcript, frame, and shot evidence")
+        if not 300 <= self.visual_preroll_ms <= 1_200:
+            raise MvpError("visual preroll is invalid")
+        if not 0 <= self.visual_postroll_ms <= 1_200:
+            raise MvpError("visual postroll is invalid")
+        for values in (
+            self.introduces_characters,
+            self.mentions_characters,
+            self.introduces_terms,
+            self.mentions_terms,
+        ):
+            if len(values) != len(set(values)):
+                raise MvpError("cue introductions and mentions must be unique")
+
+
+@dataclass(frozen=True, slots=True)
 class NarrationUnit:
     unit_id: str
     situation_id: str
@@ -130,6 +219,7 @@ class NarrationUnit:
     bridge_to_next: str
     evidence_ranges: tuple[EvidenceRange, ...]
     status: str
+    cues: tuple[NarrationCue, ...] = ()
 
     def __post_init__(self) -> None:
         _non_empty(self.unit_id, "narration unit_id")
@@ -148,6 +238,7 @@ class NarrationPlan:
     owner: str
     policy_version: str
     units: tuple[NarrationUnit, ...]
+    claims: tuple[NarrationClaim, ...] = ()
 
     def __post_init__(self) -> None:
         if self.owner != "LOCAL_EDITOR":
@@ -155,6 +246,117 @@ class NarrationPlan:
         _non_empty(self.policy_version, "narration policy_version")
         if not self.units:
             raise MvpError("narration plan requires units")
+        if self.policy_version == "situation-v2":
+            self._validate_v2()
+
+    def _validate_v2(self) -> None:
+        if not self.claims or any(not unit.cues for unit in self.units):
+            raise MvpError("situation-v2 requires claims and cues")
+        claim_ids = [claim.claim_id for claim in self.claims]
+        if len(claim_ids) != len(set(claim_ids)):
+            raise MvpError("narration claim IDs must be unique")
+        known_claims = set(claim_ids)
+        cue_ids = [cue.cue_id for unit in self.units for cue in unit.cues]
+        if len(cue_ids) != len(set(cue_ids)):
+            raise MvpError("narration cue IDs must be unique")
+        for unit in self.units:
+            if any(cue.situation_id != unit.situation_id for cue in unit.cues):
+                raise MvpError("cue situation does not match narration unit")
+            for cue in unit.cues:
+                if any(claim_id not in known_claims for claim_id in cue.claim_ids):
+                    raise MvpError("cue claim does not resolve exactly once")
+            for evidence in unit.evidence_ranges:
+                self._validate_semantic_range(evidence)
+
+    @staticmethod
+    def _validate_semantic_range(evidence: EvidenceRange) -> None:
+        if (
+            not evidence.semantic_event_id.strip()
+            or evidence.action_phase not in _ACTION_PHASES
+            or not evidence.story_purpose.strip()
+            or not evidence.shot_uses
+        ):
+            raise MvpError("situation-v2 requires semantic range labels")
+        uses_match = all(
+            use.semantic_event_id == evidence.semantic_event_id
+            and use.action_phase == evidence.action_phase
+            and use.story_purpose == evidence.story_purpose
+            for use in evidence.shot_uses
+        )
+        if not uses_match or {use.shot_id for use in evidence.shot_uses} != set(evidence.shot_ids):
+            raise MvpError("SEMANTIC_RANGE_MIXED")
+
+
+@dataclass(frozen=True, slots=True)
+class CueTts:
+    cue_id: str
+    unit_id: str
+    wav_path: str
+    mp3_path: str
+    duration_ms: int
+    cache_key: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.cue_id, "TTS cue_id")
+        _non_empty(self.unit_id, "TTS unit_id")
+        _non_empty(self.wav_path, "TTS WAV path")
+        _non_empty(self.mp3_path, "TTS MP3 path")
+        if self.duration_ms <= 0:
+            raise MvpError("TTS cue duration must be positive")
+        _sha256(self.cache_key, "TTS cue cache key")
+
+
+@dataclass(frozen=True, slots=True)
+class CueTtsManifest:
+    cues: tuple[CueTts, ...]
+    provider: str
+    voice_id: str
+    policy_version: str
+    cache_hits: int
+    cache_misses: int
+
+    def __post_init__(self) -> None:
+        if not self.cues:
+            raise MvpError("cue TTS manifest requires cues")
+        _non_empty(self.provider, "cue TTS provider")
+        _non_empty(self.voice_id, "cue TTS voice_id")
+        _non_empty(self.policy_version, "cue TTS policy_version")
+        if self.cache_hits < 0 or self.cache_misses < 0:
+            raise MvpError("cue TTS cache counters cannot be negative")
+        if self.cache_hits + self.cache_misses != len(self.cues):
+            raise MvpError("cue TTS cache counters do not match cues")
+
+
+@dataclass(frozen=True, slots=True)
+class CharacterContext:
+    name: str
+    viewer_role: str
+    introduced_cue_id: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.name, "character name")
+        _non_empty(self.viewer_role, "character viewer_role")
+        _non_empty(self.introduced_cue_id, "character introduced_cue_id")
+
+
+@dataclass(frozen=True, slots=True)
+class TermContext:
+    term: str
+    plain_explanation: str
+    introduced_cue_id: str
+
+    def __post_init__(self) -> None:
+        _non_empty(self.term, "term")
+        _non_empty(self.plain_explanation, "term plain_explanation")
+        _non_empty(self.introduced_cue_id, "term introduced_cue_id")
+
+
+@dataclass(frozen=True, slots=True)
+class StoryContext:
+    characters: tuple[CharacterContext, ...]
+    terms: tuple[TermContext, ...]
+    unresolved_threads: tuple[str, ...]
+    last_outcome: str
 
 
 @dataclass(frozen=True, slots=True)

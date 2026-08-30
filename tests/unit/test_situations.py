@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -7,16 +9,24 @@ import pytest
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.jsonio import dump_json
 from anime_review_mvp.situations import (
+    CharacterContext,
+    CueTts,
+    CueTtsManifest,
     EditorialPolicy,
     EvidenceRange,
+    NarrationClaim,
+    NarrationCue,
     NarrationPlan,
     NarrationUnit,
     SemanticReviewDocument,
+    SemanticShotUse,
     SemanticUnitReview,
     Situation,
     SituationDocument,
     SituationTts,
     SituationTtsManifest,
+    StoryContext,
+    TermContext,
     load_narration_plan,
     load_situations,
 )
@@ -154,3 +164,89 @@ def test_tts_manifest_total_matches_unit_durations() -> None:
             cache_misses=1,
             total_duration_ms=1_999,
         )
+
+
+def test_v2_narration_rejects_negative_visual_anchor() -> None:
+    with pytest.raises(MvpError, match="visual anchor"):
+        NarrationCue(
+            cue_id="cue-001",
+            situation_id="situation-001",
+            text="Ông nội Jiro đã đứng chờ sẵn.",
+            claim_ids=("claim-001",),
+            visual_anchor_source_ms=-1,
+            anchor_kind="CHARACTER_INTRO",
+            transcript_refs=("transcript-001",),
+            frame_refs=("frame-001",),
+            shot_ids=("shot-001",),
+            introduces_characters=("Ông nội",),
+            mentions_characters=("Jiro", "Ông nội"),
+            introduces_terms=(),
+            mentions_terms=(),
+        )
+
+
+def test_v2_plan_requires_semantically_homogeneous_ranges() -> None:
+    mixed_range = replace(
+        _range(),
+        semantic_event_id="event-001",
+        action_phase="ACTION",
+        story_purpose="Jiro phản công.",
+        shot_uses=(
+            SemanticShotUse("shot-001", "event-001", "ACTION", "Jiro phản công."),
+            SemanticShotUse("shot-002", "event-002", "OUTCOME", "Đối thủ gục."),
+        ),
+    )
+    cue = NarrationCue(
+        "cue-001", "situation-001", "Jiro phản công.", ("claim-001",),
+        10_000, "ACTION", ("transcript-001",), ("frame-001",), ("shot-001",),
+        (), ("Jiro",), (), (),
+    )
+    unit = NarrationUnit(
+        "unit-001", "situation-001", ("Jiro phản công.",), "Jiro phản công.",
+        "", "", (mixed_range,), "LOCKED", (cue,),
+    )
+    with pytest.raises(MvpError, match="SEMANTIC_RANGE_MIXED"):
+        NarrationPlan(
+            "LOCAL_EDITOR", "situation-v2", (unit,),
+            (NarrationClaim("claim-001", "Jiro phản công.", ("event-001",)),),
+        )
+
+
+def test_v2_contracts_accept_one_meaning_per_range() -> None:
+    shot_use = SemanticShotUse("shot-001", "event-001", "ACTION", "Jiro phản công.")
+    cue_tts = CueTts("cue-001", "unit-001", "cue.wav", "cue.mp3", 1_000, "a" * 64)
+    manifest = CueTtsManifest((cue_tts,), "fake", "voice-001", "situation-v2", 0, 1)
+    context = StoryContext(
+        (CharacterContext("Jiro", "nhân vật chính", "cue-001"),),
+        (TermContext("Hắc Tinh", "năng lực siêu nhiên", "cue-001"),),
+        ("Ai đứng sau vụ tấn công?",),
+        "Jiro thoát nạn.",
+    )
+    assert shot_use.action_phase == "ACTION"
+    assert manifest.cues[0].cue_id == "cue-001"
+    assert context.characters[0].name == "Jiro"
+
+
+def test_legacy_v1_plan_loads_when_new_defaulted_fields_are_absent(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.json"
+    raw = {
+        "owner": "LOCAL_EDITOR",
+        "policy_version": "situation-v1",
+        "units": [{
+            "unit_id": "unit-001", "situation_id": "situation-001",
+            "factual_claims": ["Jiro phản công."], "narration_text": "Jiro phản công.",
+            "bridge_from_previous": "", "bridge_to_next": "", "status": "LOCKED",
+            "evidence_ranges": [{
+                "range_id": "range-001", "situation_id": "situation-001",
+                "source_start_ms": 10000, "source_end_ms": 14000,
+                "shot_ids": ["shot-001"], "event_ids": ["event-001"],
+                "transcript_refs": ["transcript-001"], "frame_refs": ["frame-001"],
+                "story_fact": "Jiro phản công."
+            }]
+        }]
+    }
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = load_narration_plan(path)
+    assert loaded.policy_version == "situation-v1"
+    assert loaded.claims == ()
+    assert loaded.units[0].cues == ()

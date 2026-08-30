@@ -4,7 +4,7 @@ import json
 import os
 import types
 import uuid
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import MISSING, asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
@@ -97,10 +97,17 @@ def _from_value(value: Any, expected: Any) -> Any:
         if not isinstance(value, dict):
             raise MvpError("JSON dataclass field must be an object")
         hints = get_type_hints(expected)
-        allowed = {field.name for field in fields(expected)}
-        if set(value) != allowed:
+        contract_fields = {field.name: field for field in fields(expected)}
+        if not set(value) <= set(contract_fields):
             raise MvpError("JSON object fields do not match the artifact contract")
-        converted = {name: _from_value(value[name], hints[name]) for name in allowed}
+        required = {
+            name
+            for name, field in contract_fields.items()
+            if field.default is MISSING and field.default_factory is MISSING
+        }
+        if not required <= set(value):
+            raise MvpError("JSON object fields do not match the artifact contract")
+        converted = {name: _from_value(raw, hints[name]) for name, raw in value.items()}
         return expected(**converted)
     if expected is Any:
         return value
