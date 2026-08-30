@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import types
+import uuid
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
@@ -17,6 +19,53 @@ def dump_json(path: Path, value: Any) -> None:
         json.dumps(asdict(value), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def atomic_dump_json(path: Path, value: Any) -> None:
+    """Write one dataclass JSON artifact without exposing a partial file."""
+    if not is_dataclass(value):
+        raise MvpError("JSON artifacts must be dataclass instances")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(asdict(value), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, path)
+    except OSError as exc:
+        raise MvpError(f"cannot atomically write JSON artifact: {path}") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def atomic_append_jsonl(path: Path, value: Any) -> None:
+    """Append a dataclass record by atomically replacing the JSONL ledger."""
+    if not is_dataclass(value):
+        raise MvpError("JSONL records must be dataclass instances")
+    existing = b""
+    if path.exists():
+        try:
+            existing = path.read_bytes()
+        except OSError as exc:
+            raise MvpError(f"cannot load JSONL ledger: {path}") from exc
+        for line in existing.splitlines():
+            try:
+                json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise MvpError(f"cannot load JSONL ledger: {path}") from exc
+    if existing and not existing.endswith(b"\n"):
+        existing += b"\n"
+    record = (json.dumps(asdict(value), ensure_ascii=False) + "\n").encode("utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(existing + record)
+        os.replace(temporary, path)
+    except OSError as exc:
+        raise MvpError(f"cannot atomically append JSONL ledger: {path}") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_json[T](path: Path, cls: type[T]) -> T:
