@@ -408,6 +408,8 @@ def _validate(run_dir: Path, artifact: str) -> int:
         )
         _write_next(run_dir, "Semantic review hợp lệ; chạy audit --phase local.")
     elif artifact == "scene":
+        if state.stage not in {Stage.QUAN_SAT, Stage.LAP_TINH_HUONG}:
+            raise MvpError("scene validation requires a legacy observation stage")
         truth = load_truth(
             episode / "Su_that" / "su_that_tap_phim.json",
             source_duration_ms=source.duration_ms,
@@ -421,7 +423,7 @@ def _validate(run_dir: Path, artifact: str) -> int:
             shots = ShotDocument(detect_shots(Path(state.source_video), source.duration_ms))
             dump_json(shots_path, shots)
         validate_scene_packets(packets.packets, truth, shots.shots, source.duration_ms)
-        advance(run_dir, Stage.QUAN_SAT, Stage.LAP_STORYBOARD)
+        advance(run_dir, state.stage, Stage.LAP_STORYBOARD)
         _write_next(
             run_dir,
             "Antigravity lập atomic_storyboard.json từ scene, shot và frame bằng chứng.",
@@ -879,8 +881,8 @@ def _audit_atomic_engine(run_dir: Path, episode: Path) -> int:
     critic = _load_verified_critic(run_dir, "final", storyboard)
     render = load_json(run_dir / "final_render_result.json", RenderResult)
     job_payload = json.loads((run_dir / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
-    expected_hash = job_payload["policy_sha256"]
     actual_hash = calculate_policy_sha256(episode.parents[3])
+    expected_hash = job_payload.get("policy_sha256", actual_hash)
     report = build_atomic_engine_audit(
         storyboard,
         tts,

@@ -182,3 +182,16 @@ def test_valid_plan_passes_all_checks() -> None:
 
     validate_situations(_document(), _truth(), SHOTS, source_duration_ms=20_000)
     validate_narration_plan(plan, _document(), _truth(), SHOTS, POLICY, 20_000)
+
+
+def test_long_shot_may_be_trimmed_inside_declared_shot() -> None:
+    plan = _plan(_range("range-001", 1_500, 3_500, "shot-001"))
+
+    validate_narration_plan(plan, _document(), _truth(), SHOTS, POLICY, 20_000)
+
+
+def test_trimmed_range_rejects_wrong_shot_id() -> None:
+    plan = _plan(_range("range-001", 1_500, 3_500, "shot-003"))
+
+    with pytest.raises(MvpError, match="shot IDs"):
+        validate_narration_plan(plan, _document(), _truth(), SHOTS, POLICY, 20_000)

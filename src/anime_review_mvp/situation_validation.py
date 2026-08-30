@@ -104,12 +104,15 @@ def _validate_shot_alignment(
     selected = tuple(
         shot
         for shot in shots
-        if source_start_ms <= shot.start_ms and shot.end_ms <= source_end_ms
+        if shot.start_ms < source_end_ms and source_start_ms < shot.end_ms
     )
     if not selected:
-        raise MvpError("kept range contains no complete source shot")
-    if selected[0].start_ms != source_start_ms or selected[-1].end_ms != source_end_ms:
-        raise MvpError("kept range must align to source shot boundaries")
+        raise MvpError("kept range contains no source shot")
+    if not (
+        selected[0].start_ms <= source_start_ms < selected[0].end_ms
+        and selected[-1].start_ms < source_end_ms <= selected[-1].end_ms
+    ):
+        raise MvpError("kept range is not covered by its source shots")
     if tuple(shot.shot_id for shot in selected) != shot_ids:
         raise MvpError("kept range shot IDs do not match its source interval")
 

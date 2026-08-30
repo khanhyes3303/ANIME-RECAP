@@ -46,9 +46,23 @@ def build_filter_graph(
         labels.append(f"[{label}]")
     if quality == "proxy":
         filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[joined]")
-        filters.append("[joined]scale=-2:360[video]")
+        if isinstance(edl, AdaptiveEdlDocument):
+            duration = edl.total_duration_ms / 1_000
+            filters.append(
+                f"[joined]trim=duration={duration:.3f},setpts=PTS-STARTPTS[timed]"
+            )
+            filters.append("[timed]scale=-2:360[video]")
+        else:
+            filters.append("[joined]scale=-2:360[video]")
     elif quality == "final":
-        filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[video]")
+        if isinstance(edl, AdaptiveEdlDocument):
+            duration = edl.total_duration_ms / 1_000
+            filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[joined]")
+            filters.append(
+                f"[joined]trim=duration={duration:.3f},setpts=PTS-STARTPTS[video]"
+            )
+        else:
+            filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[video]")
     else:
         raise MvpError("render quality must be proxy or final")
     return ";".join(filters)

@@ -54,6 +54,7 @@ def test_filter_graph_applies_adaptive_segment_playback_rate() -> None:
     graph = build_filter_graph(edl)
 
     assert "setpts=(PTS-STARTPTS)/1.250000" in graph
+    assert "trim=duration=2.400,setpts=PTS-STARTPTS" in graph
 
 
 def test_ffmpeg_maps_only_rendered_video_and_tts_audio() -> None:

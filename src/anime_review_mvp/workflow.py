@@ -91,6 +91,7 @@ _NEXT_STAGE = {
 
 _LEGACY_TRANSITIONS = {
     (Stage.QUAN_SAT, Stage.LAP_STORYBOARD),
+    (Stage.LAP_TINH_HUONG, Stage.LAP_STORYBOARD),
     (Stage.LAP_STORYBOARD, Stage.VIET_LOI),
     (Stage.VIET_LOI, Stage.CHO_GEMINI_SCRIPT),
     (Stage.TAO_TTS, Stage.CAN_TTS),
