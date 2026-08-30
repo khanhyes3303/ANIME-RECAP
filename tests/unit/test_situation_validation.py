@@ -7,8 +7,11 @@ import pytest
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import Event, Shot, SourceRegionAnnotation, TruthDocument
 from anime_review_mvp.situation_validation import (
+    coherence_findings,
+    validate_causal_chains,
     validate_keep_skip,
     validate_narration_plan,
+    validate_semantic_range,
     validate_situations,
 )
 from anime_review_mvp.situations import (
@@ -16,6 +19,7 @@ from anime_review_mvp.situations import (
     EvidenceRange,
     NarrationPlan,
     NarrationUnit,
+    SemanticShotUse,
     Situation,
     SituationDocument,
 )
@@ -195,3 +199,63 @@ def test_trimmed_range_rejects_wrong_shot_id() -> None:
 
     with pytest.raises(MvpError, match="shot IDs"):
         validate_narration_plan(plan, _document(), _truth(), SHOTS, POLICY, 20_000)
+
+
+def test_v2_situation_requires_complete_causal_chain() -> None:
+    with pytest.raises(MvpError, match="CAUSAL_CHAIN_INCOMPLETE"):
+        SituationDocument(
+            "LOCAL_EDITOR", "situation-v2",
+            (_situation(cause_or_goal="", audience_summary=""),),
+        )
+
+
+def test_complete_v2_causal_chain_is_accepted() -> None:
+    document = SituationDocument(
+        "LOCAL_EDITOR", "situation-v2",
+        (_situation(
+            cause_or_goal="Jiro phải thoát khỏi đám côn đồ.",
+            audience_summary="Jiro bị chặn đường, phản công rồi thoát nạn.",
+        ),),
+    )
+    validate_causal_chains(document)
+
+
+def test_range_mixing_shot_meanings_is_rejected_regardless_of_duration() -> None:
+    source_range = EvidenceRange(
+        "range-mixed", "situation-001", 10_000, 18_000,
+        ("shot-001", "shot-002", "shot-003"), ("event-001",),
+        ("transcript-001",), ("frame-001",), "Jiro ra đòn.",
+        "fight-hit", "ACTION", "Jiro ra đòn.",
+        (
+            SemanticShotUse("shot-001", "fight-approach", "APPROACH", "Jiro áp sát."),
+            SemanticShotUse("shot-002", "fight-hit", "ACTION", "Jiro ra đòn."),
+            SemanticShotUse("shot-003", "fight-reaction", "REACTION", "Địch hoảng sợ."),
+        ),
+    )
+    with pytest.raises(MvpError, match="SEMANTIC_RANGE_MIXED.*shot-001.*shot-003"):
+        validate_semantic_range(source_range)
+
+
+def test_four_second_range_with_one_meaning_is_accepted() -> None:
+    source_range = EvidenceRange(
+        "range-clean", "situation-001", 12_000, 16_000, ("shot-002",),
+        ("event-001",), ("transcript-001",), ("frame-001",), "Jiro ra đòn.",
+        "fight-hit", "ACTION", "Jiro ra đòn.",
+        (SemanticShotUse("shot-002", "fight-hit", "ACTION", "Jiro ra đòn."),),
+    )
+    validate_semantic_range(source_range)
+
+
+def test_repeated_filler_bridge_is_reported() -> None:
+    base = _plan(_range("range-001", 1_000, 4_000, "shot-001"))
+    units = tuple(
+        replace(
+            base.units[0], unit_id=f"unit-{index}",
+            bridge_from_previous="Tiếp đó rồi mọi chuyện lại tiếp diễn.",
+            bridge_to_next="Tiếp đó rồi mọi chuyện lại tiếp diễn.",
+        )
+        for index in range(4)
+    )
+    plan = NarrationPlan("LOCAL_EDITOR", "situation-v1", units)
+    codes = {finding.code for finding in coherence_findings(plan, _document())}
+    assert "REPETITIVE_FILLER_BRIDGE" in codes

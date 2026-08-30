@@ -4,7 +4,7 @@ import json
 import os
 import types
 import uuid
-from dataclasses import MISSING, asdict, fields, is_dataclass
+from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
@@ -103,7 +103,7 @@ def _from_value(value: Any, expected: Any) -> Any:
         required = {
             name
             for name, field in contract_fields.items()
-            if field.default is MISSING and field.default_factory is MISSING
+            if not field.metadata.get("json_optional", False)
         }
         if not required <= set(value):
             raise MvpError("JSON object fields do not match the artifact contract")

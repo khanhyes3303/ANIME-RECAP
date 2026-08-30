@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
+from collections import Counter
 from itertools import pairwise
 
 from .errors import MvpError
-from .models import Shot, TruthDocument
-from .situations import EditorialPolicy, NarrationPlan, SituationDocument
+from .models import AuditFinding, Shot, TruthDocument
+from .situations import EditorialPolicy, EvidenceRange, NarrationPlan, SituationDocument
 
 
 def _duplicates(values: list[str]) -> bool:
@@ -13,6 +15,86 @@ def _duplicates(values: list[str]) -> bool:
 
 def _overlap(start_ms: int, end_ms: int, other_start_ms: int, other_end_ms: int) -> bool:
     return start_ms < other_end_ms and other_start_ms < end_ms
+
+
+def _normalized_words(value: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
+
+
+def validate_causal_chains(document: SituationDocument) -> None:
+    if document.policy_version != "situation-v2":
+        return
+    for situation in document.situations:
+        if not (
+            situation.setup.strip()
+            and situation.cause_or_goal.strip()
+            and situation.turning_points
+            and situation.outcome.strip()
+            and situation.audience_summary.strip()
+        ):
+            raise MvpError(f"CAUSAL_CHAIN_INCOMPLETE: {situation.situation_id}")
+
+
+def validate_semantic_range(source_range: EvidenceRange) -> None:
+    declared = list(source_range.shot_ids)
+    used = [item.shot_id for item in source_range.shot_uses]
+    conflicts: set[str] = set()
+    if len(declared) != len(set(declared)) or len(used) != len(set(used)):
+        conflicts.update(declared)
+        conflicts.update(used)
+    conflicts.update(set(declared) ^ set(used))
+    expected_purpose = _normalized_words(source_range.story_purpose)
+    for item in source_range.shot_uses:
+        if (
+            item.semantic_event_id != source_range.semantic_event_id
+            or item.action_phase != source_range.action_phase
+            or _normalized_words(item.story_purpose) != expected_purpose
+        ):
+            conflicts.add(item.shot_id)
+    if conflicts:
+        raise MvpError(
+            f"SEMANTIC_RANGE_MIXED: {source_range.range_id}: "
+            + ", ".join(sorted(conflicts))
+        )
+
+
+def coherence_findings(
+    plan: NarrationPlan, document: SituationDocument
+) -> tuple[AuditFinding, ...]:
+    del document
+    findings: list[AuditFinding] = []
+    bridges = [
+        bridge
+        for unit in plan.units
+        for bridge in (unit.bridge_from_previous, unit.bridge_to_next)
+        if bridge.strip()
+    ]
+    prefixes = [" ".join(_normalized_words(item)[:4]) for item in bridges]
+    counts = Counter(prefixes)
+    repetitive = any(
+        count >= 3 or count / len(prefixes) > 0.25 for count in counts.values()
+    ) if prefixes else False
+    if repetitive:
+        findings.append(
+            AuditFinding(
+                "ERROR", "REPETITIVE_FILLER_BRIDGE", None,
+                "Narration repeats the same filler bridge.", tuple(bridges),
+            )
+        )
+    seen_facts: dict[tuple[str, ...], str] = {}
+    for unit in plan.units:
+        for fact in unit.factual_claims:
+            normalized = _normalized_words(fact)
+            if normalized in seen_facts and seen_facts[normalized] != unit.unit_id:
+                findings.append(
+                    AuditFinding(
+                        "ERROR", "DUPLICATE_STORY_FACT", None,
+                        f"Story fact is duplicated in {unit.unit_id}.", (fact,),
+                    )
+                )
+            else:
+                seen_facts[normalized] = unit.unit_id
+    return tuple(findings)
 
 
 def validate_situations(
@@ -65,6 +147,7 @@ def validate_situations(
             raise MvpError("situation has no known source shot")
     if not truth.events:
         raise MvpError("situation validation requires source truth")
+    validate_causal_chains(document)
 
 
 def validate_keep_skip(
@@ -144,6 +227,8 @@ def validate_narration_plan(
         if index + 1 < len(plan.units) and not unit.bridge_to_next.strip():
             raise MvpError("narration unit requires a bridge to the next situation")
         for source_range in unit.evidence_ranges:
+            if plan.policy_version == "situation-v2":
+                validate_semantic_range(source_range)
             if source_range.situation_id != unit.situation_id:
                 raise MvpError("evidence range belongs to another situation")
             if source_range.source_start_ms < policy.forbidden_before_ms:

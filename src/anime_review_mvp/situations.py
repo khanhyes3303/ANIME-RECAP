@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .errors import MvpError
@@ -65,8 +65,8 @@ class Situation:
     confidence: float
     action_role: str = "MAIN_ACTION"
     future_payoff: str = ""
-    cause_or_goal: str = ""
-    audience_summary: str = ""
+    cause_or_goal: str = field(default="", metadata={"json_optional": True})
+    audience_summary: str = field(default="", metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
         _non_empty(self.situation_id, "situation_id")
@@ -100,7 +100,7 @@ class SituationDocument:
         if self.policy_version == "situation-v2":
             for situation in self.situations:
                 if not situation.cause_or_goal.strip() or not situation.audience_summary.strip():
-                    raise MvpError("v2 situation requires cause_or_goal and audience_summary")
+                    raise MvpError("CAUSAL_CHAIN_INCOMPLETE: cause_or_goal or audience_summary")
 
 
 _ACTION_PHASES = {
@@ -134,10 +134,12 @@ class EvidenceRange:
     transcript_refs: tuple[str, ...]
     frame_refs: tuple[str, ...]
     story_fact: str
-    semantic_event_id: str = ""
-    action_phase: str = ""
-    story_purpose: str = ""
-    shot_uses: tuple[SemanticShotUse, ...] = ()
+    semantic_event_id: str = field(default="", metadata={"json_optional": True})
+    action_phase: str = field(default="", metadata={"json_optional": True})
+    story_purpose: str = field(default="", metadata={"json_optional": True})
+    shot_uses: tuple[SemanticShotUse, ...] = field(
+        default=(), metadata={"json_optional": True}
+    )
 
     def __post_init__(self) -> None:
         _non_empty(self.range_id, "evidence range_id")
@@ -219,7 +221,7 @@ class NarrationUnit:
     bridge_to_next: str
     evidence_ranges: tuple[EvidenceRange, ...]
     status: str
-    cues: tuple[NarrationCue, ...] = ()
+    cues: tuple[NarrationCue, ...] = field(default=(), metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
         _non_empty(self.unit_id, "narration unit_id")
@@ -238,7 +240,7 @@ class NarrationPlan:
     owner: str
     policy_version: str
     units: tuple[NarrationUnit, ...]
-    claims: tuple[NarrationClaim, ...] = ()
+    claims: tuple[NarrationClaim, ...] = field(default=(), metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
         if self.owner != "LOCAL_EDITOR":
