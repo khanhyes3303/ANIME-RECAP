@@ -8,10 +8,14 @@ from anime_review_mvp.errors import MvpError
 from anime_review_mvp.workflow import (
     RunState,
     Stage,
+    accept_structure_index,
     advance,
+    begin_editor_task,
+    begin_structure_task,
     lock_editor_situation,
     lock_situation,
     mark_human_required,
+    migrate_to_structure_index,
     new_state,
     read_state,
     record_beat_repair,
@@ -243,13 +247,24 @@ def test_v2_path_waits_for_explicit_user_proxy_approval(tmp_path: Path) -> None:
     new_state(run)
     path = (
         (Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG),
-        (Stage.TRICH_XUAT_BANG_CHUNG, Stage.CHO_ANTIGRAVITY_TINH_HUONG),
+        (
+            Stage.TRICH_XUAT_BANG_CHUNG,
+            Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        ),
+        (
+            Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+            Stage.KIEM_DINH_CHI_MUC_TINH_HUONG,
+        ),
+    )
+    for expected, target in path:
+        advance(run, expected, target)
+    accept_structure_index(run, "a" * 64, "situation-001")
+    for expected, target in (
         (Stage.CHO_ANTIGRAVITY_TINH_HUONG, Stage.KIEM_DINH_TINH_HUONG),
         (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
         (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
         (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG),
-    )
-    for expected, target in path:
+    ):
         advance(run, expected, target)
     lock_editor_situation(run, "situation-001", next_situation_id="")
     advance(run, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY)
@@ -269,3 +284,47 @@ def test_v2_content_repair_routes_to_antigravity(tmp_path: Path) -> None:
     assert state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
     assert state.current_situation_id == "situation-004"
     assert state.repair_history[-1].owner == "ANTIGRAVITY"
+
+
+def test_v2_requires_structure_index_before_situation_editor(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run)
+    advance(run, Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG)
+    waiting = advance(
+        run,
+        Stage.TRICH_XUAT_BANG_CHUNG,
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+    )
+    assert waiting.current_situation_id == ""
+
+    issued = begin_structure_task(run, "episode-structure-revision-001", 1)
+    assert issued.editor_task_id == "episode-structure-revision-001"
+    with pytest.raises(MvpError, match="situation editor"):
+        begin_editor_task(run, "situation-001-revision-001", "situation-001", 1)
+
+    validating = advance(
+        run,
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        Stage.KIEM_DINH_CHI_MUC_TINH_HUONG,
+    )
+    assert validating.stage is Stage.KIEM_DINH_CHI_MUC_TINH_HUONG
+    accepted = accept_structure_index(run, "b" * 64, "situation-002")
+    assert accepted.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert accepted.accepted_situation_index_sha256 == "b" * 64
+    assert accepted.current_situation_id == "situation-002"
+
+
+def test_pre_index_editor_wait_migrates_to_structure_without_deleting_history(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG)
+    begin_editor_task(run, "situation-001-revision-002", "situation-001", 2)
+
+    migrated = migrate_to_structure_index(run)
+
+    assert migrated.stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
+    assert migrated.editor_task_id == ""
+    assert migrated.current_situation_id == ""
+    assert migrated.editorial_revision == 2
+    assert migrated.accepted_situation_index_sha256 == ""

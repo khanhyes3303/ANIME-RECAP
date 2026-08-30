@@ -17,6 +17,7 @@ from anime_review_mvp.models import (
     SourceRef,
     SourceRegionAnnotation,
     TranscriptDocument,
+    TranscriptSegment,
     TruthDocument,
 )
 from anime_review_mvp.render import RenderResult
@@ -110,7 +111,7 @@ def test_prepare_missing_tools_writes_clear_next_action(
     assert "ffmpeg, ffprobe" in payload["instruction"]
 
 
-def test_prepare_writes_local_situation_editor_packet(
+def test_prepare_writes_structure_task_without_inventing_situation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _empty_run(tmp_path)
@@ -140,11 +141,126 @@ def test_prepare_writes_local_situation_editor_packet(
     assert cli._prepare(run) == 0
 
     packet = json.loads((run / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
-    assert packet["required_outputs"] == [
-        "situation_draft.json", "narration_draft.json"
-    ]
+    assert packet["required_outputs"] == ["situation_index_draft.json"]
     assert "frame_manifest_path" in packet
-    assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert "situation_id" not in packet
+    assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
+    task = json.loads(
+        (run / "editor_tasks" / "episode-structure-revision-001.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert task["task_kind"] == "STRUCTURE"
+    assert task["allowed_outputs"] == ["situation_index_draft.json"]
+
+
+def test_parser_exposes_structure_handoff_commands() -> None:
+    structure = cli._parser().parse_args(["structure-task", "--run", "run"])
+    accept = cli._parser().parse_args(
+        [
+            "accept-situation-index",
+            "--run",
+            "run",
+            "--task",
+            "episode-structure-revision-001",
+            "--input",
+            "staging",
+        ]
+    )
+
+    assert structure.command == "structure-task"
+    assert accept.command == "accept-situation-index"
+
+
+def test_accepted_index_drives_a_scoped_editor_task(tmp_path: Path) -> None:
+    run = _empty_run(tmp_path)
+    old = read_state(run)
+    episode = Path(old.episode_dir)
+    new_state(
+        run,
+        stage=Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        episode_dir=episode,
+        source_video=Path(old.source_video),
+    )
+    source = SourceRef(str(old.source_video), "a" * 64, 20_000, 320, 180, "1/1000", 1)
+    dump_json(episode / "Dau_vao" / "source_ref.json", source)
+    transcript = TranscriptDocument(
+        "en",
+        (
+            TranscriptSegment(1_000, 2_000, "opening", ()),
+            TranscriptSegment(6_000, 7_000, "Jiro meets the enemy", ()),
+            TranscriptSegment(12_000, 13_000, "later", ()),
+        ),
+    )
+    shots = ShotDocument(
+        (
+            Shot("shot-001", 0, 5_000),
+            Shot("shot-002", 5_000, 10_000),
+            Shot("shot-003", 10_000, 20_000),
+        )
+    )
+    dump_json(run / "transcript_english.json", transcript)
+    dump_json(run / "shots.json", shots)
+    frame_refs = [
+        str((tmp_path / "frames" / f"shot-00{i}.jpg").resolve()) for i in range(1, 4)
+    ]
+    (run / "frame_manifest.json").write_text(
+        json.dumps({"frames": frame_refs}), encoding="utf-8"
+    )
+    assert cli._structure_task_command(run) == 0
+    task_id = "episode-structure-revision-001"
+    staging = run / "editor_staging" / task_id
+    staging.mkdir(parents=True)
+    (staging / "situation_index_draft.json").write_text(
+        json.dumps(
+            {
+                "editor": "ANTIGRAVITY",
+                "schema_version": "situation-index-v1",
+                "source_sha256": "a" * 64,
+                "situations": [
+                    {
+                        "situation_id": "situation-001",
+                        "source_start_ms": 0,
+                        "source_end_ms": 5_000,
+                        "summary": "Opening",
+                        "story_purpose": "Không thuộc truyện",
+                        "boundary_reason": "Opening kết thúc",
+                        "transcript_segment_indexes": [0],
+                        "shot_ids": ["shot-001"],
+                        "frame_refs": [frame_refs[0]],
+                        "excluded": True,
+                        "exclusion_reason": "Opening",
+                    },
+                    {
+                        "situation_id": "situation-002",
+                        "source_start_ms": 5_000,
+                        "source_end_ms": 10_000,
+                        "summary": "Jiro gặp kẻ địch",
+                        "story_purpose": "Bắt đầu xung đột",
+                        "boundary_reason": "Kẻ địch xuất hiện",
+                        "transcript_segment_indexes": [1],
+                        "shot_ids": ["shot-002"],
+                        "frame_refs": [frame_refs[1]],
+                        "excluded": False,
+                        "exclusion_reason": "",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert cli._accept_situation_index_command(run, task_id, staging) == 0
+    assert cli._editor_task_command(run) == 0
+
+    packet = json.loads((run / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
+    assert packet["situation_id"] == "situation-002"
+    assert [item["text"] for item in packet["transcript"]["segments"]] == [
+        "Jiro meets the enemy"
+    ]
+    assert [item["shot_id"] for item in packet["shots"]["shots"]] == ["shot-002"]
+    assert packet["frame_manifest_path"].endswith("frames.json")
+    assert "frame_manifest.json" not in packet["frame_manifest_path"]
 
 
 def _local_artifacts(tmp_path: Path) -> tuple[Path, Path]:

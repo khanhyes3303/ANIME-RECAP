@@ -34,6 +34,7 @@ from anime_review_mvp.situations import (
 from anime_review_mvp.workflow import (
     Stage,
     accept_editor_revision,
+    accept_structure_index,
     advance,
     begin_editor_task,
     lock_editor_situation,
@@ -241,7 +242,17 @@ def test_v2_run_requires_antigravity_submission_and_user_proxy_approval(
     run = tmp_path / "run"
     new_state(run)
     advance(run, Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG)
-    advance(run, Stage.TRICH_XUAT_BANG_CHUNG, Stage.CHO_ANTIGRAVITY_TINH_HUONG)
+    advance(
+        run,
+        Stage.TRICH_XUAT_BANG_CHUNG,
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+    )
+    advance(
+        run,
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        Stage.KIEM_DINH_CHI_MUC_TINH_HUONG,
+    )
+    accept_structure_index(run, "a" * 64, "situation-001")
     transcript = run / "transcript.json"
     frames = run / "frames.json"
     transcript.write_text('{"text":"Jiro về nhà"}', encoding="utf-8")

@@ -37,6 +37,8 @@ class Stage(StrEnum):
     CAN_HINH_VOICE = "CAN_HINH_VOICE"
     KIEM_DINH_LOCAL = "KIEM_DINH_LOCAL"
     TRICH_XUAT_BANG_CHUNG = "TRICH_XUAT_BANG_CHUNG"
+    CHO_ANTIGRAVITY_CHIA_TINH_HUONG = "CHO_ANTIGRAVITY_CHIA_TINH_HUONG"
+    KIEM_DINH_CHI_MUC_TINH_HUONG = "KIEM_DINH_CHI_MUC_TINH_HUONG"
     CHO_ANTIGRAVITY_TINH_HUONG = "CHO_ANTIGRAVITY_TINH_HUONG"
     KIEM_DINH_TINH_HUONG = "KIEM_DINH_TINH_HUONG"
     TAO_TTS_TINH_HUONG = "TAO_TTS_TINH_HUONG"
@@ -81,6 +83,7 @@ class RunState:
     approved_proxy_sha256: str = ""
     approved_artifact_sha256: str = ""
     proxy_rejection_note: str = ""
+    accepted_situation_index_sha256: str = ""
 
 
 _NEXT_STAGE = {
@@ -123,7 +126,12 @@ _LEGACY_TRANSITIONS = {
 
 _V2_TRANSITIONS = {
     (Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG),
-    (Stage.TRICH_XUAT_BANG_CHUNG, Stage.CHO_ANTIGRAVITY_TINH_HUONG),
+    (Stage.TRICH_XUAT_BANG_CHUNG, Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG),
+    (
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        Stage.KIEM_DINH_CHI_MUC_TINH_HUONG,
+    ),
+    (Stage.KIEM_DINH_CHI_MUC_TINH_HUONG, Stage.CHO_ANTIGRAVITY_TINH_HUONG),
     (Stage.CHO_ANTIGRAVITY_TINH_HUONG, Stage.KIEM_DINH_TINH_HUONG),
     (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
     (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
@@ -205,7 +213,7 @@ def read_state(run_dir: Path) -> RunState:
             "last_local_repair_fingerprint",
             "last_local_repair_codes",
         }
-        v2_fields = {
+        previous_v2_fields = {
             *current_fields,
             "editor_task_id",
             "editorial_revision",
@@ -213,8 +221,15 @@ def read_state(run_dir: Path) -> RunState:
             "approved_artifact_sha256",
             "proxy_rejection_note",
         }
+        v2_fields = {
+            *previous_v2_fields,
+            "accepted_situation_index_sha256",
+        }
         if frozenset(raw) not in {
-            frozenset(legacy_fields), frozenset(current_fields), frozenset(v2_fields)
+            frozenset(legacy_fields),
+            frozenset(current_fields),
+            frozenset(previous_v2_fields),
+            frozenset(v2_fields),
         }:
             raise MvpError("run state fields do not match the contract")
         return RunState(
@@ -250,6 +265,9 @@ def read_state(run_dir: Path) -> RunState:
             approved_proxy_sha256=raw.get("approved_proxy_sha256", ""),
             approved_artifact_sha256=raw.get("approved_artifact_sha256", ""),
             proxy_rejection_note=raw.get("proxy_rejection_note", ""),
+            accepted_situation_index_sha256=raw.get(
+                "accepted_situation_index_sha256", ""
+            ),
         )
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise MvpError(f"cannot read run state: {run_dir}") from exc
@@ -401,7 +419,7 @@ def begin_editor_task(
 ) -> RunState:
     state = read_state(run_dir)
     if state.stage is not Stage.CHO_ANTIGRAVITY_TINH_HUONG:
-        raise MvpError("editor task can only begin at the Antigravity wait stage")
+        raise MvpError("situation editor task can only begin at its wait stage")
     if not task_id.strip() or not situation_id.strip() or revision < 1:
         raise MvpError("editor task ID, situation ID, and revision are required")
     state = replace(
@@ -409,6 +427,58 @@ def begin_editor_task(
         editor_task_id=task_id.strip(),
         current_situation_id=situation_id.strip(),
         editorial_revision=revision,
+    )
+    _write_state(state)
+    return state
+
+
+def begin_structure_task(run_dir: Path, task_id: str, revision: int) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG:
+        raise MvpError("structure task can only begin at the structure wait stage")
+    if not task_id.strip() or revision < 1:
+        raise MvpError("structure task ID and revision are required")
+    state = replace(
+        state,
+        editor_task_id=task_id.strip(),
+        current_situation_id="",
+        editorial_revision=revision,
+    )
+    _write_state(state)
+    return state
+
+
+def accept_structure_index(
+    run_dir: Path, index_sha256: str, first_situation_id: str
+) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.KIEM_DINH_CHI_MUC_TINH_HUONG:
+        raise MvpError("situation index can only be accepted at its validation stage")
+    if len(index_sha256) != 64 or not first_situation_id.strip():
+        raise MvpError("accepted situation index hash and first situation are required")
+    state = replace(
+        state,
+        stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+        current_situation_id=first_situation_id.strip(),
+        editor_task_id="",
+        accepted_situation_index_sha256=index_sha256,
+    )
+    _write_state(state)
+    return state
+
+
+def migrate_to_structure_index(run_dir: Path) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+        raise MvpError("only a pre-index editor wait can migrate to structure")
+    if state.locked_situation_ids:
+        raise MvpError("a run with locked situations cannot replace its structure index")
+    state = replace(
+        state,
+        stage=Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        editor_task_id="",
+        current_situation_id="",
+        accepted_situation_index_sha256="",
     )
     _write_state(state)
     return state
@@ -540,7 +610,10 @@ def migrate_rejected_run(run_dir: Path, revision: int = 2) -> RunState:
 def fallback_to_legacy_observation(run_dir: Path) -> RunState:
     """Resume the checked-in v1 CLI path when a legacy truth artifact is submitted."""
     state = read_state(run_dir)
-    if state.stage is not Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+    if state.stage not in {
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+    }:
         raise MvpError("legacy fallback requires the initial Antigravity wait stage")
     if state.locked_situation_ids or state.repair_history:
         raise MvpError("a progressed v2 run cannot fall back to the legacy workflow")

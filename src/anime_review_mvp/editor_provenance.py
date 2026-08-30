@@ -41,6 +41,17 @@ class AcceptedEditorialRevision:
     narration_sha256: str
 
 
+@dataclass(frozen=True)
+class AcceptedStructureRevision:
+    task_id: str
+    run_id: str
+    revision: int
+    actor: str
+    input_sha256: str
+    index_sha256: str
+    accepted_path: str
+
+
 def _file_sha256(path: Path) -> str:
     try:
         return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -175,6 +186,45 @@ def accept_antigravity_submission(
     )
     atomic_append_jsonl(ledger_path, accepted)
     return accepted
+
+
+def accept_antigravity_structure_submission(
+    run_dir: Path, task_id: str, staging_dir: Path
+) -> AcceptedStructureRevision:
+    task = load_editor_task(run_dir / "editor_tasks" / f"{task_id}.json")
+    if task.task_kind != "STRUCTURE" or task.allowed_outputs != (
+        "situation_index_draft.json",
+    ):
+        raise MvpError("EDITOR_TASK_KIND_INVALID")
+    if _input_sha256(tuple(Path(path) for path in task.input_paths)) != task.input_sha256:
+        raise MvpError("EDITOR_INPUT_HASH_CHANGED")
+    try:
+        actual_names = {path.name for path in staging_dir.iterdir() if path.is_file()}
+    except OSError as exc:
+        raise MvpError("EDITOR_SUBMISSION_INVALID") from exc
+    if actual_names != {"situation_index_draft.json"}:
+        raise MvpError("EDITOR_SUBMISSION_INVALID")
+    source = staging_dir / "situation_index_draft.json"
+    try:
+        json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise MvpError("EDITOR_SUBMISSION_INVALID") from exc
+    accepted_path = (
+        run_dir
+        / "accepted_structure"
+        / f"revision-{task.revision:03d}"
+        / "situation_index.json"
+    )
+    _atomic_copy(source, accepted_path)
+    return AcceptedStructureRevision(
+        task.task_id,
+        task.run_id,
+        task.revision,
+        "ANTIGRAVITY",
+        task.input_sha256,
+        _file_sha256(accepted_path),
+        str(accepted_path.resolve()),
+    )
 
 
 def require_antigravity_provenance(

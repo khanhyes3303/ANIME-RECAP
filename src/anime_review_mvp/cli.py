@@ -21,9 +21,11 @@ from .atomic import load_atomic_storyboard, load_critic_review, validate_critic_
 from .audit import build_atomic_engine_audit, build_engine_audit
 from .cue_audio import render_cue_audio_timeline
 from .editor_provenance import (
+    accept_antigravity_structure_submission,
     accept_antigravity_submission,
     create_editor_task,
     load_editor_ledger,
+    load_editor_task,
 )
 from .editorial import load_locked_spans
 from .edl import build_atomic_edl, build_edl_from_locked_spans
@@ -90,9 +92,15 @@ from .models import (
 from .proxy_approval import approve_proxy, reject_proxy, require_approved_artifacts
 from .render import RenderResult, render_review
 from .semantic_timeline import SemanticTimeline, build_semantic_timeline
+from .situation_index import load_situation_index, next_editable_situation
 from .situation_packets import (
-    build_situation_editor_packet,
+    build_scoped_situation_editor_packet,
     render_situation_editor_prompt,
+)
+from .situation_scope import (
+    load_situation_scope,
+    materialize_situation_scope,
+    validate_submission_scope,
 )
 from .situation_validation import validate_narration_plan, validate_situations
 from .situations import (
@@ -104,6 +112,11 @@ from .situations import (
     StoryContext,
     load_narration_plan,
     load_situations,
+)
+from .structure_packets import (
+    build_structure_editor_packet,
+    create_structure_task,
+    render_structure_editor_prompt,
 )
 from .tts import (
     synthesize_atomic_beats,
@@ -120,13 +133,16 @@ from .validation import (
 from .workflow import (
     Stage,
     accept_editor_revision,
+    accept_structure_index,
     advance,
     begin_editor_task,
+    begin_structure_task,
     fallback_to_legacy_observation,
     lock_editor_situation,
     lock_situation,
     mark_human_required,
     migrate_rejected_run,
+    migrate_to_structure_index,
     new_state,
     read_state,
     record_beat_repair,
@@ -207,9 +223,19 @@ def _parser() -> argparse.ArgumentParser:
     gemini_web.add_argument("--prompt-file", type=Path)
     migrate = subparsers.add_parser("migrate-run")
     migrate.add_argument("--run", required=True, type=Path)
-    migrate.add_argument("--reason", required=True, choices=("user-rejected",))
+    migrate.add_argument(
+        "--reason",
+        required=True,
+        choices=("user-rejected", "require-situation-index"),
+    )
     editor_task = subparsers.add_parser("editor-task")
     editor_task.add_argument("--run", required=True, type=Path)
+    structure_task = subparsers.add_parser("structure-task")
+    structure_task.add_argument("--run", required=True, type=Path)
+    accept_index = subparsers.add_parser("accept-situation-index")
+    accept_index.add_argument("--run", required=True, type=Path)
+    accept_index.add_argument("--task", required=True)
+    accept_index.add_argument("--input", required=True, type=Path)
     accept_editor = subparsers.add_parser("accept-antigravity")
     accept_editor.add_argument("--run", required=True, type=Path)
     accept_editor.add_argument("--task", required=True)
@@ -316,50 +342,13 @@ def _prepare(run_dir: Path) -> int:
         + "\n",
         encoding="utf-8",
     )
-    policy_path = episode / "Ke_hoach_canh" / "editorial_policy.json"
-    if policy_path.is_file():
-        try:
-            policy = EditorialPolicy(**json.loads(policy_path.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError, TypeError) as exc:
-            raise MvpError(f"cannot load editorial policy: {policy_path}") from exc
-    else:
-        policy = EditorialPolicy()
-    task = create_editor_task(
-        run_dir,
-        run_dir.name,
-        "situation-001",
-        1,
-        (
-            run_dir / "transcript_english.json",
-            run_dir / "shots.json",
-            frame_manifest_path,
-        ),
-    )
-    packet = build_situation_editor_packet(
-        source,
-        transcript,
-        ShotDocument(shots),
-        frame_manifest_path,
-        policy,
-        StoryContext((), (), (), ""),
-        task=task,
-    )
-    job_path = run_dir / "cong_viec_antigravity.json"
-    dump_json(job_path, packet)
     advance(run_dir, Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG)
     advance(
         run_dir,
         Stage.TRICH_XUAT_BANG_CHUNG,
-        Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
     )
-    begin_editor_task(run_dir, task.task_id, task.situation_id, task.revision)
-    _write_next(
-        run_dir,
-        "Antigravity xử lý đúng situation-001 và chỉ ghi hai draft vào staging. "
-        f"Job: {job_path}",
-    )
-    print(job_path)
-    return 0
+    return _structure_task_command(run_dir)
 
 
 def _job_paths_from_state(state: object, episode: Path):
@@ -404,7 +393,10 @@ def _validate(run_dir: Path, artifact: str) -> int:
             source_duration_ms=source.duration_ms,
         )
         validate_truth(truth, source.duration_ms)
-        if state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+        if state.stage in {
+            Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+            Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+        }:
             state = fallback_to_legacy_observation(run_dir)
         if state.stage is Stage.QUAN_SAT:
             advance(run_dir, Stage.QUAN_SAT, Stage.LAP_TINH_HUONG)
@@ -1765,10 +1757,21 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
             for item in situations.situations
             if item.situation_id == state.current_situation_id
         )
+        source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+        index = load_situation_index(
+            run_dir / "situation_index.json",
+            source,
+            load_json(run_dir / "transcript_english.json", TranscriptDocument),
+            load_json(run_dir / "shots.json", ShotDocument),
+            _frame_refs(run_dir),
+        )
+        following = next_editable_situation(
+            index, (*state.locked_situation_ids, current.situation_id)
+        )
         lock_editor_situation(
             run_dir,
             current.situation_id,
-            next_situation_id=current.next_situation_id or "",
+            next_situation_id="" if following is None else following.situation_id,
         )
         _write_next(
             run_dir,
@@ -1919,17 +1922,117 @@ def _reject_proxy_command(
     return 0
 
 
+def _frame_refs(run_dir: Path) -> tuple[str, ...]:
+    path = run_dir / "frame_manifest.json"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        frames = raw["frames"]
+    except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise MvpError(f"cannot load frame manifest: {path}") from exc
+    if not isinstance(frames, list) or not frames or not all(
+        isinstance(item, str) and item.strip() for item in frames
+    ):
+        raise MvpError("frame manifest requires non-empty frame paths")
+    return tuple(frames)
+
+
+def _structure_task_command(run_dir: Path) -> int:
+    state, episode = _episode(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG:
+        raise MvpError("structure-task requires CHO_ANTIGRAVITY_CHIA_TINH_HUONG stage")
+    input_paths = (
+        run_dir / "transcript_english.json",
+        run_dir / "shots.json",
+        run_dir / "frame_manifest.json",
+    )
+    revision = max(1, state.editorial_revision)
+    task = create_structure_task(run_dir, run_dir.name, revision, input_paths)
+    packet = build_structure_editor_packet(
+        load_json(episode / "Dau_vao" / "source_ref.json", SourceRef),
+        load_json(input_paths[0], TranscriptDocument),
+        load_json(input_paths[1], ShotDocument),
+        input_paths[2],
+        task=task,
+    )
+    begin_structure_task(run_dir, task.task_id, task.revision)
+    output = run_dir / "cong_viec_antigravity.json"
+    dump_json(output, packet)
+    prompt = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
+    prompt.write_text(render_structure_editor_prompt(packet), encoding="utf-8")
+    staging = run_dir / "editor_staging" / task.task_id
+    _write_next(
+        run_dir,
+        "Antigravity chỉ chia cấu trúc tập và ghi situation_index_draft.json vào "
+        f'editor_staging/{task.task_id}. Sau đó chạy: accept-situation-index --run '
+        f'"{run_dir}" --task {task.task_id} --input "{staging}".',
+    )
+    print(output)
+    return 0
+
+
+def _accept_situation_index_command(
+    run_dir: Path, task_id: str, staging_dir: Path
+) -> int:
+    state, episode = _episode(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG:
+        raise MvpError("accept-situation-index requires the structure wait stage")
+    if state.editor_task_id != task_id:
+        raise MvpError("structure task does not match the active task")
+    accepted = accept_antigravity_structure_submission(run_dir, task_id, staging_dir)
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
+    shots = load_json(run_dir / "shots.json", ShotDocument)
+    index = load_situation_index(
+        Path(accepted.accepted_path), source, transcript, shots, _frame_refs(run_dir)
+    )
+    next_entry = next_editable_situation(index, ())
+    if next_entry is None:
+        raise MvpError("accepted situation index has no editable situation")
+    canonical = run_dir / "situation_index.json"
+    shutil.copy2(accepted.accepted_path, canonical)
+    if sha256_file(canonical) != accepted.index_sha256:
+        raise MvpError("accepted situation index copy verification failed")
+    advance(
+        run_dir,
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        Stage.KIEM_DINH_CHI_MUC_TINH_HUONG,
+    )
+    accept_structure_index(run_dir, accepted.index_sha256, next_entry.situation_id)
+    _write_next(
+        run_dir,
+        f"Chỉ mục hợp lệ; chạy editor-task cho {next_entry.situation_id}.",
+    )
+    print(canonical)
+    return 0
+
+
 def _editor_task_command(run_dir: Path) -> int:
     state, episode = _episode(run_dir)
     if state.stage is not Stage.CHO_ANTIGRAVITY_TINH_HUONG:
         raise MvpError("editor-task requires CHO_ANTIGRAVITY_TINH_HUONG stage")
     if not state.current_situation_id:
         raise MvpError("editor-task requires a current situation ID")
-    input_paths = (
-        run_dir / "transcript_english.json",
-        run_dir / "shots.json",
-        run_dir / "frame_manifest.json",
+    index_path = run_dir / "situation_index.json"
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
+    shots = load_json(run_dir / "shots.json", ShotDocument)
+    index = load_situation_index(
+        index_path, source, transcript, shots, _frame_refs(run_dir)
     )
+    entry = next_editable_situation(index, state.locked_situation_ids)
+    if entry is None or entry.situation_id != state.current_situation_id:
+        raise MvpError("active situation does not match the accepted index order")
+    if sha256_file(index_path) != state.accepted_situation_index_sha256:
+        raise MvpError("accepted situation index hash changed")
+    scope = materialize_situation_scope(
+        run_dir,
+        entry,
+        transcript,
+        shots,
+        _frame_refs(run_dir),
+        accepted_index_sha256=state.accepted_situation_index_sha256,
+    )
+    input_paths = tuple(Path(path) for path in scope.input_paths)
     task = create_editor_task(
         run_dir,
         run_dir.name,
@@ -1940,21 +2043,16 @@ def _editor_task_command(run_dir: Path) -> int:
     begin_editor_task(
         run_dir, task.task_id, task.situation_id, task.revision
     )
-    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
-    transcript = load_json(input_paths[0], TranscriptDocument)
-    shots = load_json(input_paths[1], ShotDocument)
     context_path = run_dir / "story_context.json"
     context = (
         load_json(context_path, StoryContext)
         if context_path.is_file()
         else StoryContext((), (), (), "")
     )
-    packet = build_situation_editor_packet(
+    packet = build_scoped_situation_editor_packet(
         source,
-        transcript,
-        shots,
-        input_paths[2],
-        EditorialPolicy(),
+        scope,
+        _editorial_policy(episode),
         context,
         task=task,
     )
@@ -1976,20 +2074,38 @@ def _editor_task_command(run_dir: Path) -> int:
 def _accept_antigravity_command(
     run_dir: Path, task_id: str, staging_dir: Path
 ) -> int:
+    state, episode = _episode(run_dir)
+    task = load_editor_task(run_dir / "editor_tasks" / f"{task_id}.json")
+    scope_path = next(
+        (Path(path) for path in task.input_paths if path.endswith("scope.json")), None
+    )
+    if scope_path is None:
+        raise MvpError("editor task is not scoped to an accepted situation")
+    scope = load_situation_scope(scope_path, verify_files=True)
+    if scope.accepted_index_sha256 != state.accepted_situation_index_sha256:
+        raise MvpError("editor task uses a stale situation index")
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    full_transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
+    full_shots = load_json(run_dir / "shots.json", ShotDocument)
+    index = load_situation_index(
+        run_dir / "situation_index.json",
+        source,
+        full_transcript,
+        full_shots,
+        _frame_refs(run_dir),
+    )
+    entry = next(
+        (item for item in index.situations if item.situation_id == task.situation_id),
+        None,
+    )
+    if entry is None:
+        raise MvpError("editor task situation is absent from the accepted index")
+    staged_situation = load_json(staging_dir / "situation_draft.json", SituationDocument)
+    staged_narration = load_json(staging_dir / "narration_draft.json", NarrationPlan)
+    validate_submission_scope(entry, staged_situation, staged_narration)
     accepted = accept_antigravity_submission(run_dir, task_id, staging_dir)
-    _state, episode = _episode(run_dir)
-    accepted_dir = (
-        run_dir
-        / "accepted_editorial"
-        / accepted.situation_id
-        / f"revision-{accepted.revision:03d}"
-    )
-    situation_draft = load_json(
-        accepted_dir / "situation_draft.json", SituationDocument
-    )
-    narration_draft = load_json(
-        accepted_dir / "narration_draft.json", NarrationPlan
-    )
+    situation_draft = staged_situation
+    narration_draft = staged_narration
     if (
         len(situation_draft.situations) != 1
         or situation_draft.situations[0].situation_id != accepted.situation_id
@@ -2072,9 +2188,31 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
 
 
 def _migrate_run(run_dir: Path, reason: str) -> int:
+    state, episode = _episode(run_dir)
+    if reason == "require-situation-index":
+        prior_task_id = state.editor_task_id
+        migrate_to_structure_index(run_dir)
+        if prior_task_id:
+            superseded = run_dir / "superseded_tasks" / f"{prior_task_id}.json"
+            superseded.parent.mkdir(parents=True, exist_ok=True)
+            superseded.write_text(
+                json.dumps(
+                    {
+                        "task_id": prior_task_id,
+                        "reason": "WHOLE_EPISODE_INPUT_NOT_SCOPED",
+                        "preserved_task_path": str(
+                            (run_dir / "editor_tasks" / f"{prior_task_id}.json").resolve()
+                        ),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        return _structure_task_command(run_dir)
     if reason != "user-rejected":
         raise MvpError("unsupported migration reason")
-    state, episode = _episode(run_dir)
     if state.stage is not Stage.HOAN_THANH:
         raise MvpError("migrate-run only accepts a completed run")
     revision_root = run_dir / "revisions" / "revision-001"
@@ -2141,6 +2279,10 @@ def main(argv: list[str] | None = None) -> int:
             return _migrate_run(args.run, args.reason)
         if args.command == "editor-task":
             return _editor_task_command(args.run)
+        if args.command == "structure-task":
+            return _structure_task_command(args.run)
+        if args.command == "accept-situation-index":
+            return _accept_situation_index_command(args.run, args.task, args.input)
         if args.command == "accept-antigravity":
             return _accept_antigravity_command(args.run, args.task, args.input)
         if args.command == "timeline":
