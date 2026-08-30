@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 
 from .adaptive_edl import AdaptiveEdlDocument
+from .editor_provenance import AcceptedEditorialRevision
 from .errors import MvpError
 from .jsonio import load_json
 from .models import (
@@ -12,13 +13,22 @@ from .models import (
     FrameAnchorDocument,
 )
 from .render import RenderResult
+from .semantic_timeline import SemanticTimeline, semantic_timing_findings
+from .situation_validation import (
+    coherence_findings,
+    validate_causal_chains,
+    validate_semantic_range,
+)
 from .situations import (
+    CueTtsManifest,
     EditorialPolicy,
     NarrationPlan,
     SemanticReviewDocument,
     SituationDocument,
     SituationTtsManifest,
+    StoryContext,
 )
+from .story_context import validate_newcomer_context
 
 
 def _anchor_ids(document: FrameAnchorDocument, timeline: str) -> set[str]:
@@ -144,3 +154,98 @@ def build_local_audit(
     supported = sum(item.supported for item in semantic_review.units)
     coverage = supported / len(semantic_review.units)
     return EngineAuditReport(not findings, f"{coverage:g}", tuple(findings))
+
+
+def _mvp_error_finding(error: MvpError) -> AuditFinding:
+    message = str(error)
+    code = message.split(":", 1)[0]
+    return _finding(code, message)
+
+
+def build_episode_coherence_audit(
+    plan: NarrationPlan,
+    situations: SituationDocument,
+    initial_context: StoryContext,
+) -> EngineAuditReport:
+    findings: list[AuditFinding] = list(coherence_findings(plan, situations))
+    try:
+        validate_causal_chains(situations)
+    except MvpError as exc:
+        findings.append(_mvp_error_finding(exc))
+    try:
+        validate_newcomer_context(plan, initial_context)
+    except MvpError as exc:
+        findings.append(_mvp_error_finding(exc))
+    for unit in plan.units:
+        for source_range in unit.evidence_ranges:
+            try:
+                validate_semantic_range(source_range)
+            except MvpError as exc:
+                findings.append(_mvp_error_finding(exc))
+    return EngineAuditReport(not findings, "1" if not findings else "0", tuple(findings))
+
+
+def build_v2_local_audit(
+    plan: NarrationPlan,
+    situations: SituationDocument,
+    timeline: SemanticTimeline,
+    tts: CueTtsManifest,
+    edl: AdaptiveEdlDocument,
+    render: RenderResult,
+    provenance: tuple[AcceptedEditorialRevision, ...],
+    initial_context: StoryContext,
+) -> EngineAuditReport:
+    findings = list(
+        build_episode_coherence_audit(plan, situations, initial_context).findings
+    )
+    situation_ids = {item.situation_id for item in situations.situations}
+    proven = {
+        item.situation_id
+        for item in provenance
+        if item.actor == "ANTIGRAVITY" and item.revision >= 1
+    }
+    if proven != situation_ids:
+        findings.append(
+            _finding(
+                "EDITOR_PROVENANCE_INVALID",
+                "Every situation must have an accepted Antigravity revision.",
+            )
+        )
+
+    plan_cues = tuple(cue for unit in plan.units for cue in unit.cues)
+    expected_ids = tuple(cue.cue_id for cue in plan_cues)
+    tts_ids = tuple(cue.cue_id for cue in tts.cues)
+    timeline_ids = tuple(cue.cue_id for cue in timeline.cues)
+    if not (expected_ids == tts_ids == timeline_ids):
+        findings.append(
+            _finding("CUE_ID_MISMATCH", "Plan, TTS, and timeline cue IDs differ.")
+        )
+
+    cue_by_id = {cue.cue_id: cue for cue in plan_cues}
+    anchor_by_id = {
+        item.cue_id: item.visual_anchor_program_ms for item in timeline.cues
+    }
+    for timing_finding in semantic_timing_findings(timeline.cues):
+        cue = cue_by_id.get(timing_finding.cue_id or "")
+        evidence = () if cue is None else (
+            *cue.frame_refs,
+            f"program-anchor-ms:{anchor_by_id[cue.cue_id]}",
+        )
+        findings.append(
+            AuditFinding(
+                timing_finding.severity,
+                timing_finding.code,
+                timing_finding.cue_id,
+                timing_finding.message,
+                evidence,
+            )
+        )
+    if edl.total_duration_ms != timeline.total_duration_ms:
+        findings.append(_finding("EDL_TIMELINE_DRIFT", "EDL and semantic timeline differ."))
+    if abs(render.duration_ms - timeline.total_duration_ms) > 80 or render.drift_ms > 80:
+        findings.append(
+            _finding("RENDER_DRIFT", "Render differs from semantic timeline by over 80 ms.")
+        )
+    if render.video_stream_count != 1 or render.audio_stream_count != 1:
+        findings.append(_finding("STREAM_COUNT_INVALID", "Render must have one video and audio."))
+    return EngineAuditReport(not findings, "1" if not findings else "0", tuple(findings))
