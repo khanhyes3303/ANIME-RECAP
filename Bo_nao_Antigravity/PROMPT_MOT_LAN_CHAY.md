@@ -37,6 +37,11 @@ Mỗi lượt phải đợi upload hoàn tất trước khi bấm Gửi, sau đ�
 đến khi Gemini trả lời xong. Không chạy hai lệnh `gemini-web run`/`continue` đồng thời
 hoặc gọi lại ngay khi lượt trước chưa hoàn tất. Khi tập hoàn tất và audit PASS, dọn phiên:
 
+Nếu Codex/người dùng yêu cầu bỏ chat lỗi và làm lại bằng một cuộc trò chuyện mới, chạy
+đúng một lần `gemini-web new-chat --run "<run_dir>" --phase "<phase>"`. Không dùng
+`continue` cho yêu cầu này. Chat mới phải upload lại full packet; các follow-up sau đó
+mới tiếp tục trong chat vừa tạo.
+
 ```powershell
 uv run python run_episode.py gemini-web stop --run "<run_dir>"
 ```

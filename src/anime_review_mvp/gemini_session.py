@@ -140,6 +140,23 @@ class GeminiSessionRegistry:
         self.save(updated)
         return updated
 
+    def start_new_chat(self, run_id: str, *, started_at: str) -> GeminiSessionMetadata:
+        metadata = self.load()
+        if metadata is None:
+            raise MvpError("Gemini session is not attachable: metadata is missing")
+        if metadata.run_id != run_id:
+            raise MvpError("Gemini session belongs to another run")
+        updated = GeminiSessionMetadata(
+            metadata.run_id,
+            metadata.chrome_pid,
+            metadata.debugger_address,
+            None,
+            started_at,
+            {},
+        )
+        self.save(updated)
+        return updated
+
     def clear(self, run_id: str) -> None:
         metadata = self.load()
         if metadata is None:

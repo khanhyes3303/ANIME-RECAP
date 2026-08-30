@@ -143,7 +143,8 @@ def _parser() -> argparse.ArgumentParser:
         "gemini-web", help="Vận hành Gemini Ultra Web bằng Chrome do engine sở hữu"
     )
     gemini_web.add_argument(
-        "action", choices=("enroll", "smoke", "run", "continue", "show", "stop")
+        "action",
+        choices=("enroll", "smoke", "run", "new-chat", "continue", "show", "stop"),
     )
     gemini_web.add_argument("--run", required=True, type=Path)
     gemini_web.add_argument("--phase", choices=("script", "proxy", "final"))
@@ -818,6 +819,7 @@ _BROWSER_HUMAN_CODES = {
     "ACCOUNT_MISMATCH": "SAI_TAI_KHOAN_GEMINI",
     "MODEL_NOT_FOUND": "KHONG_THAY_MODEL_3_7_FLASH",
     "UPLOAD_FAILED": "GEMINI_UPLOAD_THAT_BAI",
+    "PROMPT_NOT_SENT": "GEMINI_GUI_PROMPT_THAT_BAI",
     "INVALID_RESPONSE": "GEMINI_RESPONSE_KHONG_HOP_LE",
     "INVALID_EVIDENCE": "BANG_CHUNG_BROWSER_KHONG_HOP_LE",
     "BROWSER_START_FAILED": "KHONG_MO_DUOC_CHROME_GEMINI",
@@ -839,6 +841,7 @@ def run_operator_phase(
     phase: str,
     *,
     prompt_override: Path | None = None,
+    force_new_chat: bool = False,
 ) -> CriticReviewDocument:
     phase_upper = phase.upper()
     packet = build_browser_packet(run_dir, phase_upper)
@@ -879,6 +882,12 @@ def run_operator_phase(
             metadata = registry.assert_attachable(run_dir.resolve().name)
             launch = connect_managed_chrome(metadata)
             print("Đã nối lại phiên Gemini Web đang mở của run này.")
+            if force_new_chat:
+                metadata = registry.start_new_chat(
+                    run_dir.resolve().name,
+                    started_at=datetime.now(UTC).isoformat(),
+                )
+                print("Đã tách chat cũ; đang mở một Cuộc trò chuyện mới.")
         try:
             turn_number = registry.increment_turn(
                 run_dir.resolve().name,
@@ -905,10 +914,11 @@ def run_operator_phase(
                 / phase_upper.casefold()
                 / f"browser_result_{sha256_file(prompt_path)}.json"
             )
-            if checkpoint_path.is_file():
+            if checkpoint_path.is_file() and not force_new_chat:
                 result = load_json(checkpoint_path, BrowserConversationResult)
             elif (
-                metadata.conversation_url
+                not force_new_chat
+                and metadata.conversation_url
                 and screenshot_path.is_file()
                 and not (run_dir / "gemini_web" / "session.json").is_file()
             ):
@@ -975,7 +985,12 @@ def run_operator_phase(
     )
 
 
-def _gemini_web_run(run_dir: Path, phase: str) -> int:
+def _gemini_web_run(
+    run_dir: Path,
+    phase: str,
+    *,
+    force_new_chat: bool = False,
+) -> int:
     phase_upper = phase.upper()
     expected = {
         "SCRIPT": (Stage.VIET_LOI, Stage.CHO_GEMINI_SCRIPT),
@@ -991,7 +1006,14 @@ def _gemini_web_run(run_dir: Path, phase: str) -> int:
     elif state.stage is not expected[1]:
         raise MvpError(f"Gemini Web {phase.casefold()} run stage does not match")
     try:
-        review = run_operator_phase(run_dir, phase_upper)
+        if force_new_chat:
+            review = run_operator_phase(
+                run_dir,
+                phase_upper,
+                force_new_chat=True,
+            )
+        else:
+            review = run_operator_phase(run_dir, phase_upper)
     except GeminiBrowserError as exc:
         code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")
         mark_human_required(run_dir, code)
@@ -1164,7 +1186,11 @@ def _gemini_web(args: argparse.Namespace) -> int:
         return _gemini_web_continue(args.run, args.phase, args.prompt_file)
     if args.phase is None:
         raise MvpError("gemini-web run requires --phase")
-    return _gemini_web_run(args.run, args.phase)
+    return _gemini_web_run(
+        args.run,
+        args.phase,
+        force_new_chat=args.action == "new-chat",
+    )
 
 
 def _audit(run_dir: Path, phase: str, codex_review: Path | None) -> int:

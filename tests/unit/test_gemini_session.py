@@ -63,6 +63,30 @@ def test_session_registry_limits_each_phase_to_six_turns(tmp_path) -> None:
         registry.increment_turn("run-1", "SCRIPT", max_turns=6)
 
 
+def test_session_registry_starts_a_new_chat_without_closing_chrome(tmp_path) -> None:
+    registry = GeminiSessionRegistry(tmp_path / "session.json")
+    registry.save(
+        GeminiSessionMetadata(
+            "run-1",
+            1234,
+            "127.0.0.1:9222",
+            "https://gemini.google.com/app/old-chat",
+            "2026-08-30T12:00:00+00:00",
+            {"SCRIPT": 5, "PROXY": 3},
+        )
+    )
+
+    updated = registry.start_new_chat(
+        "run-1", started_at="2026-08-30T13:00:00+00:00"
+    )
+
+    assert updated.chrome_pid == 1234
+    assert updated.debugger_address == "127.0.0.1:9222"
+    assert updated.conversation_url is None
+    assert updated.phase_turns == {}
+    assert updated.started_at == "2026-08-30T13:00:00+00:00"
+
+
 def test_session_registry_clear_is_run_scoped(tmp_path) -> None:
     path = tmp_path / "session.json"
     registry = GeminiSessionRegistry(path)

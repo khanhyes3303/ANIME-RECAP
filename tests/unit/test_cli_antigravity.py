@@ -227,6 +227,14 @@ def test_gemini_web_parser_accepts_continue_and_stop() -> None:
     assert stop_args.action == "stop"
 
 
+def test_gemini_web_parser_accepts_explicit_new_chat() -> None:
+    args = cli._parser().parse_args(
+        ["gemini-web", "new-chat", "--run", "run", "--phase", "proxy"]
+    )
+
+    assert (args.action, args.phase) == ("new-chat", "proxy")
+
+
 def test_gemini_web_parser_accepts_show() -> None:
     args = cli._parser().parse_args(["gemini-web", "show", "--run", "run"])
 
@@ -528,6 +536,30 @@ def test_gemini_web_run_resumes_human_browser_stop_with_full_packet(
     assert cli._gemini_web_run(run, "script") == 0
     assert phases == ["SCRIPT"]
     assert read_state(run).stage is Stage.CHO_GEMINI_SCRIPT
+
+
+def test_gemini_web_new_chat_forces_full_packet_in_fresh_conversation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-01"
+    new_state(run, stage=Stage.CAN_CON_NGUOI_XU_LY)
+    calls: list[tuple[str, bool]] = []
+
+    def run_phase(
+        run_dir: Path,
+        phase: str,
+        *,
+        force_new_chat: bool = False,
+    ) -> object:
+        assert run_dir == run
+        calls.append((phase, force_new_chat))
+        return object()
+
+    monkeypatch.setattr(cli, "run_operator_phase", run_phase)
+    monkeypatch.setattr(cli, "_accept_operator_review", lambda *_args: 0)
+
+    assert cli._gemini_web_run(run, "proxy", force_new_chat=True) == 0
+    assert calls == [("PROXY", True)]
 
 
 def test_prepare_reuses_source_analysis_for_revision(

@@ -776,6 +776,43 @@ def test_open_conversation_does_not_reload_the_active_chat() -> None:
     assert driver.opened == []
 
 
+def test_open_new_chat_clicks_new_conversation_from_an_existing_chat() -> None:
+    class NewChat:
+        def __init__(self, driver) -> None:
+            self.driver = driver
+
+        def click(self) -> None:
+            self.driver.current_url = "https://gemini.google.com/app"
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+    class Driver:
+        current_url = "https://gemini.google.com/app/old-chat"
+
+        def __init__(self) -> None:
+            self.opened: list[str] = []
+
+        def find_element(self, kind: str, selector: str):
+            if "new-chat-button" in selector:
+                return NewChat(self)
+            raise NoSuchElementException(selector)
+
+        def get(self, url: str) -> None:
+            self.opened.append(url)
+            self.current_url = url
+
+    driver = Driver()
+
+    SeleniumGeminiPage(driver).open_new_chat()
+
+    assert driver.current_url == "https://gemini.google.com/app"
+    assert driver.opened == []
+
+
 def test_upload_waits_until_every_attachment_is_visible_and_not_busy(
     tmp_path: Path,
 ) -> None:
@@ -833,11 +870,13 @@ def test_send_prompt_clicks_send_button_instead_of_pressing_enter() -> None:
             self.sent.extend(values)
 
     class SendButton:
-        def __init__(self) -> None:
+        def __init__(self, driver) -> None:
+            self.driver = driver
             self.clicked = False
 
         def click(self) -> None:
             self.clicked = True
+            self.driver.submitted = True
 
         def is_displayed(self) -> bool:
             return True
@@ -848,7 +887,8 @@ def test_send_prompt_clicks_send_button_instead_of_pressing_enter() -> None:
     class Driver:
         def __init__(self) -> None:
             self.textbox = Textbox()
-            self.send_button = SendButton()
+            self.submitted = False
+            self.send_button = SendButton(self)
 
         def find_element(self, kind: str, selector: str):
             if "contenteditable" in selector:
@@ -858,6 +898,8 @@ def test_send_prompt_clicks_send_button_instead_of_pressing_enter() -> None:
             raise NoSuchElementException(f"missing element: {kind} {selector}")
 
         def find_elements(self, kind: str, selector: str):
+            if self.submitted and ("Dừng" in selector or "Stop" in selector):
+                return [object()]
             return []
 
     driver = Driver()
@@ -869,6 +911,93 @@ def test_send_prompt_clicks_send_button_instead_of_pressing_enter() -> None:
     assert driver.send_button.clicked is True
 
 
+def test_send_prompt_rejects_a_click_that_did_not_submit() -> None:
+    class Element:
+        text = "prompt remains"
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def send_keys(self, *values: str) -> None:
+            return None
+
+        def get_attribute(self, name: str) -> str:
+            return "prompt remains" if name == "textContent" else ""
+
+    class Driver:
+        def find_element(self, kind: str, selector: str):
+            if "contenteditable" in selector or "send-button" in selector:
+                return Element()
+            raise NoSuchElementException(selector)
+
+        def find_elements(self, kind: str, selector: str):
+            return []
+
+    page = SeleniumGeminiPage(Driver(), submission_wait_seconds=0.0)
+
+    with pytest.raises(GeminiBrowserError, match="was not submitted"):
+        page.send_prompt("prompt remains")
+
+
+def test_send_prompt_accepts_when_click_clears_the_textbox() -> None:
+    class Textbox:
+        def __init__(self) -> None:
+            self.content = ""
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def send_keys(self, *values: str) -> None:
+            self.content = str(values[-1])
+
+        def get_attribute(self, name: str) -> str:
+            return self.content if name == "textContent" else ""
+
+    class SendButton:
+        def __init__(self, textbox: Textbox) -> None:
+            self.textbox = textbox
+
+        def click(self) -> None:
+            self.textbox.content = ""
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+    class Driver:
+        def __init__(self) -> None:
+            self.textbox = Textbox()
+            self.send_button = SendButton(self.textbox)
+
+        def find_element(self, kind: str, selector: str):
+            if "contenteditable" in selector:
+                return self.textbox
+            if "send-button" in selector:
+                return self.send_button
+            raise NoSuchElementException(selector)
+
+        def find_elements(self, kind: str, selector: str):
+            return []
+
+    page = SeleniumGeminiPage(Driver(), submission_wait_seconds=0.0)
+
+    page.send_prompt("prompt leaves textbox")
+
+
 def test_response_wait_does_not_return_the_previous_turn() -> None:
     class Response:
         def __init__(self, text: str) -> None:
@@ -877,6 +1006,7 @@ def test_response_wait_does_not_return_the_previous_turn() -> None:
     class Driver:
         def __init__(self) -> None:
             self.response_text = "old response"
+            self.stop_checks = 0
 
         def find_element(self, kind: str, selector: str):
             if "contenteditable" in selector:
@@ -913,6 +1043,9 @@ def test_response_wait_does_not_return_the_previous_turn() -> None:
         def find_elements(self, kind: str, selector: str):
             if "response-content" in selector:
                 return [Response(self.response_text)]
+            if "Dừng" in selector or "Stop" in selector:
+                self.stop_checks += 1
+                return [object()] if self.stop_checks == 1 else []
             return []
 
     page = SeleniumGeminiPage(

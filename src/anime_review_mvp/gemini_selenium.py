@@ -80,6 +80,18 @@ STOP_SELECTORS = (
     (By.CSS_SELECTOR, "button[aria-label*='Dừng']"),
     (By.CSS_SELECTOR, "button[aria-label*='Stop' i]"),
 )
+NEW_CHAT_SELECTORS = (
+    (By.CSS_SELECTOR, "a[data-test-id='new-chat-button']"),
+    (By.CSS_SELECTOR, "button[data-test-id='new-chat-button']"),
+    (By.CSS_SELECTOR, "a[aria-label*='Cuộc trò chuyện mới']"),
+    (By.CSS_SELECTOR, "button[aria-label*='Cuộc trò chuyện mới']"),
+    (By.CSS_SELECTOR, "a[aria-label*='New chat' i]"),
+    (By.CSS_SELECTOR, "button[aria-label*='New chat' i]"),
+    (
+        By.XPATH,
+        "//*[self::a or self::button][contains(normalize-space(.),'Cuộc trò chuyện mới')]",
+    ),
+)
 
 USER_SELECTED_LABEL = "USER_SELECTED_NOT_VERIFIED"
 
@@ -416,6 +428,7 @@ class SeleniumGeminiPage:
         timeout_seconds: float = 30.0,
         account_wait_seconds: float = 180.0,
         upload_wait_seconds: float = 300.0,
+        submission_wait_seconds: float = 15.0,
         response_wait_seconds: float = 900.0,
         response_stable_seconds: float = 2.0,
     ) -> None:
@@ -423,6 +436,7 @@ class SeleniumGeminiPage:
         self._wait = WebDriverWait(driver, timeout_seconds)
         self._account_wait_seconds = max(0.0, account_wait_seconds)
         self._upload_wait_seconds = max(0.0, upload_wait_seconds)
+        self._submission_wait_seconds = max(0.0, submission_wait_seconds)
         self._response_wait_seconds = max(0.0, response_wait_seconds)
         self._response_stable_seconds = max(0.0, response_stable_seconds)
         self._response_baseline: tuple[str, ...] | None = None
@@ -487,9 +501,17 @@ class SeleniumGeminiPage:
         return None
 
     def open_new_chat(self) -> None:
-        self.driver.get(GEMINI_URL)
+        current = urlparse(str(self.driver.current_url))
+        clicked = None
+        if current.netloc == "gemini.google.com" and current.path.startswith("/app/"):
+            clicked = self._try_click_first(NEW_CHAT_SELECTORS)
+        if clicked is None:
+            self.driver.get(GEMINI_URL)
         try:
-            self._wait.until(lambda driver: _is_gemini_chat_url(driver.current_url))
+            self._wait.until(
+                lambda driver: urlparse(str(driver.current_url)).path.rstrip("/")
+                == "/app"
+            )
         except TimeoutException as exc:
             raise GeminiBrowserError(
                 "WRONG_GEMINI_SURFACE",
@@ -807,6 +829,34 @@ class SeleniumGeminiPage:
         textbox.send_keys(Keys.CONTROL, "a")
         textbox.send_keys(prompt)
         self._click_first(SEND_SELECTORS, "PROMPT_NOT_SENT")
+
+        def submission_started(_: WebDriver) -> bool:
+            if self._response_snapshot() != self._response_baseline:
+                return True
+            if any(
+                self.driver.find_elements(kind, selector)
+                for kind, selector in STOP_SELECTORS
+            ):
+                return True
+            try:
+                get_attribute = getattr(textbox, "get_attribute", None)
+                current_prompt = (
+                    get_attribute("textContent")
+                    if callable(get_attribute)
+                    else getattr(textbox, "text", None)
+                )
+            except StaleElementReferenceException:
+                return True
+            return current_prompt is not None and not str(current_prompt).strip()
+
+        try:
+            WebDriverWait(self.driver, self._submission_wait_seconds).until(
+                submission_started
+            )
+        except TimeoutException as exc:
+            raise GeminiBrowserError(
+                "PROMPT_NOT_SENT", "Gemini prompt was not submitted"
+            ) from exc
 
     def wait_for_response(self) -> str:
         baseline = self._response_baseline
