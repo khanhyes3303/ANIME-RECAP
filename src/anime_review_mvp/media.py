@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from PIL import Image, ImageChops, ImageStat
 
 from .errors import MvpError
 from .jsonio import dump_json
@@ -29,6 +32,82 @@ from .models import (
 
 Runner = Callable[..., Any]
 _PTS_TIME = re.compile(r"pts_time:([0-9]+(?:\.[0-9]+)?)")
+_BLACK_LUMINANCE_MAX = 8.0
+_FLASH_LUMINANCE_MIN = 247.0
+_TRANSITION_DIFFERENCE_MIN = 40.0
+_TRANSITION_PERSISTENCE_MAX_MS = 499
+
+
+def preflight_media_tools(
+    required: tuple[str, ...] = ("ffmpeg", "ffprobe"),
+) -> tuple[Path, ...]:
+    located = tuple((name, shutil.which(name)) for name in required)
+    missing = tuple(name for name, path in located if path is None)
+    if missing:
+        raise MvpError(
+            f"missing required tools: {', '.join(missing)}; install them and rerun"
+        )
+    return tuple(Path(path) for _name, path in located if path is not None)
+
+
+def evidence_timestamps(
+    shots: tuple[Shot, ...],
+    transcript: TranscriptDocument,
+) -> tuple[int, ...]:
+    values = {timestamp for shot in shots for timestamp in (shot.start_ms, shot.end_ms)}
+    for segment in transcript.segments:
+        values.update(
+            (
+                segment.start_ms,
+                (segment.start_ms + segment.end_ms) // 2,
+                segment.end_ms,
+            )
+        )
+    return tuple(sorted(value for value in values if value >= 0))
+
+
+def _mean_luminance(path: Path) -> float:
+    try:
+        with Image.open(path) as source:
+            return ImageStat.Stat(source.convert("L")).mean[0]
+    except OSError as exc:
+        raise MvpError(f"cannot inspect evidence frame: {path}") from exc
+
+
+def _mean_difference(first: Path, second: Path) -> float:
+    try:
+        with Image.open(first) as first_image, Image.open(second) as second_image:
+            left = first_image.convert("RGB")
+            right = second_image.convert("RGB").resize(left.size)
+            means = ImageStat.Stat(ImageChops.difference(left, right)).mean
+            return sum(means) / len(means)
+    except OSError as exc:
+        raise MvpError("cannot compare evidence frames") from exc
+
+
+def classify_edge_frame(
+    path: Path,
+    *,
+    previous_path: Path | None = None,
+    next_path: Path | None = None,
+    persistence_ms: int = 500,
+) -> str:
+    if persistence_ms < 0:
+        raise MvpError("frame persistence must not be negative")
+    luminance = _mean_luminance(path)
+    if luminance <= _BLACK_LUMINANCE_MAX:
+        return "BLACK"
+    if luminance >= _FLASH_LUMINANCE_MIN:
+        return "FLASH"
+    if (
+        previous_path is not None
+        and next_path is not None
+        and persistence_ms <= _TRANSITION_PERSISTENCE_MAX_MS
+        and _mean_difference(previous_path, path) >= _TRANSITION_DIFFERENCE_MIN
+        and _mean_difference(path, next_path) >= _TRANSITION_DIFFERENCE_MIN
+    ):
+        return "TRANSITION"
+    return "CONTENT"
 
 
 def extract_atomic_source_anchors(
