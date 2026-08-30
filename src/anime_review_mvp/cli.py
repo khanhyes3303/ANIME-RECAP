@@ -7,8 +7,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .adaptive_edl import AdaptiveEdlDocument, build_adaptive_edl
 from .antigravity import (
-    build_operator_job,
     calculate_policy_sha256,
     load_audit,
     load_scene_packets,
@@ -48,12 +48,16 @@ from .gemini_web import (
     write_profile_binding,
 )
 from .jsonio import dump_json, load_json
+from .local_audit import build_local_audit, content_fingerprint, load_semantic_review
 from .media import (
     detect_shots,
+    extract_adaptive_program_anchors,
     extract_atomic_source_anchors,
     extract_inspection_assets,
     extract_program_anchors,
+    extract_situation_anchors,
     extract_span_anchors,
+    preflight_media_tools,
     probe_source,
     transcribe_english,
 )
@@ -71,7 +75,15 @@ from .models import (
     TranscriptDocument,
 )
 from .render import RenderResult, render_review
-from .tts import synthesize_atomic_beats, synthesize_spans
+from .situation_packets import build_situation_editor_packet
+from .situation_validation import validate_narration_plan, validate_situations
+from .situations import (
+    EditorialPolicy,
+    SituationTtsManifest,
+    load_narration_plan,
+    load_situations,
+)
+from .tts import synthesize_atomic_beats, synthesize_situation_units, synthesize_spans
 from .validation import (
     narration_style_findings,
     validate_scene_packets,
@@ -81,10 +93,12 @@ from .validation import (
 from .workflow import (
     Stage,
     advance,
+    lock_situation,
     mark_human_required,
     new_state,
     read_state,
     record_beat_repair,
+    record_local_repair,
     record_repair,
     record_stage_metric,
     resume_beat_repair,
@@ -123,12 +137,16 @@ def _parser() -> argparse.ArgumentParser:
             "storyboard",
             "script",
             "edl",
+            "situations",
+            "narration",
+            "semantic-review",
         ),
     )
     lock = subparsers.add_parser("lock")
     lock.add_argument("--run", required=True, type=Path)
     tts = subparsers.add_parser("tts")
     tts.add_argument("--run", required=True, type=Path)
+    tts.add_argument("--situation")
     render = subparsers.add_parser("render")
     render.add_argument("--run", required=True, type=Path)
     render.add_argument("--quality", choices=("proxy", "final"), default="final")
@@ -137,10 +155,12 @@ def _parser() -> argparse.ArgumentParser:
     resume.add_argument("--phase", required=True, choices=("script", "tts", "video"))
     audit = subparsers.add_parser("audit")
     audit.add_argument("--run", required=True, type=Path)
-    audit.add_argument("--phase", required=True, choices=("script", "video", "engine"))
+    audit.add_argument(
+        "--phase", required=True, choices=("script", "video", "local", "engine")
+    )
     audit.add_argument("--codex-review", type=Path)
     gemini_web = subparsers.add_parser(
-        "gemini-web", help="Vận hành Gemini Ultra Web bằng Chrome do engine sở hữu"
+        "gemini-web", help="Audit Gemini Web tùy chọn cho run legacy; không thuộc luồng mặc định"
     )
     gemini_web.add_argument(
         "action",
@@ -205,6 +225,11 @@ def _prepare(run_dir: Path) -> int:
     state, episode = _episode(run_dir)
     if state.stage is not Stage.CHUAN_BI:
         raise MvpError("prepare requires CHUAN_BI stage")
+    try:
+        preflight_media_tools()
+    except MvpError as exc:
+        _write_next(run_dir, str(exc), code="THIEU_CONG_CU")
+        raise
     source = probe_source(Path(state.source_video))
     dump_json(episode / "Dau_vao" / "source_ref.json", source)
     paths = _job_paths_from_state(state, episode)
@@ -226,12 +251,41 @@ def _prepare(run_dir: Path) -> int:
         extract_inspection_assets(Path(state.source_video), shots, frames_cache)
     dump_json(run_dir / "transcript_english.json", transcript)
     dump_json(run_dir / "shots.json", ShotDocument(shots))
-    job_path = build_operator_job(paths, source, transcript, shots)
+    frame_manifest_path = run_dir / "frame_manifest.json"
+    frame_manifest_path.write_text(
+        json.dumps(
+            {
+                "frames": [str(path.resolve()) for path in sorted(frames_cache.glob("*.jpg"))]
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    policy_path = episode / "Ke_hoach_canh" / "editorial_policy.json"
+    if policy_path.is_file():
+        try:
+            policy = EditorialPolicy(**json.loads(policy_path.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            raise MvpError(f"cannot load editorial policy: {policy_path}") from exc
+    else:
+        policy = EditorialPolicy()
+    packet = build_situation_editor_packet(
+        source,
+        transcript,
+        ShotDocument(shots),
+        frame_manifest_path,
+        policy,
+        None,
+    )
+    job_path = run_dir / "cong_viec_antigravity.json"
+    dump_json(job_path, packet)
     advance(run_dir, Stage.CHUAN_BI, Stage.QUAN_SAT)
     _write_next(
         run_dir,
-        "QUAN_SAT theo Bo_nao_Antigravity/GEMINI.md; ghi su_that_tap_phim.json "
-        "và scene_packets.json. "
+        "QUAN_SAT theo Bo_nao_Antigravity/GEMINI.md; đọc transcript + frame, "
+        "ghi su_that_tap_phim.json rồi situations.json. "
         f"Job: {job_path}",
     )
     print(job_path)
@@ -260,6 +314,16 @@ def _job_paths_from_state(state: object, episode: Path):
     )
 
 
+def _editorial_policy(episode: Path) -> EditorialPolicy:
+    policy_path = episode / "Ke_hoach_canh" / "editorial_policy.json"
+    if not policy_path.is_file():
+        return EditorialPolicy()
+    try:
+        return EditorialPolicy(**json.loads(policy_path.read_text(encoding="utf-8")))
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        raise MvpError(f"cannot load editorial policy: {policy_path}") from exc
+
+
 def _validate(run_dir: Path, artifact: str) -> int:
     started = time.perf_counter()
     state, episode = _episode(run_dir)
@@ -270,7 +334,79 @@ def _validate(run_dir: Path, artifact: str) -> int:
             source_duration_ms=source.duration_ms,
         )
         validate_truth(truth, source.duration_ms)
-        _write_next(run_dir, "Kiểm tra scene_packets.json rồi chạy validate --artifact scene.")
+        if state.stage is Stage.QUAN_SAT:
+            advance(run_dir, Stage.QUAN_SAT, Stage.LAP_TINH_HUONG)
+            _write_next(
+                run_dir,
+                "Lập situations.json từ transcript + frame rồi chạy "
+                "validate --artifact situations.",
+            )
+        else:
+            _write_next(run_dir, "Kiểm tra scene_packets.json rồi chạy validate --artifact scene.")
+    elif artifact == "situations":
+        if state.stage is not Stage.LAP_TINH_HUONG:
+            raise MvpError("situation validation requires LAP_TINH_HUONG stage")
+        truth = load_truth(
+            episode / "Su_that" / "su_that_tap_phim.json",
+            source_duration_ms=source.duration_ms,
+        )
+        shots = load_json(run_dir / "shots.json", ShotDocument)
+        situations = load_situations(episode / "Kich_ban" / "situations.json")
+        validate_situations(
+            situations,
+            truth,
+            shots.shots,
+            source_duration_ms=source.duration_ms,
+        )
+        advance(run_dir, Stage.LAP_TINH_HUONG, Stage.VIET_LOI)
+        _write_next(
+            run_dir,
+            "Viết narration_plan.json theo từng tình huống rồi chạy validate --artifact narration.",
+        )
+    elif artifact == "narration":
+        if state.stage is not Stage.VIET_LOI:
+            raise MvpError("narration validation requires VIET_LOI stage")
+        truth = load_truth(
+            episode / "Su_that" / "su_that_tap_phim.json",
+            source_duration_ms=source.duration_ms,
+        )
+        shots = load_json(run_dir / "shots.json", ShotDocument)
+        situations = load_situations(episode / "Kich_ban" / "situations.json")
+        plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
+        validate_narration_plan(
+            plan,
+            situations,
+            truth,
+            shots.shots,
+            _editorial_policy(episode),
+            source.duration_ms,
+        )
+        extract_situation_anchors(
+            Path(state.source_video),
+            plan,
+            run_dir / "local_evidence" / "source",
+        )
+        advance(run_dir, Stage.VIET_LOI, Stage.TAO_TTS)
+        _write_next(run_dir, "Narration đạt; tạo TTS và adaptive EDL.")
+    elif artifact == "semantic-review":
+        if state.stage is not Stage.KIEM_DINH_LOCAL:
+            raise MvpError("semantic review validation requires KIEM_DINH_LOCAL stage")
+        plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
+        source_anchors = load_json(
+            run_dir / "local_evidence" / "source" / "anchors.json",
+            FrameAnchorDocument,
+        )
+        program_anchors = load_json(
+            run_dir / "local_evidence" / "program" / "anchors.json",
+            FrameAnchorDocument,
+        )
+        load_semantic_review(
+            episode / "Bao_cao" / "local_semantic_review.json",
+            plan,
+            source_anchors,
+            program_anchors,
+        )
+        _write_next(run_dir, "Semantic review hợp lệ; chạy audit --phase local.")
     elif artifact == "scene":
         truth = load_truth(
             episode / "Su_that" / "su_that_tap_phim.json",
@@ -332,6 +468,31 @@ def _validate(run_dir: Path, artifact: str) -> int:
         advance(run_dir, Stage.VIET_KICH_BAN, Stage.KIEM_DINH_KICH_BAN)
         _write_next(run_dir, "KIEM_DINH kịch bản và ghi kiem_dinh.json.")
     else:
+        if state.stage is Stage.CAN_HINH_VOICE:
+            plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
+            tts = load_json(
+                episode / "TTS" / "situation_tts_manifest.json",
+                SituationTtsManifest,
+            )
+            edl = load_json(
+                episode / "Ke_hoach_canh" / "adaptive_edl.json",
+                AdaptiveEdlDocument,
+            )
+            expected = build_adaptive_edl(
+                plan,
+                tts,
+                source_duration_ms=source.duration_ms,
+                policy=_editorial_policy(episode),
+            )
+            if edl != expected:
+                raise MvpError("persisted adaptive EDL does not match narration and TTS")
+            situation_ids = tuple(dict.fromkeys(unit.situation_id for unit in plan.units))
+            for index, situation_id in enumerate(situation_ids):
+                next_id = situation_ids[index + 1] if index + 1 < len(situation_ids) else ""
+                lock_situation(run_dir, situation_id, next_situation_id=next_id)
+            advance(run_dir, Stage.CAN_HINH_VOICE, Stage.DUNG_PROXY)
+            _write_next(run_dir, "Tình huống đã khóa; render --quality proxy.")
+            return 0
         if state.stage is Stage.CAN_TTS:
             storyboard = load_json(
                 episode / "Kich_ban" / "atomic_storyboard.json", AtomicStoryboard
@@ -386,11 +547,46 @@ def _lock(run_dir: Path) -> int:
     return 0
 
 
-def _tts(run_dir: Path) -> int:
+def _tts(run_dir: Path, situation_id: str | None = None) -> int:
     started = time.perf_counter()
     state, episode = _episode(run_dir)
     if state.stage is not Stage.TAO_TTS:
         raise MvpError("tts requires TAO_TTS stage")
+    situation_plan_path = episode / "Kich_ban" / "narration_plan.json"
+    if situation_plan_path.is_file():
+        source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+        plan = load_narration_plan(situation_plan_path)
+        situation_ids = tuple(dict.fromkeys(unit.situation_id for unit in plan.units))
+        if situation_id is not None and situation_id not in situation_ids:
+            raise MvpError(f"unknown situation ID: {situation_id}")
+        tts = synthesize_situation_units(
+            plan,
+            episode / "TTS",
+            episode / "_Cache" / "situation_tts",
+            source_sha256=source.sha256,
+        )
+        edl = build_adaptive_edl(
+            plan,
+            tts,
+            source_duration_ms=source.duration_ms,
+            policy=_editorial_policy(episode),
+        )
+        dump_json(episode / "Ke_hoach_canh" / "adaptive_edl.json", edl)
+        record_stage_metric(
+            run_dir,
+            Stage.TAO_TTS,
+            _elapsed_ms(started),
+            tts.cache_hits,
+            tts.cache_misses,
+            situation_ids,
+        )
+        advance(run_dir, Stage.TAO_TTS, Stage.CAN_HINH_VOICE)
+        _write_next(
+            run_dir,
+            f"TTS cache: {tts.cache_hits} hit, {tts.cache_misses} miss; "
+            "chạy validate --artifact edl để khóa từng tình huống.",
+        )
+        return 0
     atomic_path = episode / "Kich_ban" / "atomic_storyboard.json"
     if atomic_path.is_file():
         source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
@@ -453,6 +649,71 @@ def _tts(run_dir: Path) -> int:
 def _render(run_dir: Path, quality: str = "final") -> int:
     started = time.perf_counter()
     state, episode = _episode(run_dir)
+    adaptive_path = episode / "Ke_hoach_canh" / "adaptive_edl.json"
+    if adaptive_path.is_file() and quality == "proxy" and state.stage is Stage.DUNG_PROXY:
+        edl = load_json(adaptive_path, AdaptiveEdlDocument)
+        tts = load_json(
+            episode / "TTS" / "situation_tts_manifest.json",
+            SituationTtsManifest,
+        )
+        output = run_dir / "proxy" / "review_proxy.mp4"
+        result = render_review(
+            Path(state.source_video),
+            Path(tts.narration_wav_path),
+            edl,
+            output,
+            quality="proxy",
+        )
+        dump_json(run_dir / "proxy" / "render_result.json", result)
+        extract_adaptive_program_anchors(
+            output,
+            edl,
+            run_dir / "local_evidence" / "program",
+        )
+        record_stage_metric(run_dir, Stage.DUNG_PROXY, _elapsed_ms(started), 0, 0, ())
+        advance(run_dir, Stage.DUNG_PROXY, Stage.KIEM_DINH_LOCAL)
+        _write_next(
+            run_dir,
+            "Proxy đã dựng; ghi local_semantic_review.json rồi chạy audit --phase local.",
+        )
+        print(output)
+        return 0
+    if (
+        adaptive_path.is_file()
+        and quality == "final"
+        and state.stage is Stage.DUNG_VIDEO_CUOI
+    ):
+        edl = load_json(adaptive_path, AdaptiveEdlDocument)
+        tts = load_json(
+            episode / "TTS" / "situation_tts_manifest.json",
+            SituationTtsManifest,
+        )
+        output = run_dir / "final_candidate.mp4"
+        result = render_review(
+            Path(state.source_video),
+            Path(tts.narration_wav_path),
+            edl,
+            output,
+            quality="final",
+        )
+        dump_json(run_dir / "final_render_result.json", result)
+        extract_adaptive_program_anchors(
+            output,
+            edl,
+            run_dir / "local_evidence" / "program_final",
+        )
+        record_stage_metric(
+            run_dir,
+            Stage.DUNG_VIDEO_CUOI,
+            _elapsed_ms(started),
+            0,
+            0,
+            (),
+        )
+        advance(run_dir, Stage.DUNG_VIDEO_CUOI, Stage.KIEM_DINH_ENGINE)
+        _write_next(run_dir, "Final candidate đã dựng; chạy audit --phase engine.")
+        print(output)
+        return 0
     if quality == "proxy" and state.stage is Stage.DUNG_PROXY:
         edl = load_json(episode / "Ke_hoach_canh" / "atomic_edl.json", SpanEdlDocument)
         tts = load_json(episode / "TTS" / "atomic_tts_manifest.json", AtomicTtsManifest)
@@ -657,6 +918,87 @@ def _audit_atomic_engine(run_dir: Path, episode: Path) -> int:
         _engine_audit_passed=True,
     )
     _write_next(run_dir, "HOAN_THANH; giao review_anime.mp4 cho người dùng xem.")
+    return 0
+
+
+def _audit_local(run_dir: Path, episode: Path, *, final: bool = False) -> int:
+    state = read_state(run_dir)
+    required_stage = Stage.KIEM_DINH_ENGINE if final else Stage.KIEM_DINH_LOCAL
+    if state.stage is not required_stage:
+        raise MvpError(f"local audit requires {required_stage.value} stage")
+    plan_path = episode / "Kich_ban" / "narration_plan.json"
+    situations_path = episode / "Kich_ban" / "situations.json"
+    semantic_path = episode / "Bao_cao" / "local_semantic_review.json"
+    edl_path = episode / "Ke_hoach_canh" / "adaptive_edl.json"
+    tts_path = episode / "TTS" / "situation_tts_manifest.json"
+    source_anchors_path = run_dir / "local_evidence" / "source" / "anchors.json"
+    program_dir = "program_final" if final else "program"
+    program_anchors_path = run_dir / "local_evidence" / program_dir / "anchors.json"
+    render_path = run_dir / ("final_render_result.json" if final else "proxy/render_result.json")
+
+    plan = load_narration_plan(plan_path)
+    situations = load_situations(situations_path)
+    source_anchors = load_json(source_anchors_path, FrameAnchorDocument)
+    program_anchors = load_json(program_anchors_path, FrameAnchorDocument)
+    semantic = load_semantic_review(
+        semantic_path,
+        plan,
+        source_anchors,
+        program_anchors,
+    )
+    edl = load_json(edl_path, AdaptiveEdlDocument)
+    tts = load_json(tts_path, SituationTtsManifest)
+    render = load_json(render_path, RenderResult)
+    report = build_local_audit(
+        plan,
+        situations,
+        semantic,
+        source_anchors,
+        program_anchors,
+        edl,
+        tts,
+        render,
+        policy=_editorial_policy(episode),
+    )
+    report_name = "kiem_dinh_engine.json" if final else "kiem_dinh_local.json"
+    dump_json(episode / "Bao_cao" / report_name, report)
+    if not report.passed:
+        errors = tuple(item for item in report.findings if item.severity == "ERROR")
+        unit_to_situation = {unit.unit_id: unit.situation_id for unit in plan.units}
+        situation_ids = tuple(
+            dict.fromkeys(
+                unit_to_situation[item.cue_id]
+                for item in errors
+                if item.cue_id in unit_to_situation
+            )
+        ) or tuple(dict.fromkeys(unit.situation_id for unit in plan.units))
+        codes = tuple(dict.fromkeys(item.code for item in errors)) or ("AUDIT_NOT_PASSED",)
+        fingerprint = content_fingerprint(
+            (plan_path, situations_path, semantic_path, edl_path, tts_path)
+        )
+        record_local_repair(run_dir, situation_ids, codes, fingerprint)
+        _write_next(
+            run_dir,
+            "Kiểm định cục bộ chặn "
+            f"{', '.join(codes)}; sửa đúng tình huống {', '.join(situation_ids)}.",
+        )
+        return 1
+    if final:
+        publish_candidate(
+            run_dir / "final_candidate.mp4",
+            episode / "Thanh_pham" / "review_anime.mp4",
+            episode / "Bao_cao" / "phien_ban_cu",
+        )
+        advance(
+            run_dir,
+            Stage.KIEM_DINH_ENGINE,
+            Stage.HOAN_THANH,
+            _engine_audit_passed=True,
+        )
+        _write_next(run_dir, "HOAN_THANH; giao review_anime.mp4 cho người dùng xem.")
+        return 0
+    advance(run_dir, Stage.KIEM_DINH_LOCAL, Stage.DUNG_VIDEO_CUOI)
+    _write_next(run_dir, "Kiểm định proxy đạt; render --quality final.")
     return 0
 
 
@@ -1166,6 +1508,16 @@ def _gemini_web_smoke(run_dir: Path) -> int:
 
 
 def _gemini_web(args: argparse.Namespace) -> int:
+    if args.action not in {"enroll", "stop", "show"}:
+        state = read_state(args.run)
+        episode = Path(state.episode_dir) if state.episode_dir else None
+        if episode is not None and (
+            episode / "Kich_ban" / "narration_plan.json"
+        ).is_file():
+            raise MvpError(
+                "gemini-web is optional for legacy runs only; local situation runs "
+                "use audit --phase local|engine"
+            )
     if args.action == "enroll":
         return _web_verify_enroll(args.run, args.account_hint)
     if args.action == "smoke":
@@ -1197,7 +1549,11 @@ def _audit(run_dir: Path, phase: str, codex_review: Path | None) -> int:
     _, episode = _episode(run_dir)
     if phase == "script":
         return _audit_script(run_dir, episode)
+    if phase == "local":
+        return _audit_local(run_dir, episode)
     if phase == "engine":
+        if (episode / "Kich_ban" / "narration_plan.json").is_file():
+            return _audit_local(run_dir, episode, final=True)
         return _audit_atomic_engine(run_dir, episode)
     return _audit_video(run_dir, episode, codex_review)
 
@@ -1244,7 +1600,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "lock":
             return _lock(args.run)
         if args.command == "tts":
-            return _tts(args.run)
+            return _tts(args.run, args.situation)
         if args.command == "render":
             return _render(args.run, args.quality)
         if args.command == "resume":

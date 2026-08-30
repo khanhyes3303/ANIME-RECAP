@@ -11,6 +11,7 @@ from typing import Any
 
 from PIL import Image, ImageChops, ImageStat
 
+from .adaptive_edl import AdaptiveEdlDocument
 from .errors import MvpError
 from .jsonio import dump_json
 from .models import (
@@ -29,6 +30,7 @@ from .models import (
     TranscriptSegment,
     TranscriptWord,
 )
+from .situations import NarrationPlan
 
 Runner = Callable[..., Any]
 _PTS_TIME = re.compile(r"pts_time:([0-9]+(?:\.[0-9]+)?)")
@@ -605,6 +607,58 @@ def extract_span_anchors(
     return result
 
 
+def extract_situation_anchors(
+    video: Path,
+    plan: NarrationPlan,
+    output_dir: Path,
+    *,
+    runner: Runner = subprocess.run,
+) -> FrameAnchorDocument:
+    if not video.is_file():
+        raise MvpError(f"anchor video does not exist: {video}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    anchors: list[FrameAnchor] = []
+    for unit in plan.units:
+        for source_range in unit.evidence_ranges:
+            for position, timestamp_ms in zip(
+                ("START", "MIDDLE", "END"),
+                _anchor_timestamps(source_range.source_start_ms, source_range.source_end_ms),
+                strict=True,
+            ):
+                anchor_id = f"{unit.unit_id}-{source_range.range_id}-{position.lower()}"
+                frame = output_dir / f"{anchor_id}.jpg"
+                _run(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-v",
+                        "error",
+                        "-ss",
+                        f"{timestamp_ms / 1_000:.3f}",
+                        "-i",
+                        str(video),
+                        "-frames:v",
+                        "1",
+                        str(frame),
+                    ],
+                    runner,
+                )
+                anchors.append(
+                    FrameAnchor(
+                        anchor_id,
+                        unit.unit_id,
+                        source_range.range_id,
+                        "SOURCE",
+                        position,
+                        timestamp_ms,
+                        str(frame.resolve()),
+                    )
+                )
+    result = FrameAnchorDocument(tuple(anchors))
+    dump_json(output_dir / "anchors.json", result)
+    return result
+
+
 def extract_program_anchors(
     video: Path,
     edl: SpanEdlDocument,
@@ -646,6 +700,59 @@ def extract_program_anchors(
                 FrameAnchor(
                     anchor_id,
                     segment.span_id,
+                    segment.range_id,
+                    "PROGRAM",
+                    position,
+                    timestamp_ms,
+                    str(frame.resolve()),
+                )
+            )
+    result = FrameAnchorDocument(tuple(anchors))
+    dump_json(output_dir / "anchors.json", result)
+    return result
+
+
+def extract_adaptive_program_anchors(
+    video: Path,
+    edl: AdaptiveEdlDocument,
+    output_dir: Path,
+    *,
+    runner: Runner = subprocess.run,
+) -> FrameAnchorDocument:
+    if not video.is_file():
+        raise MvpError(f"anchor video does not exist: {video}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    anchors: list[FrameAnchor] = []
+    for segment in edl.segments:
+        for position, timestamp_ms in zip(
+            ("START", "MIDDLE", "END"),
+            _anchor_timestamps(segment.program_start_ms, segment.program_end_ms),
+            strict=True,
+        ):
+            anchor_id = f"{segment.unit_id}-{segment.range_id}-program-{position.lower()}"
+            frame = output_dir / f"{anchor_id}.jpg"
+            _run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-v",
+                    "error",
+                    "-ss",
+                    f"{timestamp_ms / 1_000:.3f}",
+                    "-i",
+                    str(video),
+                    "-frames:v",
+                    "1",
+                    "-strict",
+                    "-2",
+                    str(frame),
+                ],
+                runner,
+            )
+            anchors.append(
+                FrameAnchor(
+                    anchor_id,
+                    segment.unit_id,
                     segment.range_id,
                     "PROGRAM",
                     position,
