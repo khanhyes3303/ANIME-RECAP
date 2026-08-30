@@ -17,6 +17,7 @@
 - Gemini Web remains optional and cannot advance the default workflow.
 - No dependency, plugin, model, repository, or DLL is installed automatically; missing tools stop with `CAN_CON_NGUOI_XU_LY` and the exact dependency name.
 - `CHARACTER_INTRO`, `ACTION`, `REVEAL`, and `OUTCOME` speech may start no more than 100 ms before its mapped visual anchor; the normal visual preroll is 300–1,200 ms.
+- Every evidence range contains exactly one semantic event, one action phase, and one story purpose; a four-second homogeneous range is preferred over a ten-second mixed range.
 - Source video, rejected proxies, previous finals, and dirty changes in the main checkout are preserved.
 - Final render is forbidden until the user explicitly approves a proxy and all approved artifact hashes still match.
 - Implement every production behavior through a failing test first; run the focused test red, implement minimally, then run it green.
@@ -200,7 +201,7 @@ git commit -m "feat: record Antigravity editorial provenance"
 
 **Interfaces:**
 - Consumes: v1 `NarrationPlan`, `NarrationUnit`, and `SituationDocument` loaders.
-- Produces: `NarrationClaim`, `NarrationCue`, `CueTts`, `CueTtsManifest`, `CharacterContext`, `TermContext`, `StoryContext`, and v2 fields on `Situation`/`NarrationUnit`/`NarrationPlan`.
+- Produces: `NarrationClaim`, `NarrationCue`, `SemanticShotUse`, `CueTts`, `CueTtsManifest`, `CharacterContext`, `TermContext`, `StoryContext`, and v2 fields on `EvidenceRange`/`Situation`/`NarrationUnit`/`NarrationPlan`.
 
 - [ ] **Step 1: Write failing contract tests**
 
@@ -268,6 +269,14 @@ class NarrationCue:
 
 
 @dataclass(frozen=True, slots=True)
+class SemanticShotUse:
+    shot_id: str
+    semantic_event_id: str
+    action_phase: str
+    story_purpose: str
+
+
+@dataclass(frozen=True, slots=True)
 class CueTts:
     cue_id: str
     unit_id: str
@@ -297,6 +306,12 @@ Add `cues: tuple[NarrationCue, ...] = ()` to `NarrationUnit` and
 that every cue `claim_ids` value resolves to exactly one plan claim. Add
 `cause_or_goal: str = ""` and `audience_summary: str = ""` to `Situation`; v2 validation
 makes them mandatory.
+
+Add optional v2 fields to `EvidenceRange`:
+`semantic_event_id: str = ""`, `action_phase: str = ""`,
+`story_purpose: str = ""`, and `shot_uses: tuple[SemanticShotUse, ...] = ()`. V2 requires
+all four. Permit action phases only from `SETUP`, `CAUSE`, `APPROACH`, `ACTION`,
+`OUTCOME`, `REACTION`, and `BRIDGE`.
 
 - [ ] **Step 4: Add story-context contracts**
 
@@ -384,6 +399,37 @@ def test_repeated_filler_bridge_is_reported() -> None:
     plan = v2_plan_with_bridges(("Tiếp đó.", "Tiếp đó.", "Tiếp đó.", "Tiếp đó."))
     codes = {finding.code for finding in coherence_findings(plan, v2_situations())}
     assert "REPETITIVE_FILLER_BRIDGE" in codes
+
+
+def test_range_mixing_three_shot_meanings_is_rejected_even_when_only_eight_seconds() -> None:
+    source_range = v2_range(
+        start_ms=10_000,
+        end_ms=18_000,
+        semantic_event_id="fight-001-hit",
+        action_phase="ACTION",
+        story_purpose="Jiro tung cú đánh quyết định.",
+        shot_uses=(
+            shot_use("shot-001", "fight-001-approach", "APPROACH", "Jiro áp sát."),
+            shot_use("shot-002", "fight-001-hit", "ACTION", "Jiro ra đòn."),
+            shot_use("shot-003", "fight-001-reaction", "REACTION", "Đám côn đồ hoảng sợ."),
+        ),
+    )
+    with pytest.raises(MvpError, match="SEMANTIC_RANGE_MIXED"):
+        validate_semantic_range(source_range)
+
+
+def test_four_second_range_with_one_meaning_is_accepted() -> None:
+    source_range = v2_range(
+        start_ms=12_000,
+        end_ms=16_000,
+        semantic_event_id="fight-001-hit",
+        action_phase="ACTION",
+        story_purpose="Jiro ra đòn.",
+        shot_uses=(
+            shot_use("shot-002", "fight-001-hit", "ACTION", "Jiro ra đòn."),
+        ),
+    )
+    validate_semantic_range(source_range)
 ```
 
 - [ ] **Step 3: Run tests and verify RED**
@@ -406,6 +452,13 @@ For policy v2, require nonempty `setup`, `cause_or_goal`, at least one turning p
 Report `REPETITIVE_FILLER_BRIDGE` when the same normalized first four words occur three
 times consecutively or in more than 25 percent of nonempty bridges. Report
 `DUPLICATE_STORY_FACT` when the same normalized factual claim appears in different units.
+
+Implement `validate_semantic_range(source_range: EvidenceRange) -> None`. Require exactly
+one `SemanticShotUse` for every declared `shot_id`, reject duplicate/missing/extra shots,
+and require every shot-use `semantic_event_id`, `action_phase`, and normalized
+`story_purpose` to equal the enclosing range. Raise
+`SEMANTIC_RANGE_MIXED: <range_id>: <conflicting shot IDs>` on any mismatch. The failure is
+based on semantic labels, never on the number of seconds or shots.
 
 - [ ] **Step 6: Run tests and commit**
 
@@ -543,6 +596,21 @@ def test_new_timeline_starts_voice_after_visual_preroll() -> None:
     assert cue.spoken_start_ms >= cue.visual_anchor_program_ms + 300
     assert semantic_timing_findings(timeline.cues) == ()
     assert edl.total_duration_ms >= cue.spoken_end_ms + 300
+
+
+def test_timeline_keeps_two_semantic_ranges_separate_inside_one_fight() -> None:
+    plan = fight_plan_with_approach_and_outcome_ranges()
+    edl, timeline = build_semantic_timeline(
+        plan, fight_cue_tts(), 60_000, EditorialPolicy()
+    )
+    assert [segment.range_id for segment in edl.segments] == [
+        "range-approach",
+        "range-outcome",
+    ]
+    assert [cue.cue_id for cue in timeline.cues] == [
+        "cue-approach",
+        "cue-outcome",
+    ]
 ```
 
 - [ ] **Step 3: Run and verify RED**
@@ -702,6 +770,11 @@ def test_episode_audit_rejects_unintroduced_rago_and_repetitive_bridges() -> Non
     assert {"CHARACTER_USED_BEFORE_INTRODUCTION", "REPETITIVE_FILLER_BRIDGE"} <= {
         finding.code for finding in report.findings
     }
+
+
+def test_local_audit_rejects_semantically_mixed_evidence_range() -> None:
+    report = build_v2_local_audit(plan=plan_with_mixed_fight_range())
+    assert "SEMANTIC_RANGE_MIXED" in {finding.code for finding in report.findings}
 ```
 
 - [ ] **Step 2: Run and verify RED**
@@ -935,7 +1008,8 @@ Expected: FAIL because the packet still targets whole-episode outputs and has no
 
 Replace whole-episode `required_outputs` with exactly the two staging filenames. Include
 task ID, revision, situation ID, input hash, story context, allowed staging directory,
-schema examples for v2 cues, and the `accept-antigravity` next command. Reject prompts
+schema examples for v2 cues and per-shot semantic-use labels, and the
+`accept-antigravity` next command. Reject prompts
 that mention Codex as a content repair owner.
 
 - [ ] **Step 4: Rewrite GEMINI policy around the engine boundary**
@@ -944,6 +1018,9 @@ Require Antigravity to author one situation, submit staging artifacts, run the e
 TTS/timeline/semantic checks, and respond to exact repair codes. Clarify that “tạo TTS và
 khớp hình” means invoking engine commands and revising editorial inputs, not writing TTS,
 EDL, state, PASS reports, or source code directly. Preserve the no-install rule.
+Require Antigravity to split a range whenever adjacent shots differ in small event,
+action phase, or story purpose, even inside the same fight or conversation. Explicitly
+prefer a short homogeneous range to a longer mixed range.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -1170,7 +1247,8 @@ Run: `ffprobe -v error -show_entries stream=index,codec_type,duration,start_time
 Run: `crv "PROXY_PATH" -o "RUN_DIR\crv_revision_2_proxy" --grid --max-frames 60 --no-transcribe --why "Kiểm tra mạch kể cho người mới và voice không nói trước hình"`
 
 Expected: local/episode/proxy audits pass, state is `CHO_NGUOI_DUNG_DUYET_PROXY`, the
-grandfather cue starts at or after its visual anchor, and no final publication has run.
+grandfather cue starts at or after its visual anchor, every range passes semantic
+homogeneity validation, and no final publication has run.
 
 - [ ] **Step 6: Stop for explicit user proxy approval**
 

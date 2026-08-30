@@ -120,6 +120,25 @@ Every factual clause belongs to exactly one cue and every cue has a visual ancho
 that introduces information not visible in the current range must cite transcript and
 context evidence and use a setup image that does not contradict the narration.
 
+### Semantically homogeneous evidence ranges
+
+Duration never justifies mixing meanings. Every kept evidence range represents exactly
+one small story event, one action phase, and one narration purpose, even when adjacent
+shots all belong to the same broad fight or conversation. Antigravity labels the range
+with `semantic_event_id`, `action_phase`, and `story_purpose`, and supplies a
+`SemanticShotUse` for every intersecting shot with the same three labels.
+
+Action phases are `SETUP`, `CAUSE`, `APPROACH`, `ACTION`, `OUTCOME`, `REACTION`, or
+`BRIDGE`. A range containing, for example, an approach shot, the decisive hit, and an
+unrelated reaction is invalid even if all three occur during one fight. Antigravity must
+split it into separate ranges and attach each narration cue only to the range that proves
+that cue. A clean four-second range is preferred over a mixed ten-second range.
+
+The deterministic validator rejects missing, duplicate, or mismatched shot-use labels.
+The semantic auditor checks the labels against transcript and frame evidence; identical
+labels do not make a falsely grouped range valid. The stable finding code is
+`SEMANTIC_RANGE_MIXED` and names the range plus conflicting shot IDs and labels.
+
 ### Newcomer context
 
 The episode owns a `story_context.json` built incrementally by Antigravity and accepted by
@@ -180,6 +199,7 @@ Failure produces stable codes such as:
 - `CHARACTER_USED_BEFORE_INTRODUCTION`;
 - `TERM_USED_BEFORE_EXPLANATION`;
 - `CAUSAL_CHAIN_INCOMPLETE`;
+- `SEMANTIC_RANGE_MIXED`;
 - `EDITOR_PROVENANCE_INVALID`;
 - `SITUATION_SUBMITTED_OUT_OF_ORDER`.
 
@@ -301,8 +321,10 @@ The change is complete only when all of the following are true:
 3. Cue-level semantic timing prevents narration from revealing a visual fact early.
 4. New characters and terms are introduced before assumed use.
 5. Each accepted situation has a comprehensible causal chain.
-6. The whole-episode coherence audit passes without repetitive filler findings.
-7. The BLACK TORCH regression at 30–35 seconds is fixed in a new proxy.
-8. The user explicitly approves that proxy.
-9. The final is rendered from exactly the approved editorial hashes.
-10. Full tests and lint pass, and no pre-existing dirty main-checkout changes are lost.
+6. Every kept evidence range contains one semantic event, action phase, and story purpose;
+   mixed adjacent shots fail with `SEMANTIC_RANGE_MIXED` regardless of range duration.
+7. The whole-episode coherence audit passes without repetitive filler findings.
+8. The BLACK TORCH regression at 30–35 seconds is fixed in a new proxy.
+9. The user explicitly approves that proxy.
+10. The final is rendered from exactly the approved editorial hashes.
+11. Full tests and lint pass, and no pre-existing dirty main-checkout changes are lost.
