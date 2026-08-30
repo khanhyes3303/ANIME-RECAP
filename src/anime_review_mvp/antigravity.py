@@ -92,10 +92,12 @@ def _validate_operator_policy(policy_dir: Path) -> None:
         return
     policy = policy_path.read_text(encoding="utf-8").casefold()
     required = (
-        "situations.json",
-        "narration_plan.json",
+        "situation_draft.json",
+        "narration_draft.json",
         "xử lý tuần tự",
         "không tự cài",
+        "antigravity là biên tập viên duy nhất",
+        "semantic_event_id",
     )
     forbidden = ("gemini-web run", "gemini-web continue", "tự viết verdict thay gemini")
     if any(token not in policy for token in required):
