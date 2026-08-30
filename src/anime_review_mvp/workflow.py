@@ -36,6 +36,15 @@ class Stage(StrEnum):
     LAP_TINH_HUONG = "LAP_TINH_HUONG"
     CAN_HINH_VOICE = "CAN_HINH_VOICE"
     KIEM_DINH_LOCAL = "KIEM_DINH_LOCAL"
+    TRICH_XUAT_BANG_CHUNG = "TRICH_XUAT_BANG_CHUNG"
+    CHO_ANTIGRAVITY_TINH_HUONG = "CHO_ANTIGRAVITY_TINH_HUONG"
+    KIEM_DINH_TINH_HUONG = "KIEM_DINH_TINH_HUONG"
+    TAO_TTS_TINH_HUONG = "TAO_TTS_TINH_HUONG"
+    LAP_TIMELINE_TINH_HUONG = "LAP_TIMELINE_TINH_HUONG"
+    KIEM_DINH_NGU_NGHIA_TINH_HUONG = "KIEM_DINH_NGU_NGHIA_TINH_HUONG"
+    KIEM_DINH_MACH_TRUYEN_TOAN_TAP = "KIEM_DINH_MACH_TRUYEN_TOAN_TAP"
+    KIEM_DINH_PROXY = "KIEM_DINH_PROXY"
+    CHO_NGUOI_DUNG_DUYET_PROXY = "CHO_NGUOI_DUNG_DUYET_PROXY"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +76,11 @@ class RunState:
     current_situation_id: str = ""
     last_local_repair_fingerprint: str = ""
     last_local_repair_codes: tuple[str, ...] = ()
+    editor_task_id: str = ""
+    editorial_revision: int = 0
+    approved_proxy_sha256: str = ""
+    approved_artifact_sha256: str = ""
+    proxy_rejection_note: str = ""
 
 
 _NEXT_STAGE = {
@@ -105,6 +119,19 @@ _LEGACY_TRANSITIONS = {
     (Stage.TAO_TTS, Stage.LAP_EDL),
     (Stage.LAP_EDL, Stage.DUNG_VIDEO),
     (Stage.DUNG_VIDEO, Stage.KIEM_DINH_VIDEO),
+}
+
+_V2_TRANSITIONS = {
+    (Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG),
+    (Stage.TRICH_XUAT_BANG_CHUNG, Stage.CHO_ANTIGRAVITY_TINH_HUONG),
+    (Stage.CHO_ANTIGRAVITY_TINH_HUONG, Stage.KIEM_DINH_TINH_HUONG),
+    (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
+    (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
+    (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG),
+    (Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY),
+    (Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY),
+    (Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY),
+    (Stage.CHO_NGUOI_DUNG_DUYET_PROXY, Stage.DUNG_VIDEO_CUOI),
 }
 
 
@@ -178,7 +205,17 @@ def read_state(run_dir: Path) -> RunState:
             "last_local_repair_fingerprint",
             "last_local_repair_codes",
         }
-        if frozenset(raw) not in {frozenset(legacy_fields), frozenset(current_fields)}:
+        v2_fields = {
+            *current_fields,
+            "editor_task_id",
+            "editorial_revision",
+            "approved_proxy_sha256",
+            "approved_artifact_sha256",
+            "proxy_rejection_note",
+        }
+        if frozenset(raw) not in {
+            frozenset(legacy_fields), frozenset(current_fields), frozenset(v2_fields)
+        }:
             raise MvpError("run state fields do not match the contract")
         return RunState(
             run_dir=Path(raw["run_dir"]),
@@ -208,6 +245,11 @@ def read_state(run_dir: Path) -> RunState:
             current_situation_id=raw.get("current_situation_id", ""),
             last_local_repair_fingerprint=raw.get("last_local_repair_fingerprint", ""),
             last_local_repair_codes=tuple(raw.get("last_local_repair_codes", ())),
+            editor_task_id=raw.get("editor_task_id", ""),
+            editorial_revision=raw.get("editorial_revision", 0),
+            approved_proxy_sha256=raw.get("approved_proxy_sha256", ""),
+            approved_artifact_sha256=raw.get("approved_artifact_sha256", ""),
+            proxy_rejection_note=raw.get("proxy_rejection_note", ""),
         )
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise MvpError(f"cannot read run state: {run_dir}") from exc
@@ -219,12 +261,23 @@ def advance(
     target: Stage,
     *,
     _engine_audit_passed: bool = False,
+    _proxy_approval_verified: bool = False,
 ) -> RunState:
     state = read_state(run_dir)
     if state.stage is not expected:
         raise MvpError(f"persisted stage is {state.stage}; expected {expected} before advancing")
-    if _NEXT_STAGE.get(expected) is not target and (expected, target) not in _LEGACY_TRANSITIONS:
+    if (
+        _NEXT_STAGE.get(expected) is not target
+        and (expected, target) not in _LEGACY_TRANSITIONS
+        and (expected, target) not in _V2_TRANSITIONS
+    ):
         raise MvpError(f"forbidden workflow transition: {expected} -> {target}")
+    if (
+        expected is Stage.CHO_NGUOI_DUNG_DUYET_PROXY
+        and target is Stage.DUNG_VIDEO_CUOI
+        and not _proxy_approval_verified
+    ):
+        raise MvpError("explicit proxy approval is required before final render")
     if target is Stage.HOAN_THANH and not _engine_audit_passed:
         raise MvpError("only a successful engine audit may mark a run complete")
     state = replace(state, stage=target)
@@ -307,6 +360,155 @@ def lock_situation(
         state,
         locked_situation_ids=(*state.locked_situation_ids, normalized),
         current_situation_id=next_situation_id.strip(),
+    )
+    _write_state(state)
+    return state
+
+
+def lock_editor_situation(
+    run_dir: Path,
+    situation_id: str,
+    *,
+    next_situation_id: str = "",
+) -> RunState:
+    state = read_state(run_dir)
+    normalized = situation_id.strip()
+    if state.stage is not Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG:
+        raise MvpError("editor situation can only lock after semantic validation")
+    if not normalized or normalized in state.locked_situation_ids:
+        raise MvpError("editor situation ID is missing or already locked")
+    following = next_situation_id.strip()
+    state = replace(
+        state,
+        stage=(
+            Stage.CHO_ANTIGRAVITY_TINH_HUONG
+            if following
+            else Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP
+        ),
+        locked_situation_ids=(*state.locked_situation_ids, normalized),
+        current_situation_id=following,
+        editor_task_id="",
+    )
+    _write_state(state)
+    return state
+
+
+def begin_editor_task(
+    run_dir: Path,
+    task_id: str,
+    situation_id: str,
+    revision: int,
+) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+        raise MvpError("editor task can only begin at the Antigravity wait stage")
+    if not task_id.strip() or not situation_id.strip() or revision < 1:
+        raise MvpError("editor task ID, situation ID, and revision are required")
+    state = replace(
+        state,
+        editor_task_id=task_id.strip(),
+        current_situation_id=situation_id.strip(),
+        editorial_revision=revision,
+    )
+    _write_state(state)
+    return state
+
+
+def accept_editor_revision(
+    run_dir: Path,
+    task_id: str,
+    revision: int,
+) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+        raise MvpError("editor revision can only be accepted from the Antigravity stage")
+    if state.editor_task_id != task_id or state.editorial_revision != revision:
+        raise MvpError("accepted editor revision does not match the active task")
+    state = replace(state, stage=Stage.KIEM_DINH_TINH_HUONG)
+    _write_state(state)
+    return state
+
+
+def route_editor_repair(
+    run_dir: Path,
+    situation_ids: tuple[str, ...],
+    codes: tuple[str, ...],
+    fingerprint: str,
+) -> RunState:
+    state = read_state(run_dir)
+    if not situation_ids or not codes:
+        raise MvpError("editor repair requires situation IDs and codes")
+    if len(fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in fingerprint
+    ):
+        raise MvpError("editor repair fingerprint must be a lowercase SHA-256")
+    history = (
+        *state.repair_history,
+        RepairRecord("ANTIGRAVITY", codes, "SITUATION", situation_ids),
+    )
+    if (
+        state.last_local_repair_fingerprint == fingerprint
+        and state.last_local_repair_codes == codes
+    ):
+        state = replace(
+            state,
+            stage=Stage.CAN_CON_NGUOI_XU_LY,
+            repair_history=history,
+        )
+    else:
+        state = replace(
+            state,
+            stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+            repair_history=history,
+            current_situation_id=situation_ids[0],
+            last_local_repair_fingerprint=fingerprint,
+            last_local_repair_codes=codes,
+            editor_task_id="",
+        )
+    _write_state(state)
+    return state
+
+
+def approve_proxy_state(
+    run_dir: Path, proxy_sha256: str, artifact_sha256: str
+) -> RunState:
+    state = advance(
+        run_dir,
+        Stage.CHO_NGUOI_DUNG_DUYET_PROXY,
+        Stage.DUNG_VIDEO_CUOI,
+        _proxy_approval_verified=True,
+    )
+    state = replace(
+        state,
+        approved_proxy_sha256=proxy_sha256,
+        approved_artifact_sha256=artifact_sha256,
+        proxy_rejection_note="",
+    )
+    _write_state(state)
+    return state
+
+
+def reject_proxy_state(
+    run_dir: Path, note: str, situation_ids: tuple[str, ...]
+) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.CHO_NGUOI_DUNG_DUYET_PROXY:
+        raise MvpError("proxy can only be rejected while awaiting user approval")
+    if not note.strip() or not situation_ids:
+        raise MvpError("proxy rejection requires a note and situation IDs")
+    history = (
+        *state.repair_history,
+        RepairRecord("ANTIGRAVITY", ("USER_REJECTED_PROXY",), "PROXY", situation_ids),
+    )
+    state = replace(
+        state,
+        stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+        repair_history=history,
+        current_situation_id=situation_ids[0],
+        proxy_rejection_note=note.strip(),
+        approved_proxy_sha256="",
+        approved_artifact_sha256="",
+        editor_task_id="",
     )
     _write_state(state)
     return state

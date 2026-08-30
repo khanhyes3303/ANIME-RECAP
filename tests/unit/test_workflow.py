@@ -9,6 +9,7 @@ from anime_review_mvp.workflow import (
     RunState,
     Stage,
     advance,
+    lock_editor_situation,
     lock_situation,
     mark_human_required,
     new_state,
@@ -18,6 +19,7 @@ from anime_review_mvp.workflow import (
     record_repair,
     record_stage_metric,
     resume_beat_repair,
+    route_editor_repair,
 )
 
 
@@ -234,3 +236,36 @@ def test_read_state_upgrades_legacy_schema(tmp_path: Path) -> None:
     assert state.locked_situation_ids == ()
     assert state.current_situation_id == ""
     assert state.last_local_repair_fingerprint == ""
+
+
+def test_v2_path_waits_for_explicit_user_proxy_approval(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run)
+    path = (
+        (Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG),
+        (Stage.TRICH_XUAT_BANG_CHUNG, Stage.CHO_ANTIGRAVITY_TINH_HUONG),
+        (Stage.CHO_ANTIGRAVITY_TINH_HUONG, Stage.KIEM_DINH_TINH_HUONG),
+        (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
+        (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
+        (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG),
+    )
+    for expected, target in path:
+        advance(run, expected, target)
+    lock_editor_situation(run, "situation-001", next_situation_id="")
+    advance(run, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY)
+    advance(run, Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY)
+    advance(run, Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
+    assert read_state(run).stage is Stage.CHO_NGUOI_DUNG_DUYET_PROXY
+    with pytest.raises(MvpError, match="proxy approval"):
+        advance(run, Stage.CHO_NGUOI_DUNG_DUYET_PROXY, Stage.DUNG_VIDEO_CUOI)
+
+
+def test_v2_content_repair_routes_to_antigravity(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG)
+    state = route_editor_repair(
+        run, ("situation-004",), ("VOICE_PRECEDES_VISUAL_ANCHOR",), "a" * 64
+    )
+    assert state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert state.current_situation_id == "situation-004"
+    assert state.repair_history[-1].owner == "ANTIGRAVITY"
