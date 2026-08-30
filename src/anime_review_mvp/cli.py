@@ -90,7 +90,10 @@ from .models import (
 from .proxy_approval import approve_proxy, reject_proxy, require_approved_artifacts
 from .render import RenderResult, render_review
 from .semantic_timeline import SemanticTimeline, build_semantic_timeline
-from .situation_packets import build_situation_editor_packet
+from .situation_packets import (
+    build_situation_editor_packet,
+    render_situation_editor_prompt,
+)
 from .situation_validation import validate_narration_plan, validate_situations
 from .situations import (
     CueTtsManifest,
@@ -1957,10 +1960,14 @@ def _editor_task_command(run_dir: Path) -> int:
     )
     output = run_dir / "cong_viec_antigravity.json"
     dump_json(output, packet)
+    prompt_output = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
+    prompt_output.write_text(render_situation_editor_prompt(packet), encoding="utf-8")
+    staging_dir = run_dir / "editor_staging" / task.task_id
     _write_next(
         run_dir,
         f"Antigravity xử lý {task.situation_id}; chỉ ghi hai draft vào "
-        f"editor_staging/{task.task_id}.",
+        f"editor_staging/{task.task_id}. Sau đó chạy: accept-antigravity --run "
+        f'"{run_dir}" --task {task.task_id} --input "{staging_dir}".',
     )
     print(output)
     return 0

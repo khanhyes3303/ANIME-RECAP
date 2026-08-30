@@ -73,6 +73,7 @@ def build_situation_editor_packet(
 def render_situation_editor_prompt(packet: SituationEditorPacket) -> str:
     policy = packet.policy
     prior = packet.prior_context.last_outcome or "Không có ngữ cảnh trước đó."
+    run_dir = Path(packet.allowed_staging_dir).parents[1]
     return f"""Antigravity là biên tập viên duy nhất của nội dung tập phim.
 
 Bạn chỉ xử lý task `{packet.task_id}`, revision {packet.revision}, tình huống
@@ -108,6 +109,8 @@ Chỉ ghi `situation_draft.json` và `narration_draft.json` vào đúng thư m�
 EDL, audit hay video. Không sửa mã nguồn, test, policy, video nguồn và không tự cài công cụ.
 Nếu thiếu công cụ, báo chính xác cho người dùng rồi dừng. Validator local quyết định PASS.
 
-Sau khi ghi đủ hai file, chạy lệnh engine `accept-antigravity --task {packet.task_id}` được
-ghi trong next_action.json; không tự sửa trạng thái hay giả mạo kết quả kiểm định.
+Sau khi ghi đủ hai file, chạy lệnh engine
+`accept-antigravity --run "{run_dir}" --task {packet.task_id} --input
+"{packet.allowed_staging_dir}"` được ghi trong next_action.json; không tự sửa trạng thái
+hay giả mạo kết quả kiểm định.
 """
