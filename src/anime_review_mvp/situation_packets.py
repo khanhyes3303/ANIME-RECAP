@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .editor_provenance import EditorTask
 from .errors import MvpError
 from .models import ShotDocument, SourceRef, TranscriptDocument
+from .jsonio import load_json
+from .situation_scope import SituationScope, load_situation_scope
 from .situations import EditorialPolicy, StoryContext
 
 
@@ -27,6 +29,8 @@ class SituationEditorPacket:
         "situation_draft.json",
         "narration_draft.json",
     )
+    accepted_index_sha256: str = field(default="", metadata={"json_optional": True})
+    scope_path: str = field(default="", metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or not self.situation_id.strip() or self.revision < 1:
@@ -35,6 +39,8 @@ class SituationEditorPacket:
             raise MvpError("frame manifest path must not be empty")
         if self.required_outputs != ("situation_draft.json", "narration_draft.json"):
             raise MvpError("situation editor outputs do not match the local contract")
+        if bool(self.accepted_index_sha256) != bool(self.scope_path):
+            raise MvpError("situation scope hash and path must be supplied together")
 
 
 def build_situation_editor_packet(
@@ -70,6 +76,44 @@ def build_situation_editor_packet(
     )
 
 
+def build_scoped_situation_editor_packet(
+    source: SourceRef,
+    scope: SituationScope,
+    policy: EditorialPolicy,
+    prior_context: StoryContext,
+    *,
+    task: EditorTask,
+    allowed_staging_dir: Path | None = None,
+) -> SituationEditorPacket:
+    verified_scope = load_situation_scope(Path(scope.scope_path), verify_files=True)
+    if verified_scope != scope or task.situation_id != scope.situation_id:
+        raise MvpError("editor task does not match the accepted situation scope")
+    if tuple(task.input_paths) != scope.input_paths:
+        raise MvpError("editor task inputs must be exactly the scoped evidence files")
+    transcript = load_json(Path(scope.transcript_path), TranscriptDocument)
+    shots = load_json(Path(scope.shots_path), ShotDocument)
+    staging = allowed_staging_dir or (
+        Path(scope.scope_path).parents[2] / "editor_staging" / task.task_id
+    )
+    return SituationEditorPacket(
+        task.task_id,
+        task.run_id,
+        task.situation_id,
+        task.revision,
+        task.input_sha256,
+        str(staging.resolve()),
+        source,
+        transcript,
+        shots,
+        scope.frames_path,
+        policy,
+        prior_context,
+        task.allowed_outputs,
+        scope.accepted_index_sha256,
+        scope.scope_path,
+    )
+
+
 def render_situation_editor_prompt(packet: SituationEditorPacket) -> str:
     policy = packet.policy
     prior = packet.prior_context.last_outcome or "Không có ngữ cảnh trước đó."
@@ -80,7 +124,9 @@ Bạn chỉ xử lý task `{packet.task_id}`, revision {packet.revision}, tình 
 `{packet.situation_id}`. Không xử lý tình huống khác trong lượt này. Input SHA-256 đã khóa:
 `{packet.input_sha256}`.
 
-Đọc transcript, shot và frame manifest `{packet.frame_manifest_path}` để hiểu chuyện.
+Đọc transcript, shot và frame manifest thu hẹp `{packet.frame_manifest_path}` để hiểu chuyện.
+Phạm vi đã khóa nằm trong `{packet.scope_path or "gói task"}`. Không đọc hoặc tham chiếu
+transcript, shots hay frame manifest toàn tập ngoài gói này.
 Phân loại tình huống thành MAIN_PLOT | SUPPORTING_PLOT và hành động thành
 MAIN_ACTION | SUPPORTING_ACTION | DECORATIVE. Không giữ hành động chỉ vì đẹp; chỉ giữ
 hình chứng minh thông tin, nguyên nhân, quyết định, bước ngoặt hoặc kết quả đáng kể.

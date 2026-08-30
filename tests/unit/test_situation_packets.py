@@ -14,9 +14,12 @@ from anime_review_mvp.models import (
     TranscriptSegment,
 )
 from anime_review_mvp.situation_packets import (
+    build_scoped_situation_editor_packet,
     build_situation_editor_packet,
     render_situation_editor_prompt,
 )
+from anime_review_mvp.situation_index import SituationIndexEntry
+from anime_review_mvp.situation_scope import materialize_situation_scope
 from anime_review_mvp.situations import EditorialPolicy, StoryContext
 
 SOURCE = SourceRef("episode.mp4", "a" * 64, 60_000, 1920, 1080, "1/1000", 1)
@@ -105,3 +108,51 @@ def test_prompt_forbids_codex_editor_and_direct_engine_writes(tmp_path: Path) ->
     assert "không ghi trực tiếp TTS" in prompt
     assert "visual_anchor_source_ms" in prompt
     assert "người chưa biết anime" in prompt
+
+
+def test_scoped_packet_never_references_full_episode_manifest(tmp_path: Path) -> None:
+    entry = SituationIndexEntry(
+        "situation-004",
+        1_000,
+        3_000,
+        "Jiro can thiệp",
+        "Mở xung đột",
+        "Mục tiêu thay đổi",
+        (0,),
+        ("shot-001",),
+        ("C:/frames/shot-001.jpg",),
+        False,
+        "",
+    )
+    scope = materialize_situation_scope(
+        tmp_path / "run",
+        entry,
+        TRANSCRIPT,
+        SHOTS,
+        ("C:/frames/shot-001.jpg",),
+        accepted_index_sha256="b" * 64,
+    )
+    scoped_task = EditorTask(
+        "task-scoped",
+        "run-001",
+        "situation-004",
+        2,
+        "ANTIGRAVITY_EDITORIAL",
+        scope.input_paths,
+        "a" * 64,
+        ("situation_draft.json", "narration_draft.json"),
+    )
+
+    packet = build_scoped_situation_editor_packet(
+        SOURCE,
+        scope,
+        POLICY,
+        StoryContext((), (), (), ""),
+        task=scoped_task,
+    )
+
+    assert packet.accepted_index_sha256 == "b" * 64
+    assert packet.scope_path.endswith("scope.json")
+    assert packet.frame_manifest_path.endswith("frames.json")
+    assert "frame_manifest.json" not in packet.frame_manifest_path
+    assert [segment.text for segment in packet.transcript.segments] == ["Leave him alone."]
