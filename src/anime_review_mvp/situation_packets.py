@@ -130,6 +130,9 @@ Bạn chỉ xử lý task `{packet.task_id}`, revision {packet.revision}, tình 
 Đọc transcript, shot và frame manifest thu hẹp `{packet.frame_manifest_path}` để hiểu chuyện.
 Phạm vi đã khóa nằm trong `{packet.scope_path or "gói task"}`. Không đọc hoặc tham chiếu
 transcript, shots hay frame manifest toàn tập ngoài gói này.
+Không đọc `revisions`, `legacy_active`, truth/scene cũ hoặc task trước để bổ sung dữ liệu.
+Tự đặt `event_ids` ổn định trong đúng tình huống từ transcript/frame/shot hiện tại; đây
+chỉ là định danh bằng chứng cục bộ, không phải ID cần tra trong artifact legacy.
 Phân loại tình huống thành MAIN_PLOT | SUPPORTING_PLOT và hành động thành
 MAIN_ACTION | SUPPORTING_ACTION | DECORATIVE. Không giữ hành động chỉ vì đẹp; chỉ giữ
 hình chứng minh thông tin, nguyên nhân, quyết định, bước ngoặt hoặc kết quả đáng kể.

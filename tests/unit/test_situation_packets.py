@@ -109,6 +109,8 @@ def test_prompt_forbids_codex_editor_and_direct_engine_writes(tmp_path: Path) ->
     assert "không ghi trực tiếp TTS" in prompt
     assert "visual_anchor_source_ms" in prompt
     assert "người chưa biết anime" in prompt
+    assert "không đọc `revisions`" in prompt.casefold()
+    assert "event_ids" in prompt
 
 
 def test_scoped_packet_never_references_full_episode_manifest(tmp_path: Path) -> None:

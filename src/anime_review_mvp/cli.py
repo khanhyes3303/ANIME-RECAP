@@ -1901,20 +1901,16 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
     state = read_state(run_dir)
     if state.stage is Stage.KIEM_DINH_TINH_HUONG:
         source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
-        truth = load_truth(
-            episode / "Su_that" / "su_that_tap_phim.json",
-            source_duration_ms=source.duration_ms,
-        )
         shots = load_json(run_dir / "shots.json", ShotDocument)
         situations = load_situations(episode / "Su_that" / "situations.json")
         plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
         validate_situations(
-            situations, truth, shots.shots, source_duration_ms=source.duration_ms
+            situations, None, shots.shots, source_duration_ms=source.duration_ms
         )
         validate_narration_plan(
             plan,
             situations,
-            truth,
+            None,
             shots.shots,
             _editorial_policy(episode),
             source.duration_ms,
@@ -2359,6 +2355,10 @@ def _accept_antigravity_command(
         ),
     )
     accept_editor_revision(run_dir, task_id, accepted.revision)
+    _write_next(
+        run_dir,
+        f"Draft {accepted.situation_id} đã nhận; chạy audit --phase situation.",
+    )
     print(
         run_dir
         / "accepted_editorial"
@@ -2515,8 +2515,7 @@ def _archive_pre_index_revision(
     plan_dir = episode_root / "Ke_hoach_canh"
     if plan_dir.is_dir():
         for child in tuple(plan_dir.iterdir()):
-            if child.name != "editorial_policy.json":
-                move(child, episode_root, "episode")
+            move(child, episode_root, "episode")
 
     run_outputs = (
         "proxy",

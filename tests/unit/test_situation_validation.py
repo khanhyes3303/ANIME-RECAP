@@ -17,6 +17,8 @@ from anime_review_mvp.situation_validation import (
 from anime_review_mvp.situations import (
     EditorialPolicy,
     EvidenceRange,
+    NarrationClaim,
+    NarrationCue,
     NarrationPlan,
     NarrationUnit,
     SemanticShotUse,
@@ -218,6 +220,53 @@ def test_complete_v2_causal_chain_is_accepted() -> None:
         ),),
     )
     validate_causal_chains(document)
+
+
+def test_v2_validation_uses_scoped_evidence_without_legacy_truth() -> None:
+    situation = _situation(
+        cause_or_goal="Jiro cần được người thân thấu hiểu.",
+        audience_summary="Jiro bị xa lánh rồi về nhà tâm sự.",
+    )
+    document = SituationDocument("LOCAL_EDITOR", "situation-v2", (situation,))
+    source_range = replace(
+        _range("range-001", 1_000, 4_000, "shot-001"),
+        semantic_event_id="jiro-confession",
+        action_phase="REACTION",
+        story_purpose="Jiro bộc lộ sự cô độc.",
+        shot_uses=(
+            SemanticShotUse(
+                "shot-001",
+                "jiro-confession",
+                "REACTION",
+                "Jiro bộc lộ sự cô độc.",
+            ),
+        ),
+    )
+    cue = NarrationCue(
+        "cue-001",
+        "situation-001",
+        "Jiro bị xa lánh rồi về nhà tâm sự.",
+        ("claim-001",),
+        1_500,
+        "REVEAL",
+        ("transcript-001",),
+        ("frame-range-001",),
+        ("shot-001",),
+        ("Jiro",),
+        (),
+        (),
+        (),
+    )
+    unit = replace(_plan(source_range).units[0], cues=(cue,))
+    plan = NarrationPlan(
+        "LOCAL_EDITOR",
+        "situation-v2",
+        (unit,),
+        (NarrationClaim("claim-001", "Jiro bị xa lánh.", ("event-001",)),),
+    )
+
+    validate_situations(document, None, SHOTS, source_duration_ms=20_000)
+    validate_narration_plan(plan, document, None, SHOTS, POLICY, 20_000)
 
 
 def test_range_mixing_shot_meanings_is_rejected_regardless_of_duration() -> None:

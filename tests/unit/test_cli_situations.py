@@ -90,7 +90,10 @@ def test_migrate_to_structure_archives_old_revision_outputs(
     assert not stale_episode.exists()
     assert not stale_run.exists()
     assert not old_task.exists()
-    assert policy.is_file()
+    assert not policy.exists()
+    assert (
+        archive / "episode" / "Ke_hoach_canh" / "editorial_policy.json"
+    ).is_file()
     assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
 
 

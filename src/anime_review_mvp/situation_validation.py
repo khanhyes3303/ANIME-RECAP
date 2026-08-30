@@ -99,7 +99,7 @@ def coherence_findings(
 
 def validate_situations(
     document: SituationDocument,
-    truth: TruthDocument,
+    truth: TruthDocument | None,
     shots: tuple[Shot, ...],
     *,
     source_duration_ms: int,
@@ -145,7 +145,7 @@ def validate_situations(
             for shot in shots
         ):
             raise MvpError("situation has no known source shot")
-    if not truth.events:
+    if document.policy_version != "situation-v2" and (truth is None or not truth.events):
         raise MvpError("situation validation requires source truth")
     validate_causal_chains(document)
 
@@ -203,7 +203,7 @@ def _validate_shot_alignment(
 def validate_narration_plan(
     plan: NarrationPlan,
     situations: SituationDocument,
-    truth: TruthDocument,
+    truth: TruthDocument | None,
     shots: tuple[Shot, ...],
     policy: EditorialPolicy,
     source_duration_ms: int,
@@ -211,8 +211,13 @@ def validate_narration_plan(
     if plan.policy_version != situations.policy_version:
         raise MvpError("narration and situation policy versions must match")
     situation_by_id = {item.situation_id: item for item in situations.situations}
-    known_events = {item.event_id for item in truth.events}
-    excluded = tuple(item for item in truth.source_regions if item.decision == "EXCLUDE")
+    uses_scoped_v2_evidence = plan.policy_version == "situation-v2"
+    known_events = set() if truth is None else {item.event_id for item in truth.events}
+    excluded = (
+        ()
+        if truth is None or uses_scoped_v2_evidence
+        else tuple(item for item in truth.source_regions if item.decision == "EXCLUDE")
+    )
     unit_ids = [item.unit_id for item in plan.units]
     range_ids = [item.range_id for unit in plan.units for item in unit.evidence_ranges]
     if _duplicates(unit_ids) or _duplicates(range_ids):
@@ -238,7 +243,7 @@ def validate_narration_plan(
                 and source_range.source_end_ms <= situation.source_end_ms
             ):
                 raise MvpError("kept range lies outside its situation")
-            if not set(source_range.event_ids) <= known_events:
+            if not uses_scoped_v2_evidence and not set(source_range.event_ids) <= known_events:
                 raise MvpError("kept range references an unknown event")
             if any(
                 _overlap(
