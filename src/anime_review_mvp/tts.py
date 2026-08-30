@@ -30,7 +30,13 @@ from .models import (
     TtsCue,
     TtsManifest,
 )
-from .situations import NarrationPlan, SituationTts, SituationTtsManifest
+from .situations import (
+    CueTts,
+    CueTtsManifest,
+    NarrationPlan,
+    SituationTts,
+    SituationTtsManifest,
+)
 
 ENDPOINT = "https://api16-normal-v6.tiktokv.com/media/api/text/speech/invoke/"
 USER_AGENT = "com.zhiliaoapp.musically/2022600030 (Linux; U; Android 13; vi_VN)"
@@ -468,6 +474,92 @@ def synthesize_situation_units(
         total_duration_ms=sum(item.duration_ms for item in results),
     )
     dump_json(output_dir / "situation_tts_manifest.json", manifest)
+    return manifest
+
+
+def validate_cue_tts_ids(plan: NarrationPlan, manifest: CueTtsManifest) -> None:
+    expected = tuple(cue.cue_id for unit in plan.units for cue in unit.cues)
+    actual = tuple(cue.cue_id for cue in manifest.cues)
+    if actual != expected:
+        raise MvpError("cue IDs must exactly match narration plan order")
+
+
+def synthesize_narration_cues(
+    plan: NarrationPlan,
+    output_dir: Path,
+    cache_dir: Path,
+    *,
+    source_sha256: str,
+    provider: TtsProvider | None = None,
+    converter: Converter = _convert_mp3_to_wav,
+) -> CueTtsManifest:
+    if plan.policy_version != "situation-v2":
+        raise MvpError("cue TTS requires situation-v2")
+    if len(source_sha256) != 64 or any(
+        character not in "0123456789abcdef" for character in source_sha256
+    ):
+        raise MvpError("cue TTS source SHA-256 is invalid")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    profile = default_profile()
+    policy = default_policy()
+    engine = provider or TikTokCapCutProvider()
+    results: list[CueTts] = []
+    hits = 0
+    misses = 0
+
+    for unit in plan.units:
+        if unit.status != "LOCKED":
+            raise MvpError(f"cue TTS requires LOCKED unit: {unit.unit_id}")
+        for cue in unit.cues:
+            cache_key = _situation_tts_cache_key(
+                cue.text, profile, plan.policy_version, source_sha256
+            )
+            entry = cache_dir / cache_key
+            cached_mp3 = entry / "audio.mp3"
+            cached_wav = entry / "audio.wav"
+            output_mp3 = output_dir / f"{cue.cue_id}.mp3"
+            output_wav = output_dir / f"{cue.cue_id}.wav"
+            if cached_mp3.is_file() and cached_wav.is_file():
+                duration_ms = _wav_duration_ms(cached_wav)
+                hits += 1
+            else:
+                entry.mkdir(parents=True, exist_ok=True)
+                synthesis = engine.synthesize(
+                    plan_chunks(cue.text, character_ceiling=policy.character_ceiling),
+                    profile,
+                    policy,
+                )
+                temp_mp3 = entry / "audio.tmp.mp3"
+                temp_wav = entry / "audio.tmp.wav"
+                temp_mp3.write_bytes(b"".join(chunk.audio for chunk in synthesis.chunks))
+                converter(temp_mp3, temp_wav)
+                duration_ms = _wav_duration_ms(temp_wav)
+                os.replace(temp_mp3, cached_mp3)
+                os.replace(temp_wav, cached_wav)
+                misses += 1
+            shutil.copy2(cached_mp3, output_mp3)
+            shutil.copy2(cached_wav, output_wav)
+            results.append(
+                CueTts(
+                    cue.cue_id,
+                    unit.unit_id,
+                    str(output_wav),
+                    str(output_mp3),
+                    duration_ms,
+                    cache_key,
+                )
+            )
+    manifest = CueTtsManifest(
+        tuple(results),
+        profile.provider,
+        profile.voice_id,
+        plan.policy_version,
+        hits,
+        misses,
+    )
+    validate_cue_tts_ids(plan, manifest)
+    dump_json(output_dir / "cue_tts_manifest.json", manifest)
     return manifest
 
 
