@@ -8,12 +8,14 @@ from selenium.common.exceptions import (
     NoSuchElementException,
     StaleElementReferenceException,
 )
+from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
 import anime_review_mvp.gemini_selenium as gemini_selenium
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_operator import OperatorPolicy
 from anime_review_mvp.gemini_selenium import (
+    UPLOAD_BUSY_SELECTORS,
     AccountObservation,
     BrowserConversationResult,
     BrowserReadiness,
@@ -127,6 +129,48 @@ def test_session_uses_user_confirmation_then_uploads_without_account_model_gate(
     assert observation.conversation_url.endswith("real-chat-id")
     assert observation.chrome_pid == 123
     assert response.startswith("{")
+
+
+def test_session_records_turn_immediately_after_prompt_submission(tmp_path: Path) -> None:
+    page = RecordingPage(tmp_path / "session.png")
+    events = page.events
+
+    run_gemini_session(
+        page,
+        policy=OperatorPolicy.required(),
+        account_hint="n***@example.com",
+        expected_account_sha256="a" * 64,
+        upload_paths=(),
+        prompt="Return JSON only",
+        screenshot_path=tmp_path / "session.png",
+        chrome_pid=123,
+        on_prompt_submitted=lambda: events.append("record:turn"),
+    )
+
+    assert events.index("send") < events.index("record:turn") < events.index("wait:complete")
+
+
+def test_session_does_not_record_turn_when_prompt_submission_fails(tmp_path: Path) -> None:
+    class FailingPage(RecordingPage):
+        def send_prompt(self, prompt: str) -> None:
+            raise GeminiBrowserError("PROMPT_NOT_SENT", "not submitted")
+
+    recorded: list[str] = []
+
+    with pytest.raises(GeminiBrowserError, match="not submitted"):
+        run_gemini_session(
+            FailingPage(tmp_path / "session.png"),
+            policy=OperatorPolicy.required(),
+            account_hint="n***@example.com",
+            expected_account_sha256="a" * 64,
+            upload_paths=(),
+            prompt="Return JSON only",
+            screenshot_path=tmp_path / "session.png",
+            chrome_pid=123,
+            on_prompt_submitted=lambda: recorded.append("turn"),
+        )
+
+    assert recorded == []
 
 
 def test_user_ready_confirmation_reminds_once_then_continues() -> None:
@@ -837,10 +881,16 @@ def test_upload_waits_until_every_attachment_is_visible_and_not_busy(
                 return Body("manifest.json")
             return Body("manifest.json script_evidence.mp4")
 
-        def find_elements(self, kind: str, selector: str) -> list[object]:
+        def find_elements(self, kind: str, selector: str) -> list[Element]:
+            if selector == "uploader-file-preview [aria-describedby]":
+                return []
             if self.polls < 2:
-                return [object()]
+                return [Element()]
             return []
+
+    class Element:
+        def is_displayed(self) -> bool:
+            return True
 
     driver = Driver()
     page = SeleniumGeminiPage(driver, upload_wait_seconds=1.0)
@@ -848,6 +898,66 @@ def test_upload_waits_until_every_attachment_is_visible_and_not_busy(
     page.wait_for_uploads_ready((first, second))
 
     assert driver.polls >= 2
+
+
+def test_upload_accepts_accessible_filenames_and_ignores_hidden_page_spinner(
+    tmp_path: Path,
+) -> None:
+    uploads = (
+        tmp_path / "proxy_review.mp4",
+        tmp_path / "mapping.json",
+        tmp_path / "manifest.json",
+    )
+    for upload in uploads:
+        upload.write_bytes(b"packet")
+
+    class Element:
+        def __init__(
+            self,
+            *,
+            text: str = "",
+            attributes: dict[str, str] | None = None,
+            displayed: bool = True,
+        ) -> None:
+            self.text = text
+            self.attributes = attributes or {}
+            self.displayed = displayed
+
+        def get_attribute(self, name: str) -> str | None:
+            return self.attributes.get(name)
+
+        def is_displayed(self) -> bool:
+            return self.displayed
+
+    descriptions = {
+        "upload-video": Element(attributes={"textContent": "proxy_review.mp4"}),
+        "upload-mapping": Element(attributes={"textContent": "mapping.json"}),
+        "upload-manifest": Element(attributes={"textContent": "manifest.json"}),
+    }
+    chips = [
+        Element(attributes={"aria-describedby": description_id})
+        for description_id in descriptions
+    ]
+    hidden_sidebar_spinner = Element(displayed=False)
+
+    class Driver:
+        def find_element(self, kind: str, selector: str) -> Element:
+            if kind == By.TAG_NAME and selector == "body":
+                return Element(text="7:08 mapping manifest")
+            if kind == By.ID and selector in descriptions:
+                return descriptions[selector]
+            raise NoSuchElementException(selector)
+
+        def find_elements(self, kind: str, selector: str) -> list[Element]:
+            if selector == "uploader-file-preview [aria-describedby]":
+                return chips
+            if selector in {value for _, value in UPLOAD_BUSY_SELECTORS}:
+                return [hidden_sidebar_spinner]
+            return []
+
+    SeleniumGeminiPage(Driver(), upload_wait_seconds=0.0).wait_for_uploads_ready(
+        uploads
+    )
 
 
 def test_send_prompt_clicks_send_button_instead_of_pressing_enter() -> None:
@@ -908,6 +1018,146 @@ def test_send_prompt_clicks_send_button_instead_of_pressing_enter() -> None:
 
     assert driver.textbox.sent[-1] == "GEMINI_WEB_OPERATOR_OK"
     assert Keys.ENTER not in driver.textbox.sent
+    assert driver.send_button.clicked is True
+
+
+def test_send_prompt_inserts_long_text_via_cdp_before_clicking_send() -> None:
+    prompt = "repair-anchor\n" * 1_200
+
+    class Textbox:
+        def __init__(self) -> None:
+            self.content = ""
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def send_keys(self, *values: str) -> None:
+            if prompt in values:
+                raise AssertionError("long prompt must not use Selenium send_keys")
+
+        def get_attribute(self, name: str) -> str:
+            return self.content if name == "textContent" else ""
+
+    class SendButton:
+        def __init__(self, driver: object) -> None:
+            self.driver = driver
+            self.clicked = False
+
+        def click(self) -> None:
+            self.clicked = True
+            self.driver.submitted = True
+            self.driver.textbox.content = ""
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+    class Driver:
+        def __init__(self) -> None:
+            self.textbox = Textbox()
+            self.submitted = False
+            self.send_button = SendButton(self)
+            self.cdp_commands: list[tuple[str, dict[str, str]]] = []
+
+        def execute_cdp_cmd(self, command: str, params: dict[str, str]) -> None:
+            self.cdp_commands.append((command, params))
+            self.textbox.content = params["text"]
+
+        def find_element(self, kind: str, selector: str):
+            if "contenteditable" in selector:
+                return self.textbox
+            if "send-button" in selector:
+                return self.send_button
+            raise NoSuchElementException(selector)
+
+        def find_elements(self, kind: str, selector: str):
+            if self.submitted and ("Dừng" in selector or "Stop" in selector):
+                return [object()]
+            return []
+
+    driver = Driver()
+
+    SeleniumGeminiPage(driver).send_prompt(prompt)
+
+    assert driver.cdp_commands == [("Input.insertText", {"text": prompt})]
+    assert driver.send_button.clicked is True
+
+
+def test_send_prompt_dom_clicks_enabled_send_button_during_background_animation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gemini_selenium,
+        "SEND_SELECTORS",
+        ((By.CSS_SELECTOR, "button.send"),),
+    )
+
+    class Textbox:
+        content = ""
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def send_keys(self, *values: str) -> None:
+            return None
+
+        def get_attribute(self, name: str) -> str:
+            return self.content if name == "textContent" else ""
+
+    class SendButton:
+        clicked = False
+
+        def is_displayed(self) -> bool:
+            return False
+
+        def is_enabled(self) -> bool:
+            return True
+
+    class Driver:
+        def __init__(self) -> None:
+            self.textbox = Textbox()
+            self.send_button = SendButton()
+
+        def execute_cdp_cmd(self, command: str, params: dict[str, str]) -> None:
+            assert command == "Input.insertText"
+            self.textbox.content = params["text"]
+
+        def execute_script(self, script: str, element: object) -> None:
+            assert "click" in script
+            assert element is self.send_button
+            self.send_button.clicked = True
+            self.textbox.content = ""
+
+        def find_element(self, kind: str, selector: str):
+            if "contenteditable" in selector:
+                return self.textbox
+            if selector == "button.send":
+                return self.send_button
+            raise NoSuchElementException(selector)
+
+        def find_elements(self, kind: str, selector: str):
+            if selector == "button.send":
+                return [self.send_button]
+            return []
+
+    driver = Driver()
+
+    SeleniumGeminiPage(driver, submission_wait_seconds=0.0).send_prompt("repair")
+
     assert driver.send_button.clicked is True
 
 
@@ -996,6 +1246,67 @@ def test_send_prompt_accepts_when_click_clears_the_textbox() -> None:
     page = SeleniumGeminiPage(Driver(), submission_wait_seconds=0.0)
 
     page.send_prompt("prompt leaves textbox")
+
+
+def test_send_prompt_accepts_when_exact_user_message_appears() -> None:
+    prompt = "Kiểm định phase PROXY cho beat-001"
+
+    class Textbox:
+        content = prompt
+
+        def click(self) -> None:
+            return None
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+        def send_keys(self, *values: str) -> None:
+            self.content = str(values[-1])
+
+        def get_attribute(self, name: str) -> str:
+            return self.content if name == "textContent" else ""
+
+    class UserMessage:
+        text = prompt
+
+        def get_attribute(self, name: str) -> str:
+            return prompt if name == "textContent" else ""
+
+    class SendButton:
+        def __init__(self, driver: object) -> None:
+            self.driver = driver
+
+        def click(self) -> None:
+            self.driver.submitted = True
+
+        def is_displayed(self) -> bool:
+            return True
+
+        def is_enabled(self) -> bool:
+            return True
+
+    class Driver:
+        def __init__(self) -> None:
+            self.textbox = Textbox()
+            self.submitted = False
+            self.send_button = SendButton(self)
+
+        def find_element(self, kind: str, selector: str):
+            if "contenteditable" in selector:
+                return self.textbox
+            if "send-button" in selector:
+                return self.send_button
+            raise NoSuchElementException(selector)
+
+        def find_elements(self, kind: str, selector: str):
+            if self.submitted and selector == "user-query":
+                return [UserMessage()]
+            return []
+
+    SeleniumGeminiPage(Driver(), submission_wait_seconds=0.0).send_prompt(prompt)
 
 
 def test_response_wait_does_not_return_the_previous_turn() -> None:

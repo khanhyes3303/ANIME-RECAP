@@ -30,7 +30,7 @@ from .gemini_operator import (
 )
 from .gemini_packets import build_browser_packet
 from .gemini_selenium import (
-    BrowserConversationResult,
+    ChromeLaunch,
     GeminiBrowserError,
     capture_existing_gemini_response,
     connect_managed_chrome,
@@ -38,7 +38,11 @@ from .gemini_selenium import (
     launch_managed_chrome,
     run_gemini_session,
 )
-from .gemini_session import GeminiSessionMetadata, GeminiSessionRegistry
+from .gemini_session import (
+    GeminiSessionMetadata,
+    GeminiSessionRegistry,
+    StaleGeminiSessionError,
+)
 from .gemini_web import (
     GeminiUltraProfileBinding,
     account_sha256,
@@ -858,9 +862,22 @@ def run_operator_phase(
     )
 
     def browser_session(operator_request, browser_packet):
+        def launch_fresh_session() -> tuple[ChromeLaunch, GeminiSessionMetadata]:
+            fresh_launch = launch_managed_chrome(root)
+            fresh_metadata = GeminiSessionMetadata(
+                run_id=run_dir.resolve().name,
+                chrome_pid=fresh_launch.chrome_pid,
+                debugger_address=fresh_launch.debugger_address,
+                conversation_url=None,
+                started_at=datetime.now(UTC).isoformat(),
+                phase_turns={},
+            )
+            registry.save(fresh_metadata)
+            return fresh_launch, fresh_metadata
+
         metadata = registry.load()
         if metadata is None:
-            launch = launch_managed_chrome(root)
+            launch, metadata = launch_fresh_session()
             print(
                 "Gemini Chrome operator đã mở: "
                 f"{(root / '.local' / 'gemini_ultra_chrome').resolve()}"
@@ -869,31 +886,25 @@ def run_operator_phase(
                 "Hãy đăng nhập đúng tài khoản Ultra và tự chọn "
                 "3.7 Flash + Tư duy mở rộng trên cửa sổ này."
             )
-            metadata = GeminiSessionMetadata(
-                run_id=run_dir.resolve().name,
-                chrome_pid=launch.chrome_pid,
-                debugger_address=launch.debugger_address,
-                conversation_url=None,
-                started_at=datetime.now(UTC).isoformat(),
-                phase_turns={},
-            )
-            registry.save(metadata)
         else:
-            metadata = registry.assert_attachable(run_dir.resolve().name)
-            launch = connect_managed_chrome(metadata)
-            print("Đã nối lại phiên Gemini Web đang mở của run này.")
-            if force_new_chat:
+            try:
+                metadata = registry.assert_attachable(run_dir.resolve().name)
+            except StaleGeminiSessionError:
+                if not force_new_chat:
+                    raise
+                registry.clear(run_dir.resolve().name)
+                launch, metadata = launch_fresh_session()
+                print("Phiên Chrome cũ đã stale; đã mở lại operator bằng profile hiện có.")
+            else:
+                launch = connect_managed_chrome(metadata)
+                print("Đã nối lại phiên Gemini Web đang mở của run này.")
+            if force_new_chat and metadata.conversation_url is not None:
                 metadata = registry.start_new_chat(
                     run_dir.resolve().name,
                     started_at=datetime.now(UTC).isoformat(),
                 )
                 print("Đã tách chat cũ; đang mở một Cuộc trò chuyện mới.")
         try:
-            turn_number = registry.increment_turn(
-                run_dir.resolve().name,
-                phase_upper,
-                max_turns=policy.max_turns,
-            )
             if prompt_override is None:
                 prompt_path = Path(browser_packet.prompt_path)
                 upload_paths = tuple(Path(path) for path in browser_packet.upload_paths)
@@ -912,11 +923,12 @@ def run_operator_phase(
                 run_dir
                 / "gemini_web"
                 / phase_upper.casefold()
-                / f"browser_result_{sha256_file(prompt_path)}.json"
+                / (
+                    f"browser_result_{browser_packet.packet_sha256}_"
+                    f"{sha256_file(prompt_path)}.json"
+                )
             )
-            if checkpoint_path.is_file() and not force_new_chat:
-                result = load_json(checkpoint_path, BrowserConversationResult)
-            elif (
+            if (
                 not force_new_chat
                 and metadata.conversation_url
                 and screenshot_path.is_file()
@@ -931,8 +943,28 @@ def run_operator_phase(
                     chrome_pid=launch.chrome_pid,
                     started_at=metadata.started_at,
                 )
+                turn_number = metadata.phase_turns.get(phase_upper, 0)
+                if turn_number <= 0:
+                    raise MvpError("Gemini recovered response has no recorded turn")
                 dump_json(checkpoint_path, result)
             else:
+                expected_turn = registry.next_turn(
+                    run_dir.resolve().name,
+                    phase_upper,
+                    max_turns=policy.max_turns,
+                )
+                submitted_turn: int | None = None
+
+                def record_submitted_turn() -> None:
+                    nonlocal submitted_turn
+                    submitted_turn = registry.increment_turn(
+                        run_dir.resolve().name,
+                        phase_upper,
+                        max_turns=policy.max_turns,
+                    )
+                    if submitted_turn != expected_turn:
+                        raise MvpError("Gemini session turn count changed unexpectedly")
+
                 result = run_gemini_session(
                     launch.page,
                     policy=policy,
@@ -943,7 +975,11 @@ def run_operator_phase(
                     screenshot_path=screenshot_path,
                     chrome_pid=launch.chrome_pid,
                     conversation_url=metadata.conversation_url,
+                    on_prompt_submitted=record_submitted_turn,
                 )
+                if submitted_turn is None:
+                    raise MvpError("Gemini prompt submission was not recorded")
+                turn_number = submitted_turn
                 dump_json(checkpoint_path, result)
             registry.update_conversation(
                 run_dir.resolve().name,
@@ -985,6 +1021,165 @@ def run_operator_phase(
     )
 
 
+_REPAIRABLE_CRITIC_ERRORS = (
+    "Gemini response",
+    "Gemini critic",
+    "JSON ",
+    "critic review",
+    "critic contains",
+    "critic verdict",
+    "VIDEO critic requires a sync verdict",
+    "SCRIPT critic sync verdict",
+)
+
+
+def _is_repairable_critic_error(error: MvpError) -> bool:
+    message = str(error)
+    return any(fragment in message for fragment in _REPAIRABLE_CRITIC_ERRORS)
+
+
+def _validate_operator_review(
+    run_dir: Path,
+    phase: str,
+    review: object,
+) -> None:
+    if not isinstance(review, CriticReviewDocument):
+        return
+    _, episode = _episode(run_dir)
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    truth = load_truth(
+        episode / "Su_that" / "su_that_tap_phim.json",
+        source_duration_ms=source.duration_ms,
+    )
+    shots = load_json(run_dir / "shots.json", ShotDocument)
+    storyboard = load_atomic_storyboard(
+        episode / "Kich_ban" / "atomic_storyboard.json",
+        truth,
+        shots.shots,
+        source.duration_ms,
+    )
+    source_anchors = load_json(
+        run_dir / "atomic_evidence" / "source" / "anchors.json",
+        FrameAnchorDocument,
+    )
+    program_anchors = (
+        load_json(
+            run_dir / "atomic_evidence" / "program" / "anchors.json",
+            FrameAnchorDocument,
+        )
+        if phase.upper() in {"PROXY", "FINAL"}
+        else None
+    )
+    validate_critic_evidence(review, storyboard, source_anchors, program_anchors)
+
+
+def _write_critic_repair_prompt(
+    run_dir: Path,
+    phase: str,
+    error: MvpError,
+    *,
+    turn_number: int,
+) -> Path:
+    phase_upper = phase.upper()
+    documents = [
+        load_json(
+            run_dir / "atomic_evidence" / "source" / "anchors.json",
+            FrameAnchorDocument,
+        )
+    ]
+    if phase_upper in {"PROXY", "FINAL"}:
+        documents.append(
+            load_json(
+                run_dir / "atomic_evidence" / "program" / "anchors.json",
+                FrameAnchorDocument,
+            )
+        )
+    position_order = {"START": 0, "MIDDLE": 1, "END": 2}
+    anchors_by_beat: dict[str, list[object]] = {}
+    for document in documents:
+        for anchor in document.anchors:
+            anchors_by_beat.setdefault(anchor.span_id, []).append(anchor)
+    requirements = {
+        beat_id: [
+            anchor.anchor_id
+            for anchor in sorted(
+                anchors,
+                key=lambda item: (
+                    0 if item.timeline == "SOURCE" else 1,
+                    item.range_id,
+                    position_order[item.position],
+                ),
+            )
+        ]
+        for beat_id, anchors in sorted(anchors_by_beat.items())
+    }
+    prompt = (
+        "Phản hồi trước đã được nhận đầy đủ nhưng chưa qua validator. "
+        f"Lỗi cần sửa: {error}. Trả lại DUY NHẤT toàn bộ JSON object hoàn chỉnh "
+        "cho tất cả beat, không markdown và không giải thích ngoài JSON. Chỉ sửa các "
+        "trường cần thiết để qua lỗi này; giữ nguyên các finding_codes và sync_verdict "
+        "đã đánh giá từ hình ảnh thật, không được đổi lỗi thật thành MATCH. Giữ nguyên "
+        "observed_visual, narration_summary và note trừ khi chúng sai schema. "
+        "evidence_refs của từng beat phải chứa TOÀN BỘ anchor_id tương ứng trong bảng "
+        "bắt buộc sau (có thể thêm anchor hợp lệ khác, không được bịa ID):\n"
+        + json.dumps(requirements, ensure_ascii=False, sort_keys=True, indent=2)
+    )
+    output = (
+        run_dir
+        / "gemini_web"
+        / phase_upper.casefold()
+        / f"auto_repair_prompt_{turn_number:02d}.txt"
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(prompt + "\n", encoding="utf-8")
+    return output
+
+
+def _run_operator_conversation(
+    run_dir: Path,
+    phase: str,
+    *,
+    force_new_chat: bool = False,
+    initial_prompt: Path | None = None,
+) -> CriticReviewDocument:
+    prompt_override = initial_prompt
+    max_turns = OperatorPolicy.required().max_turns
+    for turn_number in range(1, max_turns + 1):
+        try:
+            if prompt_override is not None:
+                review = run_operator_phase(
+                    run_dir,
+                    phase,
+                    prompt_override=prompt_override,
+                )
+            elif force_new_chat:
+                review = run_operator_phase(
+                    run_dir,
+                    phase,
+                    force_new_chat=True,
+                )
+            else:
+                review = run_operator_phase(run_dir, phase)
+            _validate_operator_review(run_dir, phase, review)
+            return review
+        except GeminiBrowserError:
+            raise
+        except MvpError as exc:
+            if not _is_repairable_critic_error(exc):
+                raise
+            if turn_number >= max_turns:
+                raise MvpError(
+                    f"Gemini critic remained invalid after {max_turns} turns: {exc}"
+                ) from exc
+            prompt_override = _write_critic_repair_prompt(
+                run_dir,
+                phase,
+                exc,
+                turn_number=turn_number + 1,
+            )
+    raise MvpError("Gemini critic repair loop ended unexpectedly")
+
+
 def _gemini_web_run(
     run_dir: Path,
     phase: str,
@@ -1006,14 +1201,11 @@ def _gemini_web_run(
     elif state.stage is not expected[1]:
         raise MvpError(f"Gemini Web {phase.casefold()} run stage does not match")
     try:
-        if force_new_chat:
-            review = run_operator_phase(
-                run_dir,
-                phase_upper,
-                force_new_chat=True,
-            )
-        else:
-            review = run_operator_phase(run_dir, phase_upper)
+        review = _run_operator_conversation(
+            run_dir,
+            phase_upper,
+            force_new_chat=force_new_chat,
+        )
     except GeminiBrowserError as exc:
         code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")
         mark_human_required(run_dir, code)
@@ -1062,10 +1254,10 @@ def _gemini_web_continue(run_dir: Path, phase: str, prompt_file: Path) -> int:
     elif state.stage is not expected_stage:
         raise MvpError("Gemini follow-up phase does not match the current stage")
     try:
-        review = run_operator_phase(
+        review = _run_operator_conversation(
             run_dir,
             phase_upper,
-            prompt_override=prompt_path,
+            initial_prompt=prompt_path,
         )
     except GeminiBrowserError as exc:
         code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")

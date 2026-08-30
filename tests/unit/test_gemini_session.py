@@ -63,6 +63,20 @@ def test_session_registry_limits_each_phase_to_six_turns(tmp_path) -> None:
         registry.increment_turn("run-1", "SCRIPT", max_turns=6)
 
 
+def test_session_registry_preflights_turn_without_consuming_it(tmp_path) -> None:
+    registry = GeminiSessionRegistry(tmp_path / "session.json")
+    registry.save(_metadata())
+
+    assert registry.next_turn("run-1", "SCRIPT", max_turns=6) == 1
+    assert registry.load() == _metadata()
+
+    for _ in range(6):
+        registry.increment_turn("run-1", "SCRIPT", max_turns=6)
+
+    with pytest.raises(MvpError, match="turn limit"):
+        registry.next_turn("run-1", "SCRIPT", max_turns=6)
+
+
 def test_session_registry_starts_a_new_chat_without_closing_chrome(tmp_path) -> None:
     registry = GeminiSessionRegistry(tmp_path / "session.json")
     registry.save(

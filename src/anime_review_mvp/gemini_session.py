@@ -12,6 +12,10 @@ from pathlib import Path
 from .errors import MvpError
 
 
+class StaleGeminiSessionError(MvpError):
+    """The registered managed Chrome process or debugger endpoint is gone."""
+
+
 @dataclass(frozen=True, slots=True)
 class BrowserTurn:
     index: int
@@ -94,10 +98,31 @@ class GeminiSessionRegistry:
         check_pid = pid_alive or _pid_is_alive
         check_probe = probe or _debugger_is_alive
         if not check_pid(metadata.chrome_pid) or not check_probe(metadata.debugger_address):
-            raise MvpError("Gemini session is not attachable: Chrome is stale")
+            raise StaleGeminiSessionError(
+                "Gemini session is not attachable: Chrome is stale"
+            )
         return metadata
 
     def increment_turn(self, run_id: str, phase: str, *, max_turns: int = 6) -> int:
+        next_turn = self.next_turn(run_id, phase, max_turns=max_turns)
+        metadata = self.load()
+        assert metadata is not None
+        phase_key = phase.upper()
+        updated_turns = dict(metadata.phase_turns)
+        updated_turns[phase_key] = next_turn
+        self.save(
+            GeminiSessionMetadata(
+                metadata.run_id,
+                metadata.chrome_pid,
+                metadata.debugger_address,
+                metadata.conversation_url,
+                metadata.started_at,
+                updated_turns,
+            )
+        )
+        return next_turn
+
+    def next_turn(self, run_id: str, phase: str, *, max_turns: int = 6) -> int:
         if max_turns <= 0:
             raise MvpError("Gemini session turn limit is invalid")
         metadata = self.load()
@@ -109,18 +134,6 @@ class GeminiSessionRegistry:
         current = metadata.phase_turns.get(phase_key, 0)
         if current >= max_turns:
             raise MvpError("Gemini conversation turn limit reached")
-        updated_turns = dict(metadata.phase_turns)
-        updated_turns[phase_key] = current + 1
-        self.save(
-            GeminiSessionMetadata(
-                metadata.run_id,
-                metadata.chrome_pid,
-                metadata.debugger_address,
-                metadata.conversation_url,
-                metadata.started_at,
-                updated_turns,
-            )
-        )
         return current + 1
 
     def update_conversation(self, run_id: str, conversation_url: str) -> GeminiSessionMetadata:

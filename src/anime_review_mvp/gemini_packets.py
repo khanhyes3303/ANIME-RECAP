@@ -138,27 +138,54 @@ def build_script_evidence_media(
         raise MvpError(f"Gemini SCRIPT packet render failed: {result.stderr.strip()}")
 
 
-def _prompt(phase: str, beat_ids: tuple[str, ...]) -> str:
+def _prompt(
+    phase: str,
+    beat_ids: tuple[str, ...],
+    *,
+    candidate_name: str | None = None,
+) -> str:
     verdicts = (
         "NOT_APPLICABLE"
         if phase == "SCRIPT"
         else "MATCH, VOICE_AHEAD, VOICE_BEHIND, SCENE_MISMATCH, ACTION_MISMATCH"
     )
     example_verdict = "NOT_APPLICABLE" if phase == "SCRIPT" else "MATCH"
+    phase_label = "SCRIPT" if phase == "SCRIPT" else "VIDEO"
+    media_instructions = (
+        "script_evidence.mp4 là trích đoạn nguồn dùng để kiểm nội dung lời kể; "
+        "anchors.json chứa các mốc SOURCE hợp lệ. "
+        if phase == "SCRIPT"
+        else (
+            "source_episode.mp4 là video tập gốc đầy đủ; "
+            f"{candidate_name} là video cần kiểm định; mapping.json ánh xạ SOURCE sang "
+            "PROGRAM; source_anchors.json và program_anchors.json chứa các anchor_id "
+            "hợp lệ của hai timeline. Phải xem và đối chiếu cả hai video. "
+        )
+    )
+    evidence_requirement = (
+        "evidence_refs phải chứa TOÀN BỘ anchor_id START/MIDDLE/END của SOURCE cho "
+        "mọi range thuộc beat. "
+        if phase == "SCRIPT"
+        else "evidence_refs phải chứa TOÀN BỘ anchor_id START/MIDDLE/END của cả SOURCE "
+        "và PROGRAM cho mọi range thuộc beat. "
+    )
     return (
         f"Kiểm định phase {phase} cho đúng các beat: {', '.join(beat_ids)}. "
-        "Đọc video và manifest đã tải lên theo thứ tự thời gian. Loại intro, opening, "
+        + media_instructions
+        + "Đọc video và manifest đã tải lên theo thứ tự thời gian. Loại intro, opening, "
         "ending, credits và title card không phục vụ cốt truyện. So sánh hình, hành động "
         "và lời review Việt; không đoán khi thiếu bằng chứng. Trả đúng một JSON object, "
         "không markdown và không thêm trường ngoài schema sau: "
-        '{"phase":"SCRIPT hoặc VIDEO","producer_context_id":"chuỗi không rỗng",'
+        f'{{"phase":"{phase_label}","producer_context_id":"chuỗi không rỗng",'
         '"critic_context_id":"chuỗi không rỗng","beat_reviews":['
         '{"beat_id":"beat-...","finding_codes":[],"evidence_refs":'
         '["anchor_id từ anchors.json"],"observed_visual":"mô tả hình thấy thật",'
         '"narration_summary":"tóm tắt lời review",'
         f'"sync_verdict":"{example_verdict}","note":"nhận xét"}}]}}. '
-        "Phải đủ đúng một beat_reviews cho mỗi beat. evidence_refs luôn phải có ít nhất "
-        "một anchor_id có thật trong anchors.json. Không dùng các trường document_type, "
+        "Phải đủ đúng một beat_reviews cho mỗi beat. "
+        + evidence_requirement
+        + "Mọi anchor_id phải có thật trong file anchors tương ứng. Không dùng các "
+        "trường document_type, "
         "policy_version, overall_verdict hoặc notes. "
         f"sync_verdict chỉ dùng: {verdicts}. Mọi verdict khác MATCH phải có cùng code "
         "trong finding_codes và evidence_refs phải trỏ đúng beat/timestamp burn-in."
@@ -226,7 +253,6 @@ def build_browser_packet(
 
     packet_dir = _reset_packet_dir(run_dir, phase_upper)
     prompt_path = packet_dir / "prompt.txt"
-    prompt_path.write_text(_prompt(phase_upper, selected_ids), encoding="utf-8")
     evidence_files: tuple[Path, ...] = ()
     if phase_upper == "SCRIPT":
         media = packet_dir / "script_evidence.mp4"
@@ -239,6 +265,7 @@ def build_browser_packet(
         shutil.copy2(storyboard_path, supplemental)
         shutil.copy2(source_anchors, anchors)
         evidence_files = (anchors,)
+        prompt_path.write_text(_prompt(phase_upper, selected_ids), encoding="utf-8")
     else:
         candidate = (
             run_dir / "proxy" / "review_proxy.mp4"
@@ -255,6 +282,23 @@ def build_browser_packet(
         if not mapping.is_file() or mapping.is_symlink():
             raise MvpError(f"Gemini {phase_upper} packet mapping is missing")
         shutil.copy2(mapping, supplemental)
+        source_anchors = run_dir / "atomic_evidence" / "source" / "anchors.json"
+        if not source_anchors.is_file() or source_anchors.is_symlink():
+            raise MvpError(f"Gemini {phase_upper} packet source anchors are missing")
+        program_anchors = run_dir / "atomic_evidence" / "program" / "anchors.json"
+        if not program_anchors.is_file() or program_anchors.is_symlink():
+            raise MvpError(f"Gemini {phase_upper} packet program anchors are missing")
+        source_media = packet_dir / "source_episode.mp4"
+        source_anchor_copy = packet_dir / "source_anchors.json"
+        program_anchor_copy = packet_dir / "program_anchors.json"
+        shutil.copy2(source, source_media)
+        shutil.copy2(source_anchors, source_anchor_copy)
+        shutil.copy2(program_anchors, program_anchor_copy)
+        evidence_files = (source_media, source_anchor_copy, program_anchor_copy)
+        prompt_path.write_text(
+            _prompt(phase_upper, selected_ids, candidate_name=media_name),
+            encoding="utf-8",
+        )
     manifest = packet_dir / "manifest.json"
     content_files = (media, supplemental, *evidence_files, prompt_path)
     _write_manifest(
@@ -300,10 +344,13 @@ def verify_packet(packet: GeminiBrowserPacket, run_dir: Path) -> GeminiBrowserPa
                 raise MvpError("Gemini packet file hash does not match")
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise MvpError("Gemini packet manifest is invalid") from exc
+    prompt_path = str(_inside_run(Path(packet.prompt_path), run_dir, "prompt"))
     expected_uploads = {
-        str(Path(packet.media_path).resolve()),
-        str(manifest_path),
+        str(_inside_run(Path(item["path"]), run_dir, "manifest file"))
+        for item in manifest["files"]
+        if str(Path(item["path"]).resolve()) != prompt_path
     }
+    expected_uploads.add(str(manifest_path))
     actual_uploads = {
         str(_inside_run(Path(path), run_dir, "upload")) for path in packet.upload_paths
     }

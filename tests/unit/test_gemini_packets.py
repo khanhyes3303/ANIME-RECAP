@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -146,6 +147,22 @@ def _packet_fixture(tmp_path: Path, phase: str, *, excluded: bool = False) -> Pa
             ]
         },
     )
+    _write_json(
+        run / "atomic_evidence/program/anchors.json",
+        {
+            "anchors": [
+                {
+                    "anchor_id": "beat-001-range-001-program-start",
+                    "span_id": "beat-001",
+                    "range_id": "range-001",
+                    "timeline": "PROGRAM",
+                    "position": "START",
+                    "timestamp_ms": 0,
+                    "path": "frame-program-start.jpg",
+                }
+            ]
+        },
+    )
     new_state(run, stage=Stage.VIET_LOI, episode_dir=episode, source_video=source)
     if phase == "PROXY":
         candidate = run / "proxy/review_proxy.mp4"
@@ -201,6 +218,56 @@ def test_script_packet_uploads_engine_anchor_ids(tmp_path: Path) -> None:
     assert "anchors.json" in {Path(path).name for path in packet.upload_paths}
 
 
+@pytest.mark.parametrize("phase", ("PROXY", "FINAL"))
+def test_video_packet_uploads_full_source_candidate_mapping_and_both_timelines(
+    tmp_path: Path,
+    phase: str,
+) -> None:
+    run = _packet_fixture(tmp_path, phase)
+
+    packet = build_browser_packet(run, phase, runner=_fake_ffmpeg)
+
+    upload_names = {Path(path).name for path in packet.upload_paths}
+    candidate_name = "proxy_review.mp4" if phase == "PROXY" else "final_candidate.mp4"
+    assert upload_names == {
+        "source_episode.mp4",
+        candidate_name,
+        "mapping.json",
+        "source_anchors.json",
+        "program_anchors.json",
+        "manifest.json",
+    }
+    assert (Path(packet.manifest_path).parent / "source_episode.mp4").read_bytes() == (
+        b"source-video"
+    )
+    prompt = Path(packet.prompt_path).read_text(encoding="utf-8")
+    assert '"phase":"VIDEO"' in prompt
+    assert "source_episode.mp4 là video tập gốc đầy đủ" in prompt
+    assert f"{candidate_name} là video cần kiểm định" in prompt
+    assert "source_anchors.json" in prompt
+    assert "program_anchors.json" in prompt
+    assert "TOÀN BỘ anchor_id START/MIDDLE/END của cả SOURCE và PROGRAM" in prompt
+
+
+@pytest.mark.parametrize(
+    ("missing", "message"),
+    (
+        ("source", "source anchors are missing"),
+        ("program", "program anchors are missing"),
+    ),
+)
+def test_video_packet_fails_closed_when_timeline_anchors_are_missing(
+    tmp_path: Path,
+    missing: str,
+    message: str,
+) -> None:
+    run = _packet_fixture(tmp_path, "PROXY")
+    (run / "atomic_evidence" / missing / "anchors.json").unlink()
+
+    with pytest.raises(MvpError, match=message):
+        build_browser_packet(run, "PROXY", runner=_fake_ffmpeg)
+
+
 def test_packet_detects_file_changed_after_manifest(tmp_path: Path) -> None:
     run = _packet_fixture(tmp_path, "PROXY")
     packet = build_browser_packet(run, "PROXY", runner=_fake_ffmpeg)
@@ -208,6 +275,20 @@ def test_packet_detects_file_changed_after_manifest(tmp_path: Path) -> None:
 
     with pytest.raises(MvpError, match="hash"):
         verify_packet(packet, run)
+
+
+def test_packet_rejects_upload_set_that_omits_manifest_content(tmp_path: Path) -> None:
+    run = _packet_fixture(tmp_path, "PROXY")
+    packet = build_browser_packet(run, "PROXY", runner=_fake_ffmpeg)
+    incomplete = replace(
+        packet,
+        upload_paths=tuple(
+            path for path in packet.upload_paths if Path(path).name != "program_anchors.json"
+        ),
+    )
+
+    with pytest.raises(MvpError, match="upload set is incomplete"):
+        verify_packet(incomplete, run)
 
 
 def test_packet_rejects_unknown_requested_beat(tmp_path: Path) -> None:

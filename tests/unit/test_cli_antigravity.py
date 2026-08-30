@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -560,6 +561,385 @@ def test_gemini_web_new_chat_forces_full_packet_in_fresh_conversation(
 
     assert cli._gemini_web_run(run, "proxy", force_new_chat=True) == 0
     assert calls == [("PROXY", True)]
+
+
+def test_gemini_web_run_repairs_invalid_critic_in_same_chat_without_reupload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-01"
+    new_state(run, stage=Stage.PHAN_BIEN_VIDEO)
+    repair_prompt = run / "gemini_web" / "proxy" / "auto_repair_prompt_02.txt"
+    repair_prompt.parent.mkdir(parents=True)
+    repair_prompt.write_text("repair anchors without changing verdicts", encoding="utf-8")
+    calls: list[Path | None] = []
+    validations = 0
+    accepted: list[object] = []
+
+    def run_phase(
+        run_dir: Path,
+        phase: str,
+        *,
+        prompt_override: Path | None = None,
+        force_new_chat: bool = False,
+    ) -> object:
+        assert run_dir == run
+        assert phase == "PROXY"
+        assert force_new_chat is False
+        calls.append(prompt_override)
+        return object()
+
+    def validate_review(run_dir: Path, phase: str, review: object) -> None:
+        nonlocal validations
+        assert run_dir == run
+        assert phase == "PROXY"
+        validations += 1
+        if validations == 1:
+            raise MvpError("critic review lacks engine SOURCE and PROGRAM anchors")
+
+    monkeypatch.setattr(cli, "run_operator_phase", run_phase)
+    monkeypatch.setattr(cli, "_validate_operator_review", validate_review, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_write_critic_repair_prompt",
+        lambda *_args, **_kwargs: repair_prompt,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_accept_operator_review",
+        lambda _run, _phase, review: accepted.append(review) or 0,
+    )
+
+    assert cli._gemini_web_run(run, "proxy") == 0
+    assert calls == [None, repair_prompt]
+    assert validations == 2
+    assert len(accepted) == 1
+    assert read_state(run).stage is Stage.CHO_GEMINI_PROXY
+
+
+def test_critic_repair_prompt_requires_all_engine_anchors_without_forcing_match(
+    tmp_path: Path,
+) -> None:
+    run, _ = _prepared_storyboard_run(tmp_path)
+    source_anchors = FrameAnchorDocument(
+        tuple(
+            FrameAnchor(
+                f"beat-001-range-001-{position.casefold()}",
+                "beat-001",
+                "range-001",
+                "SOURCE",
+                position,
+                timestamp,
+                f"source-{position.casefold()}.jpg",
+            )
+            for position, timestamp in (
+                ("START", 1_000),
+                ("MIDDLE", 2_500),
+                ("END", 4_000),
+            )
+        )
+    )
+    program_anchors = FrameAnchorDocument(
+        tuple(
+            FrameAnchor(
+                f"beat-001-range-001-program-{position.casefold()}",
+                "beat-001",
+                "range-001",
+                "PROGRAM",
+                position,
+                timestamp,
+                f"program-{position.casefold()}.jpg",
+            )
+            for position, timestamp in (
+                ("START", 0),
+                ("MIDDLE", 1_500),
+                ("END", 3_000),
+            )
+        )
+    )
+    dump_json(run / "atomic_evidence" / "source" / "anchors.json", source_anchors)
+    dump_json(run / "atomic_evidence" / "program" / "anchors.json", program_anchors)
+
+    prompt_path = cli._write_critic_repair_prompt(
+        run,
+        "PROXY",
+        MvpError("critic review lacks engine SOURCE and PROGRAM anchors"),
+        turn_number=2,
+    )
+    prompt = prompt_path.read_text(encoding="utf-8")
+
+    for anchor in (*source_anchors.anchors, *program_anchors.anchors):
+        assert anchor.anchor_id in prompt
+    assert "giữ nguyên các finding_codes và sync_verdict" in prompt
+    assert "không được đổi lỗi thật thành MATCH" in prompt
+    assert '"finding_codes": []' not in prompt
+    assert '"sync_verdict": "MATCH"' not in prompt
+
+
+def test_gemini_web_run_repairs_invalid_json_response_in_same_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-01"
+    new_state(run, stage=Stage.VIET_LOI)
+    repair_prompt = run / "gemini_web" / "script" / "auto_repair_prompt_02.txt"
+    repair_prompt.parent.mkdir(parents=True)
+    repair_prompt.write_text("return corrected JSON", encoding="utf-8")
+    prompts: list[Path | None] = []
+    valid_review = object()
+
+    def run_phase(
+        _run: Path,
+        _phase: str,
+        *,
+        prompt_override: Path | None = None,
+    ) -> object:
+        prompts.append(prompt_override)
+        if len(prompts) == 1:
+            raise MvpError("Gemini response is not valid JSON")
+        return valid_review
+
+    monkeypatch.setattr(cli, "run_operator_phase", run_phase)
+    monkeypatch.setattr(cli, "_validate_operator_review", lambda *_args: None, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "_write_critic_repair_prompt",
+        lambda *_args, **_kwargs: repair_prompt,
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_accept_operator_review", lambda *_args: 0)
+
+    assert cli._gemini_web_run(run, "script") == 0
+    assert prompts == [None, repair_prompt]
+    assert read_state(run).stage is Stage.CHO_GEMINI_SCRIPT
+
+
+def test_gemini_web_repair_loop_stops_after_six_total_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-01"
+    new_state(run, stage=Stage.VIET_LOI)
+    calls = 0
+
+    def run_phase(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return object()
+
+    def reject(*_args: object) -> None:
+        raise MvpError("critic review lacks engine SOURCE anchors")
+
+    def write_prompt(
+        _run: Path,
+        _phase: str,
+        _error: MvpError,
+        *,
+        turn_number: int,
+    ) -> Path:
+        path = run / f"repair-{turn_number}.txt"
+        path.write_text("repair", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(cli, "run_operator_phase", run_phase)
+    monkeypatch.setattr(cli, "_validate_operator_review", reject)
+    monkeypatch.setattr(cli, "_write_critic_repair_prompt", write_prompt)
+
+    assert cli._gemini_web_run(run, "script") == 1
+    assert calls == 6
+    assert read_state(run).stage is Stage.CAN_CON_NGUOI_XU_LY
+
+
+def test_operator_new_chat_replaces_stale_managed_chrome_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-01"
+    run.mkdir(parents=True)
+    (run / "gemini_web").mkdir()
+    prompt = run / "prompt.txt"
+    prompt.write_text("review this", encoding="utf-8")
+    media = run / "proxy.mp4"
+    media.write_bytes(b"proxy")
+    registry = GeminiSessionRegistry(tmp_path / ".local" / "gemini_operator_session.json")
+    registry.save(
+        GeminiSessionMetadata(
+            run.name,
+            27776,
+            "127.0.0.1:53198",
+            "https://gemini.google.com/app/stale-chat",
+            "2026-08-29T19:21:47+00:00",
+            {"PROXY": 4},
+        )
+    )
+
+    class Launch:
+        chrome_pid = 456
+        debugger_address = "127.0.0.1:9333"
+        page = object()
+
+        def __init__(self) -> None:
+            self.detached = False
+
+        def detach(self) -> None:
+            self.detached = True
+
+    launch = Launch()
+    monkeypatch.setattr(gemini_session, "_pid_is_alive", lambda _pid: False)
+    monkeypatch.setattr(gemini_session, "_debugger_is_alive", lambda _address: False)
+    monkeypatch.setattr(cli, "launch_managed_chrome", lambda _root: launch)
+    monkeypatch.setattr(
+        cli,
+        "connect_managed_chrome",
+        lambda _metadata: pytest.fail("stale Chrome must not be reattached"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_browser_packet",
+        lambda *_args: SimpleNamespace(
+            media_path=str(media),
+            packet_sha256="a" * 64,
+            prompt_path=str(prompt),
+            upload_paths=(),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_profile_binding",
+        lambda _path: SimpleNamespace(
+            account_hint="u***@example.com", account_sha256="b" * 64
+        ),
+    )
+    monkeypatch.setattr(cli, "_operator_ledger", lambda _run: object())
+    monkeypatch.setattr(cli, "issue_request", lambda *_args: object())
+    monkeypatch.setattr(cli, "calculate_policy_sha256", lambda _root: "c" * 64)
+    monkeypatch.setattr(cli, "dump_json", lambda *_args: None)
+    def successful_browser_session(*_args: object, **kwargs: object) -> object:
+        kwargs["on_prompt_submitted"]()
+        return SimpleNamespace(
+            observation=SimpleNamespace(
+                conversation_url="https://gemini.google.com/app/new-chat"
+            )
+        )
+
+    monkeypatch.setattr(cli, "run_gemini_session", successful_browser_session)
+    monkeypatch.setattr(
+        cli,
+        "load_operator_verified_review",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    class Operator:
+        def __init__(self, **kwargs: object) -> None:
+            self.session_runner = kwargs["session_runner"]
+
+        def run(self, request: object, packet: object) -> None:
+            self.session_runner(request, packet)
+
+    monkeypatch.setattr(cli, "GeminiWebOperator", Operator)
+
+    cli.run_operator_phase(run, "PROXY", force_new_chat=True)
+
+    metadata = registry.load()
+    assert metadata is not None
+    assert metadata.chrome_pid == 456
+    assert metadata.debugger_address == "127.0.0.1:9333"
+    assert metadata.conversation_url == "https://gemini.google.com/app/new-chat"
+    assert metadata.phase_turns == {"PROXY": 1}
+    assert launch.detached is True
+
+
+def test_operator_run_never_reuses_a_previous_browser_result_checkpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-01"
+    run.mkdir(parents=True)
+    prompt = run / "prompt.txt"
+    prompt.write_text("review this exact packet", encoding="utf-8")
+    media = run / "proxy.mp4"
+    media.write_bytes(b"proxy")
+    checkpoint = (
+        run
+        / "gemini_web"
+        / "proxy"
+        / f"browser_result_{cli.sha256_file(prompt)}.json"
+    )
+    checkpoint.parent.mkdir(parents=True)
+    checkpoint.write_text('{"stale": true}', encoding="utf-8")
+    registry = GeminiSessionRegistry(tmp_path / ".local" / "gemini_operator_session.json")
+    registry.save(
+        GeminiSessionMetadata(
+            run.name,
+            123,
+            "127.0.0.1:9222",
+            None,
+            "2026-08-30T12:00:00+00:00",
+            {},
+        )
+    )
+
+    class Launch:
+        chrome_pid = 123
+        page = object()
+
+        def detach(self) -> None:
+            return None
+
+    calls: list[str] = []
+    monkeypatch.setattr(gemini_session, "_pid_is_alive", lambda _pid: True)
+    monkeypatch.setattr(gemini_session, "_debugger_is_alive", lambda _address: True)
+    monkeypatch.setattr(cli, "connect_managed_chrome", lambda _metadata: Launch())
+    monkeypatch.setattr(
+        cli,
+        "build_browser_packet",
+        lambda *_args: SimpleNamespace(
+            media_path=str(media),
+            packet_sha256="a" * 64,
+            prompt_path=str(prompt),
+            upload_paths=(),
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_profile_binding",
+        lambda _path: SimpleNamespace(
+            account_hint="u***@example.com", account_sha256="b" * 64
+        ),
+    )
+    monkeypatch.setattr(cli, "_operator_ledger", lambda _run: object())
+    monkeypatch.setattr(cli, "issue_request", lambda *_args: object())
+    monkeypatch.setattr(cli, "calculate_policy_sha256", lambda _root: "c" * 64)
+    monkeypatch.setattr(cli, "dump_json", lambda *_args: None)
+    monkeypatch.setattr(
+        cli,
+        "load_json",
+        lambda *_args: pytest.fail("a browser checkpoint must never answer a new run"),
+    )
+    def fresh_browser_session(*_args: object, **kwargs: object) -> object:
+        calls.append("browser")
+        kwargs["on_prompt_submitted"]()
+        return SimpleNamespace(
+            observation=SimpleNamespace(
+                conversation_url="https://gemini.google.com/app/fresh-result"
+            )
+        )
+
+    monkeypatch.setattr(cli, "run_gemini_session", fresh_browser_session)
+    monkeypatch.setattr(
+        cli,
+        "load_operator_verified_review",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    class Operator:
+        def __init__(self, **kwargs: object) -> None:
+            self.session_runner = kwargs["session_runner"]
+
+        def run(self, request: object, packet: object) -> None:
+            self.session_runner(request, packet)
+
+    monkeypatch.setattr(cli, "GeminiWebOperator", Operator)
+
+    cli.run_operator_phase(run, "PROXY")
+
+    assert calls == ["browser"]
 
 
 def test_prepare_reuses_source_analysis_for_revision(

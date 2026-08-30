@@ -55,6 +55,11 @@ RESPONSE_SELECTORS = (
     (By.CSS_SELECTOR, "message-content"),
     (By.CSS_SELECTOR, "div[data-test-id='response-content']"),
 )
+USER_PROMPT_SELECTORS = (
+    (By.CSS_SELECTOR, "user-query"),
+    (By.CSS_SELECTOR, "div[data-test-id='user-query']"),
+    (By.CSS_SELECTOR, "div[data-test-id='user-message']"),
+)
 
 # Only target explicit Google account controls. A generic "account" selector
 # can match user content such as a Notebook title and navigate away from chat.
@@ -472,6 +477,39 @@ class SeleniumGeminiPage:
                 continue
         raise GeminiBrowserError(code, f"Gemini element was not found: {code}")
 
+    def _click_send_button(self) -> object:
+        def enabled_element(selector: tuple[str, str]) -> Callable[[WebDriver], object | bool]:
+            def locate(driver: WebDriver) -> object | bool:
+                elements = driver.find_elements(*selector)
+                if not elements:
+                    with suppress(NoSuchElementException):
+                        elements = [driver.find_element(*selector)]
+                for element in elements:
+                    if element.is_enabled():
+                        return element
+                return False
+
+            return locate
+
+        for selector in SEND_SELECTORS:
+            try:
+                element = WebDriverWait(self.driver, 3).until(enabled_element(selector))
+                if element.is_displayed():
+                    try:
+                        element.click()
+                    except ElementClickInterceptedException:
+                        self.driver.execute_script("arguments[0].click();", element)
+                else:
+                    # Gemini can leave its enabled send control inside a short
+                    # opacity animation while Chrome is in the background.
+                    self.driver.execute_script("arguments[0].click();", element)
+                return element
+            except (StaleElementReferenceException, TimeoutException):
+                continue
+        raise GeminiBrowserError(
+            "PROMPT_NOT_SENT", "Gemini element was not found: PROMPT_NOT_SENT"
+        )
+
     def _visible_first(self, selectors: tuple[tuple[str, str], ...], code: str) -> object:
         for selector in selectors:
             try:
@@ -786,17 +824,46 @@ class SeleniumGeminiPage:
 
         def uploads_ready(_: WebDriver) -> bool:
             try:
-                visible_text = str(
-                    getattr(self.driver.find_element(By.TAG_NAME, "body"), "text", "")
-                ).casefold()
+                observed_text = [
+                    str(
+                        getattr(
+                            self.driver.find_element(By.TAG_NAME, "body"), "text", ""
+                        )
+                    )
+                ]
             except NoSuchElementException:
                 return False
-            if not all(name in visible_text for name in expected_names):
+            for chip in self.driver.find_elements(
+                By.CSS_SELECTOR, "uploader-file-preview [aria-describedby]"
+            ):
+                try:
+                    description_ids = str(
+                        chip.get_attribute("aria-describedby") or ""
+                    ).split()
+                except StaleElementReferenceException:
+                    continue
+                for description_id in description_ids:
+                    try:
+                        description = self.driver.find_element(By.ID, description_id)
+                        observed_text.append(
+                            str(
+                                description.get_attribute("textContent")
+                                or getattr(description, "text", "")
+                            )
+                        )
+                    except (NoSuchElementException, StaleElementReferenceException):
+                        continue
+            searchable_text = "\n".join(observed_text).casefold()
+            if not all(name in searchable_text for name in expected_names):
                 return False
-            return not any(
-                self.driver.find_elements(kind, selector)
-                for kind, selector in UPLOAD_BUSY_SELECTORS
-            )
+            for kind, selector in UPLOAD_BUSY_SELECTORS:
+                for element in self.driver.find_elements(kind, selector):
+                    try:
+                        if element.is_displayed():
+                            return False
+                    except StaleElementReferenceException:
+                        continue
+            return True
 
         try:
             WebDriverWait(self.driver, self._upload_wait_seconds).until(uploads_ready)
@@ -820,18 +887,45 @@ class SeleniumGeminiPage:
                     texts.append(text)
         return tuple(texts)
 
+    def _user_prompt_snapshot(self) -> tuple[str, ...]:
+        texts: list[str] = []
+        for kind, value in USER_PROMPT_SELECTORS:
+            for element in self.driver.find_elements(kind, value):
+                get_attribute = getattr(element, "get_attribute", None)
+                raw_text = (
+                    get_attribute("textContent")
+                    if callable(get_attribute)
+                    else getattr(element, "text", "")
+                )
+                text = str(raw_text or getattr(element, "text", "")).strip()
+                if text:
+                    texts.append(text)
+        return tuple(texts)
+
     def send_prompt(self, prompt: str) -> None:
         if not prompt.strip():
             raise GeminiBrowserError("INVALID_RESPONSE", "Gemini prompt is empty")
         self._response_baseline = self._response_snapshot()
+        user_prompt_baseline = self._user_prompt_snapshot()
         textbox = self._visible_first(PROMPT_SELECTORS, "INVALID_RESPONSE")
         textbox.click()
         textbox.send_keys(Keys.CONTROL, "a")
-        textbox.send_keys(prompt)
-        self._click_first(SEND_SELECTORS, "PROMPT_NOT_SENT")
+        execute_cdp_cmd = getattr(self.driver, "execute_cdp_cmd", None)
+        if callable(execute_cdp_cmd):
+            execute_cdp_cmd("Input.insertText", {"text": prompt})
+        else:
+            textbox.send_keys(prompt)
+        self._click_send_button()
 
         def submission_started(_: WebDriver) -> bool:
             if self._response_snapshot() != self._response_baseline:
+                return True
+            user_prompts = self._user_prompt_snapshot()
+            normalized_prompt = " ".join(prompt.split())
+            if len(user_prompts) > len(user_prompt_baseline) and any(
+                " ".join(user_prompt.split()) == normalized_prompt
+                for user_prompt in user_prompts[len(user_prompt_baseline) :]
+            ):
                 return True
             if any(
                 self.driver.find_elements(kind, selector)
@@ -1020,6 +1114,7 @@ def run_gemini_session(
     chrome_pid: int,
     conversation_url: str | None = None,
     clock: Callable[[], str] | None = None,
+    on_prompt_submitted: Callable[[], None] | None = None,
 ) -> BrowserConversationResult:
     now = clock or (lambda: datetime.now(UTC).isoformat())
     started_at = now()
@@ -1051,6 +1146,8 @@ def run_gemini_session(
         if callable(wait_for_uploads):
             wait_for_uploads(upload_paths)
     page.send_prompt(prompt)
+    if on_prompt_submitted is not None:
+        on_prompt_submitted()
     response = page.wait_for_response()
     if not response.strip():
         raise GeminiBrowserError("INVALID_RESPONSE", "Gemini response is empty")
