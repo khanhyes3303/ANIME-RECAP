@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .adaptive_edl import AdaptiveEdlDocument
 from .errors import MvpError
 from .models import EdlDocument, SpanEdlDocument
 
@@ -25,7 +26,7 @@ class RenderResult:
 
 
 def build_filter_graph(
-    edl: EdlDocument | SpanEdlDocument,
+    edl: EdlDocument | SpanEdlDocument | AdaptiveEdlDocument,
     *,
     quality: str = "final",
 ) -> str:
@@ -37,7 +38,11 @@ def build_filter_graph(
         start = segment.source_start_ms / 1_000
         end = segment.source_end_ms / 1_000
         label = f"v{index}"
-        filters.append(f"[0:v:0]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[{label}]")
+        if isinstance(edl, AdaptiveEdlDocument):
+            setpts = f"setpts=(PTS-STARTPTS)/{segment.playback_rate:.6f}"
+        else:
+            setpts = "setpts=PTS-STARTPTS"
+        filters.append(f"[0:v:0]trim=start={start:.3f}:end={end:.3f},{setpts}[{label}]")
         labels.append(f"[{label}]")
     if quality == "proxy":
         filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[joined]")
@@ -52,7 +57,7 @@ def build_filter_graph(
 def build_render_command(
     source: Path,
     narration_wav: Path,
-    edl: EdlDocument | SpanEdlDocument,
+    edl: EdlDocument | SpanEdlDocument | AdaptiveEdlDocument,
     output: Path,
     *,
     quality: str = "final",
@@ -157,7 +162,7 @@ def probe_render(
 def render_review(
     source: Path,
     narration_wav: Path,
-    edl: EdlDocument | SpanEdlDocument,
+    edl: EdlDocument | SpanEdlDocument | AdaptiveEdlDocument,
     output: Path,
     *,
     allow_short_fixture: bool = False,
