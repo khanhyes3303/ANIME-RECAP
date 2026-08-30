@@ -1,0 +1,11 @@
+{
+  "unit_id": "unit-004",
+  "source_range_start_ms": 229771,
+  "source_range_end_ms": 238863,
+  "old_program_start_ms": 28728,
+  "old_voice_start_ms": 28728,
+  "visual_anchor_program_ms": 35786,
+  "visual_anchor_source_ms": 236004,
+  "cue_duration_ms": 4200,
+  "expected_finding": "VOICE_PRECEDES_VISUAL_ANCHOR"
+}
