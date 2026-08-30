@@ -79,8 +79,8 @@ class Situation:
             raise MvpError("situation requires characters")
         _non_empty(self.setup, "situation setup")
         _non_empty(self.outcome, "situation outcome")
-        if not self.transcript_refs or not self.frame_refs:
-            raise MvpError("situation requires transcript and frame evidence")
+        if not self.frame_refs:
+            raise MvpError("situation requires frame evidence")
         if not 0 <= self.confidence <= 1:
             raise MvpError("situation confidence must be between zero and one")
 
@@ -195,8 +195,8 @@ class NarrationCue:
             "SETUP", "CHARACTER_INTRO", "CAUSE", "ACTION", "REVEAL", "OUTCOME", "BRIDGE"
         }:
             raise MvpError("visual anchor kind is invalid")
-        if not self.transcript_refs or not self.frame_refs or not self.shot_ids:
-            raise MvpError("narration cue requires transcript, frame, and shot evidence")
+        if not self.frame_refs or not self.shot_ids:
+            raise MvpError("narration cue requires frame and shot evidence")
         if not 300 <= self.visual_preroll_ms <= 1_200:
             raise MvpError("visual preroll is invalid")
         if not 0 <= self.visual_postroll_ms <= 1_200:

@@ -65,6 +65,8 @@ def test_structure_prompt_separates_boundaries_without_writing_narration(
     assert "situation_index_draft.json" in prompt
     assert "transcript_segment_indexes" in prompt
     assert "boundary_reason" in prompt
+    assert '"schema_version": "situation-index-v1"' in prompt
+    assert '"source_sha256"' in prompt
     assert "opening" in prompt.casefold()
     assert "không viết lời review" in prompt.casefold()
     assert "narration_draft.json" not in prompt

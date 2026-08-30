@@ -126,6 +126,35 @@ def test_scope_rejects_empty_or_stale_inputs(tmp_path: Path) -> None:
         load_situation_scope(Path(scope.scope_path), verify_files=True)
 
 
+def test_scope_allows_visual_only_situation_without_dialogue(tmp_path: Path) -> None:
+    visual_only = SituationIndexEntry(
+        "situation-009",
+        13_000,
+        15_000,
+        "Nhân vật biến hình",
+        "Tiết lộ năng lực",
+        "Trạng thái nhân vật thay đổi",
+        (),
+        ("shot-004",),
+        ("C:/frames/shot-004.jpg",),
+        False,
+        "",
+    )
+    visual_shots = ShotDocument((*SHOTS.shots, Shot("shot-004", 10_000, 15_000)))
+
+    scope = materialize_situation_scope(
+        tmp_path,
+        visual_only,
+        TRANSCRIPT,
+        visual_shots,
+        FRAMES,
+        accepted_index_sha256="a" * 64,
+    )
+
+    scoped = json.loads(Path(scope.transcript_path).read_text(encoding="utf-8"))
+    assert scoped["segments"] == []
+
+
 def _submission(source_start_ms: int, anchor_ms: int) -> tuple[SituationDocument, NarrationPlan]:
     shot_use = SemanticShotUse("shot-002", "event-001", "ACTION", "Xung đột")
     evidence = EvidenceRange(

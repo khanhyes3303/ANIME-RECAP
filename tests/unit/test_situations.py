@@ -94,9 +94,12 @@ def test_policy_rejects_invalid_playback_range() -> None:
         EditorialPolicy(minimum_playback_rate=1.4, maximum_playback_rate=1.3)
 
 
-def test_situation_requires_transcript_and_frame_evidence() -> None:
+def test_situation_allows_visual_only_evidence_but_not_empty_evidence() -> None:
     base = _situation()
-    with pytest.raises(MvpError, match="transcript and frame"):
+    visual_only = replace(base, transcript_refs=())
+    assert visual_only.frame_refs == ("frame-001",)
+
+    with pytest.raises(MvpError, match="frame evidence"):
         Situation(
             situation_id=base.situation_id,
             source_start_ms=base.source_start_ms,
@@ -108,11 +111,30 @@ def test_situation_requires_transcript_and_frame_evidence() -> None:
             turning_points=base.turning_points,
             outcome=base.outcome,
             transcript_refs=(),
-            frame_refs=base.frame_refs,
+            frame_refs=(),
             previous_situation_id=None,
             next_situation_id=None,
             confidence=base.confidence,
         )
+
+
+def test_narration_cue_allows_visual_only_evidence() -> None:
+    cue = NarrationCue(
+        "cue-visual",
+        "situation-001",
+        "Bị dồn tới đường cùng, Jiro bất ngờ biến hình.",
+        ("claim-visual",),
+        1_200,
+        "REVEAL",
+        (),
+        ("frame-001",),
+        ("shot-001",),
+        (),
+        (),
+        (),
+        (),
+    )
+    assert cue.transcript_refs == ()
 
 
 def test_narration_plan_requires_local_editor_owner() -> None:

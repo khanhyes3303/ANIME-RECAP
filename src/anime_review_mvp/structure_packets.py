@@ -97,6 +97,28 @@ Mỗi entry phải có `situation_id`, `source_start_ms`, `source_end_ms`, `summ
 credit, preview và nội dung dư bằng `excluded=true`. Mọi tham chiếu phải có thật và
 nằm trong range. Các range tăng dần, không chồng lấn.
 
+Ghi đúng cấu trúc JSON sau (thay các giá trị mẫu bằng bằng chứng thật):
+{{
+  "editor": "ANTIGRAVITY",
+  "schema_version": "situation-index-v1",
+  "source_sha256": "{packet.source.sha256}",
+  "situations": [
+    {{
+      "situation_id": "situation-001",
+      "source_start_ms": 0,
+      "source_end_ms": 1000,
+      "summary": "Tóm tắt điều đang xảy ra",
+      "story_purpose": "Ý nghĩa đối với cốt truyện",
+      "boundary_reason": "Lý do kết thúc tình huống tại đây",
+      "transcript_segment_indexes": [0],
+      "shot_ids": ["shot-0001"],
+      "frame_refs": ["đường dẫn frame có thật trong manifest"],
+      "excluded": false,
+      "exclusion_reason": ""
+    }}
+  ]
+}}
+
 Chỉ ghi `situation_index_draft.json` vào `{packet.allowed_staging_dir}`. Không ghi
 thêm bất kỳ artifact nào khác. Engine local sẽ kiểm schema, range, hash và
 bằng chứng; Antigravity không tự cấp PASS. Nếu thiếu công cụ, báo người dùng và dừng.

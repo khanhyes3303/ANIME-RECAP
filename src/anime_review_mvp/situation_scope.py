@@ -89,8 +89,8 @@ def materialize_situation_scope(
         if frame in entry.frame_refs
         and PurePath(frame.replace("\\", "/")).stem in scoped_shot_ids
     )
-    if not scoped_segments or not scoped_shots or not scoped_frames:
-        raise MvpError("situation scope has no transcript, shot, or frame evidence")
+    if not scoped_shots or not scoped_frames:
+        raise MvpError("situation scope has no shot or frame evidence")
 
     scope_dir = run_dir / "situation_inputs" / entry.situation_id
     transcript_path = scope_dir / "transcript.json"
