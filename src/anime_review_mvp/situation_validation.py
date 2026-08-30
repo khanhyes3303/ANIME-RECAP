@@ -207,6 +207,8 @@ def validate_narration_plan(
     shots: tuple[Shot, ...],
     policy: EditorialPolicy,
     source_duration_ms: int,
+    *,
+    require_bridges: bool = True,
 ) -> None:
     if plan.policy_version != situations.policy_version:
         raise MvpError("narration and situation policy versions must match")
@@ -227,9 +229,9 @@ def validate_narration_plan(
             situation = situation_by_id[unit.situation_id]
         except KeyError as exc:
             raise MvpError("narration unit references an unknown situation") from exc
-        if index and not unit.bridge_from_previous.strip():
+        if require_bridges and index and not unit.bridge_from_previous.strip():
             raise MvpError("narration unit requires a bridge from the previous situation")
-        if index + 1 < len(plan.units) and not unit.bridge_to_next.strip():
+        if require_bridges and index + 1 < len(plan.units) and not unit.bridge_to_next.strip():
             raise MvpError("narration unit requires a bridge to the next situation")
         for source_range in unit.evidence_ranges:
             if plan.policy_version == "situation-v2":

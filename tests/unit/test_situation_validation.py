@@ -266,7 +266,9 @@ def test_v2_validation_uses_scoped_evidence_without_legacy_truth() -> None:
     )
 
     validate_situations(document, None, SHOTS, source_duration_ms=20_000)
-    validate_narration_plan(plan, document, None, SHOTS, POLICY, 20_000)
+    validate_narration_plan(
+        plan, document, None, SHOTS, POLICY, 20_000, require_bridges=False
+    )
 
 
 def test_range_mixing_shot_meanings_is_rejected_regardless_of_duration() -> None:

@@ -1914,6 +1914,7 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
             shots.shots,
             _editorial_policy(episode),
             source.duration_ms,
+            require_bridges=False,
         )
         advance(
             run_dir,
