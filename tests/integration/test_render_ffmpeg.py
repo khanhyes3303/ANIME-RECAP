@@ -4,6 +4,7 @@ import subprocess
 import wave
 from pathlib import Path
 
+from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from anime_review_mvp.models import EdlDocument, EdlSegment
 from anime_review_mvp.render import probe_render, render_review
 
@@ -99,3 +100,35 @@ def test_real_render_contains_narration_tone_not_source_tone(tmp_path: Path) -> 
     assert result.audio_stream_count == 1
     assert 950 < _dominant_zero_crossing_frequency(extracted) < 1_050
     assert probe_render(output, allow_short_fixture=True) == result
+
+
+def test_real_adaptive_render_speeds_video_without_mapping_source_audio(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    narration = tmp_path / "narration.wav"
+    output = tmp_path / "adaptive.mp4"
+    _make_source(source)
+    _make_narration(narration)
+    edl = AdaptiveEdlDocument(
+        (
+            AdaptiveEdlSegment(
+                "unit-001-segment-001",
+                "unit-001",
+                "situation-001",
+                "range-001",
+                0,
+                1_250,
+                0,
+                1_000,
+                1.25,
+                ("shot-001",),
+                ("event-001",),
+            ),
+        ),
+        1_000,
+    )
+
+    result = render_review(source, narration, edl, output, allow_short_fixture=True)
+
+    assert result.video_stream_count == 1
+    assert result.audio_stream_count == 1
+    assert result.drift_ms <= 80

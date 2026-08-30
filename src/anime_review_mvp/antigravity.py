@@ -86,17 +86,24 @@ def render_operator_prompt(run_dir: Path, template_path: Path) -> str:
 
 
 def _validate_operator_policy(policy_dir: Path) -> None:
-    """Fail closed if the checked-in Antigravity policy regresses to manual receipts."""
+    """Fail closed if the checked-in policy regresses to browser-gated review."""
     policy_path = policy_dir / "GEMINI.md"
     if not policy_path.is_file():
         return
     policy = policy_path.read_text(encoding="utf-8").casefold()
-    required = ("gemini-web run", "3.7 flash", "tư duy mở rộng", "không tự tạo receipt")
-    forbidden = ("web-verify accept", "tự viết verdict thay gemini")
+    required = (
+        "situation_draft.json",
+        "narration_draft.json",
+        "xử lý tuần tự",
+        "không tự cài",
+        "antigravity là biên tập viên duy nhất",
+        "semantic_event_id",
+    )
+    forbidden = ("gemini-web run", "gemini-web continue", "tự viết verdict thay gemini")
     if any(token not in policy for token in required):
-        raise MvpError("Antigravity policy does not require the trusted Gemini operator")
+        raise MvpError("Antigravity policy does not require the local situation workflow")
     if any(token in policy for token in forbidden):
-        raise MvpError("Antigravity policy contains a forbidden manual Gemini path")
+        raise MvpError("Antigravity policy contains a forbidden browser-review path")
 
 
 def build_operator_job(

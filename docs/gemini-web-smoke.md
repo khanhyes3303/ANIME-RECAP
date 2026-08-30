@@ -1,7 +1,16 @@
 # Smoke test Gemini Web operator
 
-Smoke test chỉ dùng một run nhỏ đã có packet hợp lệ. Không dùng video BLACK TORCH
-đầy đủ cho lần đầu và không dán mật khẩu/cookie vào terminal.
+Đây là kiểm thử chẩn đoán **tùy chọn cho run legacy**, không phải một bước của
+pipeline situation-first mặc định. Run local đi từ `prepare` đến `audit --phase
+engine` mà không mở Chrome; phản hồi Gemini không được phép tạo PASS hoặc thay đổi
+trạng thái của run local.
+
+Luồng mới dùng task Antigravity theo từng situation, cue-level TTS, semantic timeline và
+phê duyệt proxy bằng hash. Không dùng smoke test này để thay thế `audit --phase situation`,
+`audit --phase proxy` hoặc thao tác duyệt trực tiếp của người dùng.
+
+Smoke test chỉ dùng một run legacy nhỏ đã có packet hợp lệ. Không dùng video BLACK
+TORCH đầy đủ cho lần đầu và không dán mật khẩu/cookie vào terminal.
 
 ## Chuẩn bị
 

@@ -6,10 +6,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.media import (
     build_contact_sheets,
     detect_shots,
+    extract_adaptive_program_anchors,
     extract_atomic_source_anchors,
     extract_dense_beat_evidence,
     extract_inspection_assets,
@@ -350,6 +352,37 @@ def test_extract_program_anchors_uses_edl_program_timing(tmp_path: Path) -> None
 
     assert [anchor.timestamp_ms for anchor in anchors.anchors] == [2_080, 3_000, 3_920]
     assert all(anchor.timeline == "PROGRAM" for anchor in anchors.anchors)
+
+
+def test_extract_adaptive_program_anchors_uses_unit_ids(tmp_path: Path) -> None:
+    video = tmp_path / "candidate.mp4"
+    video.write_bytes(b"media")
+    runner = FakeRunner()
+    edl = AdaptiveEdlDocument(
+        (
+            AdaptiveEdlSegment(
+                "segment-001",
+                "unit-001",
+                "situation-001",
+                "range-001",
+                10_000,
+                12_000,
+                2_000,
+                4_000,
+                1.0,
+                ("shot-001",),
+                ("event-001",),
+            ),
+        ),
+        4_000,
+    )
+
+    anchors = extract_adaptive_program_anchors(
+        video, edl, tmp_path / "program", runner=runner
+    )
+
+    assert {anchor.span_id for anchor in anchors.anchors} == {"unit-001"}
+    assert [anchor.timestamp_ms for anchor in anchors.anchors] == [2_080, 3_000, 3_920]
 
 
 def test_extract_program_anchors_allows_nonstandard_jpeg_pixel_format(

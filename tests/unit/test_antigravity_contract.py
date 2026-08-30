@@ -305,23 +305,18 @@ def test_policy_hash_covers_every_runtime_python_module(tmp_path: Path) -> None:
     assert antigravity_module.calculate_policy_sha256(tmp_path) != before
 
 
-def test_antigravity_policy_requires_real_operator_and_forbids_fake_browser_artifacts() -> None:
+def test_antigravity_policy_requires_local_situation_workflow() -> None:
     policy = Path("Bo_nao_Antigravity/GEMINI.md").read_text(encoding="utf-8")
     prompt = Path("Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md").read_text(encoding="utf-8")
     combined = (policy + "\n" + prompt).casefold()
 
-    assert "gemini-web run" in combined
-    assert "gemini-web continue" in combined
-    assert "gemini-web stop" in combined
-    assert "người dùng tự chọn" in combined
-    assert "cùng một chat" in combined
-    assert "engine tự mở chat mới" not in combined
-    assert "engine tự chọn" not in combined
-    assert "web-verify accept" not in combined
-    assert "không tự tạo receipt" in combined
-    assert "không dùng ffmpeg tạo ảnh phiên" in combined
-    assert "3.7 flash" in combined
-    assert "tư duy mở rộng" in combined
-    assert "không được chạy `gemini-web stop`" in combined
-    assert "stop-process" in combined
-    assert "taskkill" in combined
+    assert "situation_draft.json" in combined
+    assert "narration_draft.json" in combined
+    assert "semantic_event_id" in combined
+    assert "visual_anchor_source_ms" in combined
+    assert "transcript" in combined
+    assert "frame" in combined
+    assert "xử lý tuần tự" in combined
+    assert "không tự cài" in combined
+    assert "gemini-web run" not in combined
+    assert "validator local quyết định pass" in combined

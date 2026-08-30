@@ -1,0 +1,10 @@
+{
+  "name": "dialogue-heavy revelation",
+  "source_duration_ms": 120000,
+  "forbidden_before_ms": 10000,
+  "ranges": [
+    {"start_ms": 12000, "end_ms": 18000, "voice_ms": 5000, "fact": "The witness names the attacker."},
+    {"start_ms": 21000, "end_ms": 26000, "voice_ms": 4000, "fact": "The hero realizes the alibi is false."},
+    {"start_ms": 30000, "end_ms": 36000, "voice_ms": 5000, "fact": "The suspect reveals the hidden motive."}
+  ]
+}

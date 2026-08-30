@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import EdlDocument, EdlSegment
 from anime_review_mvp.render import build_filter_graph, build_render_command, probe_render
@@ -28,6 +29,32 @@ def test_filter_graph_only_trims_resets_and_concats_video() -> None:
     assert "concat=n=2:v=1:a=0" in graph
     for forbidden in ("atempo", "setpts=PTS/", "loop", "tpad", "freeze"):
         assert forbidden not in graph
+
+
+def test_filter_graph_applies_adaptive_segment_playback_rate() -> None:
+    edl = AdaptiveEdlDocument(
+        segments=(
+            AdaptiveEdlSegment(
+                "unit-001-segment-001",
+                "unit-001",
+                "situation-001",
+                "range-001",
+                1_000,
+                4_000,
+                0,
+                2_400,
+                1.25,
+                ("shot-001",),
+                ("event-001",),
+            ),
+        ),
+        total_duration_ms=2_400,
+    )
+
+    graph = build_filter_graph(edl)
+
+    assert "setpts=(PTS-STARTPTS)/1.250000" in graph
+    assert "trim=duration=2.400,setpts=PTS-STARTPTS" in graph
 
 
 def test_ffmpeg_maps_only_rendered_video_and_tts_audio() -> None:

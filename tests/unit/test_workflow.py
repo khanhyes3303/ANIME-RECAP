@@ -8,14 +8,22 @@ from anime_review_mvp.errors import MvpError
 from anime_review_mvp.workflow import (
     RunState,
     Stage,
+    accept_structure_index,
     advance,
+    begin_editor_task,
+    begin_structure_task,
+    lock_editor_situation,
+    lock_situation,
     mark_human_required,
+    migrate_to_structure_index,
     new_state,
     read_state,
     record_beat_repair,
+    record_local_repair,
     record_repair,
     record_stage_metric,
     resume_beat_repair,
+    route_editor_repair,
 )
 
 
@@ -163,3 +171,160 @@ def test_resume_beat_repair_returns_to_the_smallest_required_stage(tmp_path: Pat
     resumed = resume_beat_repair(state.run_dir, "VIDEO")
 
     assert resumed.stage is Stage.TAO_TTS
+
+
+def test_local_state_path_has_no_browser_gate(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run)
+    path = (
+        (Stage.CHUAN_BI, Stage.QUAN_SAT),
+        (Stage.QUAN_SAT, Stage.LAP_TINH_HUONG),
+        (Stage.LAP_TINH_HUONG, Stage.VIET_LOI),
+        (Stage.VIET_LOI, Stage.TAO_TTS),
+        (Stage.TAO_TTS, Stage.CAN_HINH_VOICE),
+        (Stage.CAN_HINH_VOICE, Stage.DUNG_PROXY),
+        (Stage.DUNG_PROXY, Stage.KIEM_DINH_LOCAL),
+        (Stage.KIEM_DINH_LOCAL, Stage.DUNG_VIDEO_CUOI),
+        (Stage.DUNG_VIDEO_CUOI, Stage.KIEM_DINH_ENGINE),
+    )
+    for expected, target in path:
+        advance(run, expected, target)
+
+    assert read_state(run).stage is Stage.KIEM_DINH_ENGINE
+
+
+def test_second_identical_local_repair_stops_no_progress(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_LOCAL)
+    first = record_local_repair(
+        run,
+        ("situation-003",),
+        ("VOICE_SCENE_MISMATCH",),
+        "a" * 64,
+    )
+    second = record_local_repair(
+        run,
+        ("situation-003",),
+        ("VOICE_SCENE_MISMATCH",),
+        "a" * 64,
+    )
+
+    assert first.stage is Stage.VIET_LOI
+    assert second.stage is Stage.CAN_CON_NGUOI_XU_LY
+    assert second.repair_history[-1].codes == ("KHONG_CO_TIEN_TRIEN",)
+
+
+def test_lock_situation_records_progress_and_next_unit(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.CAN_HINH_VOICE)
+
+    state = lock_situation(run, "situation-001", next_situation_id="situation-002")
+
+    assert state.locked_situation_ids == ("situation-001",)
+    assert state.current_situation_id == "situation-002"
+
+
+def test_read_state_upgrades_legacy_schema(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    (run / "run_state.json").write_text(
+        '{"run_dir":"'
+        + str(run).replace("\\", "\\\\")
+        + '","stage":"CHUAN_BI","episode_dir":"","source_video":"",'
+        '"repair_history":[],"stage_metrics":[]}',
+        encoding="utf-8",
+    )
+
+    state = read_state(run)
+
+    assert state.locked_situation_ids == ()
+    assert state.current_situation_id == ""
+    assert state.last_local_repair_fingerprint == ""
+
+
+def test_v2_path_waits_for_explicit_user_proxy_approval(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run)
+    path = (
+        (Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG),
+        (
+            Stage.TRICH_XUAT_BANG_CHUNG,
+            Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        ),
+        (
+            Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+            Stage.KIEM_DINH_CHI_MUC_TINH_HUONG,
+        ),
+    )
+    for expected, target in path:
+        advance(run, expected, target)
+    accept_structure_index(run, "a" * 64, "situation-001")
+    for expected, target in (
+        (Stage.CHO_ANTIGRAVITY_TINH_HUONG, Stage.KIEM_DINH_TINH_HUONG),
+        (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
+        (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
+        (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG),
+    ):
+        advance(run, expected, target)
+    lock_editor_situation(run, "situation-001", next_situation_id="")
+    advance(run, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY)
+    advance(run, Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY)
+    advance(run, Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
+    assert read_state(run).stage is Stage.CHO_NGUOI_DUNG_DUYET_PROXY
+    with pytest.raises(MvpError, match="proxy approval"):
+        advance(run, Stage.CHO_NGUOI_DUNG_DUYET_PROXY, Stage.DUNG_VIDEO_CUOI)
+
+
+def test_v2_content_repair_routes_to_antigravity(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG)
+    state = route_editor_repair(
+        run, ("situation-004",), ("VOICE_PRECEDES_VISUAL_ANCHOR",), "a" * 64
+    )
+    assert state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert state.current_situation_id == "situation-004"
+    assert state.repair_history[-1].owner == "ANTIGRAVITY"
+
+
+def test_v2_requires_structure_index_before_situation_editor(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run)
+    advance(run, Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG)
+    waiting = advance(
+        run,
+        Stage.TRICH_XUAT_BANG_CHUNG,
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+    )
+    assert waiting.current_situation_id == ""
+
+    issued = begin_structure_task(run, "episode-structure-revision-001", 1)
+    assert issued.editor_task_id == "episode-structure-revision-001"
+    with pytest.raises(MvpError, match="situation editor"):
+        begin_editor_task(run, "situation-001-revision-001", "situation-001", 1)
+
+    validating = advance(
+        run,
+        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        Stage.KIEM_DINH_CHI_MUC_TINH_HUONG,
+    )
+    assert validating.stage is Stage.KIEM_DINH_CHI_MUC_TINH_HUONG
+    accepted = accept_structure_index(run, "b" * 64, "situation-002")
+    assert accepted.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert accepted.accepted_situation_index_sha256 == "b" * 64
+    assert accepted.current_situation_id == "situation-002"
+
+
+def test_pre_index_editor_wait_migrates_to_structure_without_deleting_history(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG)
+    begin_editor_task(run, "situation-001-revision-002", "situation-001", 2)
+
+    migrated = migrate_to_structure_index(run)
+
+    assert migrated.stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
+    assert migrated.editor_task_id == ""
+    assert migrated.current_situation_id == ""
+    assert migrated.editorial_revision == 2
+    assert migrated.accepted_situation_index_sha256 == ""

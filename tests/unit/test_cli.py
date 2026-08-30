@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from anime_review_mvp import cli
 from anime_review_mvp.cli import main
+from anime_review_mvp.errors import MvpError
 from anime_review_mvp.workflow import Stage, new_state, read_state
 
 
@@ -98,6 +100,34 @@ def test_start_revision_accepts_existing_final_without_replacing_it(
         == 0
     )
     assert final.read_bytes() == b"old"
+
+
+def test_cli_exposes_editor_and_proxy_commands() -> None:
+    parser = cli._parser()
+    assert parser.parse_args(
+        ["migrate-run", "--run", "run", "--reason", "user-rejected"]
+    ).command == "migrate-run"
+    assert parser.parse_args(["editor-task", "--run", "run"]).command == "editor-task"
+    assert parser.parse_args(["approve-proxy", "--run", "run"]).command == "approve-proxy"
+    assert parser.parse_args(
+        [
+            "reject-proxy", "--run", "run", "--note", "Voice sớm",
+            "--situation", "situation-004",
+        ]
+    ).command == "reject-proxy"
+
+
+def test_cli_final_render_refuses_unapproved_v2_proxy(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    episode = tmp_path / "episode"
+    episode.mkdir()
+    new_state(run, stage=Stage.DUNG_VIDEO_CUOI, episode_dir=episode)
+    state_path = run / "run_state.json"
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    raw["editorial_revision"] = 2
+    state_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(MvpError, match="proxy approval"):
+        cli._render(run, "final")
 
 
 def test_script_audit_hands_draft_to_codex_editor(tmp_path: Path) -> None:

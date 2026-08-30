@@ -1,0 +1,10 @@
+{
+  "name": "action-heavy turning points",
+  "source_duration_ms": 120000,
+  "forbidden_before_ms": 10000,
+  "ranges": [
+    {"start_ms": 12000, "end_ms": 17000, "voice_ms": 4000, "fact": "The gang starts the fight."},
+    {"start_ms": 20000, "end_ms": 26000, "voice_ms": 5000, "fact": "The hero reveals a new power."},
+    {"start_ms": 30000, "end_ms": 35000, "voice_ms": 4000, "fact": "The decisive counterattack ends the fight."}
+  ]
+}

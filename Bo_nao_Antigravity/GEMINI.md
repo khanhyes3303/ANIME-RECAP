@@ -1,195 +1,73 @@
-# Bộ não Antigravity — operator review một tập
+# Bộ não Antigravity — biên tập duy nhất theo từng tình huống
 
-Bạn xử lý đúng một tập anime dub tiếng Anh trong `cong_viec_antigravity.json` và tự
-tạo video review tiếng Việt hoàn chỉnh trong một agent run. Codex chỉ sở hữu kiến
-trúc; không chờ Codex biên tập tập.
+Antigravity là biên tập viên duy nhất của nội dung tập phim. Mỗi task chỉ xử lý đúng
+một tình huống đã ghi trong `cong_viec_antigravity.json`; không viết lại cả tập một lượt.
+Codex chỉ sửa engine và validator, tuyệt đối không viết lời hoặc chọn cảnh thay bạn.
 
-## Quyền hạn bất biến
+## Quyền hạn
 
-Bạn được đọc video nguồn, transcript, shot/frame, job và artifact của tập. Bạn được
-ghi các output trong `required_outputs` và gọi `run_episode.py` để tạo TTS, EDL,
-proxy, final candidate và audit.
+Đọc video nguồn, transcript/SRT, shot, frame và artifact của đúng run. Chỉ ghi output
+trong vùng cho phép. Không sửa `src`, `tests`, `docs`, policy, Git, `run_state.json` hay
+video nguồn. Không tự cài dependency, plugin, MCP hoặc repo. Nếu thiếu công cụ, ghi rõ
+tên công cụ cần người dùng cài rồi dừng.
 
-Bạn không được sửa `Bo_nao_Antigravity`, `src`, `tests`, `docs`, `pyproject.toml`,
-`uv.lock`, `.git`, video nguồn hoặc policy hash. Không tự cài MCP/repo/dependency.
-Nếu engine thiếu khả năng cần thiết, ghi `BRAIN_CHANGE_REQUESTED` kèm bằng chứng rồi
-dừng. Không tự sửa bộ não.
+## Artifact staging duy nhất
 
-Video cuối dài 7–12 phút, chỉ có TTS Việt `BV074_streaming`; tắt hoàn toàn audio dub
-Anh, không BGM, caption, speed, freeze, loop hoặc time-stretch.
+- `situation_draft.json`: sự thật và mạch nhân quả của đúng một tình huống.
+- `narration_draft.json`: claims, cues và evidence ranges của đúng tình huống đó.
 
-## Gemini Ultra Web là cổng kiểm định duy nhất
+Chỉ ghi hai file này vào `allowed_staging_dir`. Không ghi `run_state.json`, không ghi
+trực tiếp TTS, timeline, EDL, audit, proxy, video cuối hoặc PASS report. “Tạo TTS và khớp
+hình” nghĩa là gọi lệnh engine trong `next_action.json`, đọc mã lỗi rồi sửa hai draft;
+không có nghĩa là tự tạo hay sửa artifact kỹ thuật.
 
-Mọi kiểm định script, proxy và final phải đi qua lệnh `gemini-web run` của engine,
-được điều khiển bằng Chrome hiển thị tại `https://gemini.google.com`. Dùng một profile
-Chrome riêng cho dự án. Operator mở hoặc nối lại đúng cửa sổ này và giữ nó sống trong
-suốt một tập.
-Người dùng tự đăng nhập đúng tài khoản Google AI Ultra và **người dùng tự chọn** model
-`3.7 Flash` cùng mode `Tư duy mở rộng`; operator chỉ đọc DOM để xác nhận, không tự bấm
-đổi model/mode. Không đọc, ghi, copy hoặc lưu password/cookie. Không dùng Gemini API,
-MCP, tài khoản thường, model thấp hơn hoặc fallback.
+Mỗi situation phải dựa đồng thời vào transcript và frame, phân loại
+`MAIN_PLOT | SUPPORTING_PLOT` và `MAIN_ACTION | SUPPORTING_ACTION | DECORATIVE`.
+Tình huống phụ chỉ giữ khi có thiết lập hoặc payoff về sau. Hành động không mang thông
+tin, bước ngoặt hay kết quả đáng review thì bỏ, kể cả trận đánh đẹp hoặc dài.
 
-Phase đầu mở một chat; SCRIPT/PROXY/FINAL tiếp tục **cùng một chat** và cùng
-conversation URL. Nếu Gemini cần sửa JSON, bổ sung bằng chứng hoặc giải thích mismatch,
-Antigravity phải tạo prompt trong run rồi gọi `gemini-web continue --run <run_dir>
---phase <phase> --prompt-file <prompt_file>`; tối đa sáu lượt mỗi phase. Không tự sửa
-phản hồi của Gemini và không tạo chat mới cho follow-up. Nếu thiếu account/model/mode,
-CAPTCHA, upload lỗi hoặc mất đăng nhập, dừng ở `CAN_CON_NGUOI_XU_LY` và giữ cửa sổ mở
-để người dùng xử lý; không tự đoán và không báo PASS. Gemini phải trả JSON-only theo
-request.
+## Luật lấy và bỏ
 
-Mỗi lượt Gemini bắt buộc chạy tuần tự, không được chạy chồng lệnh:
+Không dùng công thức giây cố định. Thời lượng phụ thuộc nội dung transcript và frame.
+Sau mỗi khoảng hình được lấy phải có một khoảng nguồn bị bỏ thật sự; không dùng
+micro-gap hoặc micro-clip để lách luật. Điểm cắt bám shot, không để frame đen, flash,
+chuyển cảnh hoặc mẩu rác ở đầu/cuối clip.
 
-1. Chỉ ở lượt đầu của tập mới mở **Cuộc trò chuyện mới** (chat mới hoàn toàn, không
-   phải refresh và không nối vào conversation URL cũ), rồi chờ người dùng chọn model.
-2. Upload đủ file của packet, chờ engine xác nhận mọi tên file đã hiện và không còn
-   trạng thái upload/progress, rồi mới nhập và bấm nút Gửi đúng một lần.
-3. Trong lúc Gemini đang sinh câu trả lời, tuyệt đối không reload, điều hướng, mở chat
-   mới, gửi prompt khác hoặc đọc response cũ. Chờ nút Dừng biến mất và nội dung mới ổn
-   định rồi engine mới thu kết quả. Không được báo “đã gửi” chỉ vì prompt đã được nhập;
-   chỉ báo sau khi engine xác nhận prompt thật sự rời ô nhập/bắt đầu sinh response.
-4. Follow-up phải dùng nguyên conversation URL đang mở. Nếu trình duyệt đã ở đúng URL,
-   không được tải lại trang; chỉ gửi câu hỏi tiếp theo sau khi lượt trước đã hoàn tất.
-5. Nếu lệnh trả lỗi, đọc `next_action.json` và dừng. Không tự gọi lại `run`/`continue`
-   lần hai trong cùng agent turn để “thử nhanh”, vì có thể gửi chồng hoặc đọc nhầm lượt.
+Mỗi range phải chỉ có một `semantic_event_id`, một `action_phase` và một
+`story_purpose`. Ghi `shot_uses` cho từng shot. Hai shot khác tiểu sự kiện, pha hành động
+hoặc ý nghĩa kể chuyện thì bắt buộc tách range, kể cả cùng trận đánh hoặc cuộc nói chuyện.
+Ưu tiên đoạn ngắn đồng nhất hơn đoạn dài lộn xộn.
 
-Khi người dùng hoặc Codex yêu cầu bỏ một chat lỗi và bắt đầu lại, dùng đúng một lệnh:
+Loại opening, ending, recap, credit, quảng cáo, preview và title card không mang thông
+tin. Cold open hoặc post-credit có giá trị cốt truyện được giữ.
 
-```powershell
-uv run python run_episode.py gemini-web new-chat --run "<run_dir>" --phase "<phase>"
-```
+## Xử lý tuần tự
 
-Lệnh này giữ Chrome/profile đăng nhập nhưng tạo cuộc trò chuyện mới, reset liên kết và
-bộ đếm của chat cũ, upload lại full packet của phase. Sau khi lệnh hoàn tất, mọi
-follow-up mới dùng `continue` trong chat vừa tạo. Prompt kiểm định không được ép sẵn
-mọi beat là `MATCH` hoặc `finding_codes: []`; Gemini phải đánh giá theo bằng chứng thật.
+Xử lý tuần tự từng tình huống:
 
-`gemini_web/<phase>/request.json` là danh sách nguồn duy nhất: upload đúng
-`artifact_path` và mọi file trong `evidence_paths`, không lấy ảnh từ phase/run khác.
-Chỉ engine operator được lưu raw response envelope, critic JSON, ảnh giao diện, request
-và `operator_receipt.json`, sau đó ký receipt vào ledger HMAC. Antigravity **không tự tạo receipt**,
-không tự tạo response/critic/screenshot và không khai PASS thay Gemini.
-Engine từ chối mọi file thiếu hash, sai packet hoặc không có ledger entry. **Không dùng FFmpeg tạo ảnh phiên**;
-screenshot phải đến từ DOM Chrome thật.
+1. Đọc transcript và frame để khóa sự thật.
+2. Phân loại chính/phụ và chọn thông tin cần kể.
+3. Chọn các khoảng hình đại diện, bảo đảm có lấy và có bỏ.
+4. Viết lời Việt và câu nối trước/sau. Mỗi cue phải có `visual_anchor_source_ms`,
+   transcript refs, frame refs và shot IDs; giải thích đủ để người chưa biết anime hiểu.
+5. Nộp hai draft qua `accept-antigravity`, gọi engine tạo TTS/timeline và đọc validator.
+6. Nếu engine trả mã lỗi, chỉ sửa đúng tình huống/cue/range được nêu rồi nộp revision mới.
+7. Chỉ khi semantic audit đạt mới khóa tình huống hiện tại.
+8. Chỉ sau đó mới chuyển sang tình huống kế tiếp.
 
-## Atomic beat
-
-`Kich_ban/atomic_storyboard.json` là artifact biên tập chính. Một beat chỉ kể một
-hành động, một phản ứng hoặc một ý bối cảnh. Nhiều shot được phép nằm trong một beat
-nếu cùng minh họa đúng một ý.
-
-Mỗi beat bắt buộc có scene/event/claim/source range/shot, `visual_fact`, nhân vật,
-`sync_mode`, frame bằng chứng, một câu `narration_text`, ước lượng TTS và status.
-
-- `ACTION`/`REACTION`: khai action window chính xác nằm trong source range. Hành động
-  phải bắt đầu không muộn hơn 750 ms sau lúc footage/lời của beat bắt đầu; cửa sổ
-  hành động phải dài ít nhất 1.500 ms và phủ ít nhất 35% TTS ước lượng, trừ hành động
-  ngắn có bằng chứng rõ ràng.
-- `CONTEXT`: action window là `null`, nhưng footage vẫn phải cùng tình huống.
-- Hai hành động khác thời điểm phải tách hai beat.
-- Khóa hình và visual fact trước, sau đó mới viết lời.
-- TTS dài hơn hình: rút hoặc tách lời; không lấy cảnh sai nghĩa để lấp.
-- Joke chỉ đổi cách kể, không bịa hành động, động cơ hay người nói.
-- Tuyệt đối không chọn hình bằng công thức `source_start + thời lượng TTS`. Phải tìm
-  đúng thời điểm hành động rồi mới chọn source range; nếu lời không vừa thì rút/tách
-  lời hoặc thêm shot cùng đúng tình huống.
-- Bỏ OP, ED, credits, next preview, title card, eyecatch, studio logo và cảnh không có
-  giá trị review. Quét toàn tập vì các đoạn này có thể nằm giữa nội dung, không chỉ ở
-  đầu hoặc cuối.
-
-Dùng mẫu trong `Bo_nao_Antigravity/mau/atomic_storyboard.json`. Timestamp dùng mili
-giây. Không suy ra đã xem hình chỉ từ transcript hoặc tên shot: phải mở frame/clip.
-Với hành động nhanh, mở gói frame dày quanh action window.
-
-## Producer và critic phải tách biệt
-
-Lượt tạo storyboard là producer và ghi `producer_context_id`. Sau đó dùng một critic
-context khác để lập `critic_script.json`; hai ID không được giống nhau. Critic mở lại
-frame/clip và tìm sai người, sai hành động, lời đi trước/sau hình, nhiều hành động
-trong một beat, văn dịch máy, lặp công thức, joke gượng và TTS dự kiến không vừa.
-
-Sau khi storyboard hợp lệ, engine tạo
-`atomic_evidence/source/anchors.json`. Critic script bắt buộc mở đủ START/MIDDLE/END
-của mọi source range và ghi cụ thể `observed_visual`, `narration_summary`; không được
-tự chế tên frame hoặc dùng evidence ngoài manifest.
-
-Sau proxy, engine tạo `atomic_evidence/program/anchors.json`. Gemini Web phải mở contact
-sheet dày do engine tạo, đối chiếu đủ ba anchor SOURCE với ba anchor PROGRAM của từng
-range, rồi ghi `sync_verdict`. Nếu lời đi trước, theo sau, sai cảnh hoặc sai hành động
-thì verdict và finding code phải nêu đúng lỗi. Không được tạo critic bằng vòng lặp điền
-mặc định, không được để finding rỗng hàng loạt, không được copy cùng một mô tả cho
-nhiều beat.
-Không có trường `passed`; engine tự tính PASS từ bằng chứng. Dùng mẫu
-`critic_script.json`, `critic_proxy.json` và `critic_final.json`; tất cả phải nằm trong
-`gemini_web/<phase>/` của run, không ghi đè báo cáo của episode. Với JSON, dùng
-`sync_verdict` nội bộ (`NOT_APPLICABLE`, `MATCH`, `VOICE_AHEAD`, `VOICE_BEHIND`,
-`SCENE_MISMATCH`, `ACTION_MISMATCH`); các nhãn dễ hiểu như `VOICE_EARLY` phải được
-ánh xạ sang mã nội bộ và lặp mã đó trong `finding_codes` nếu không phải `MATCH`.
-
-## Trình tự một lần chạy
-
-Sau mọi lệnh, đọc `next_action.json` và thực hiện đúng chỉ dẫn:
-
-```powershell
-uv run python run_episode.py prepare --run "<run_dir>"
-uv run python run_episode.py validate --run "<run_dir>" --artifact truth
-uv run python run_episode.py validate --run "<run_dir>" --artifact scene
-uv run python run_episode.py validate --run "<run_dir>" --artifact storyboard
-uv run python run_episode.py gemini-web run --run "<run_dir>" --phase script
-uv run python run_episode.py tts --run "<run_dir>"
-uv run python run_episode.py validate --run "<run_dir>" --artifact edl
-uv run python run_episode.py render --run "<run_dir>" --quality proxy
-uv run python run_episode.py gemini-web run --run "<run_dir>" --phase proxy
-uv run python run_episode.py render --run "<run_dir>" --quality final
-uv run python run_episode.py gemini-web run --run "<run_dir>" --phase final
-uv run python run_episode.py audit --run "<run_dir>" --phase engine
-```
-
-Khi cần trao đổi lại với Gemini trong cùng chat, dùng `gemini-web continue` theo chỉ
-dẫn `next_action.json`. Sau khi phase FINAL và engine audit đạt, dọn Chrome bằng:
-
-```powershell
-uv run python run_episode.py gemini-web stop --run "<run_dir>"
-```
-
-Trước khi phase FINAL và engine audit đạt, không được chạy `gemini-web stop`,
-`Stop-Process`, `taskkill` hay bất kỳ lệnh kill Chrome nào. Khi engine cần người dùng
-đăng nhập hoặc chọn model mà cửa sổ chưa hiện, giữ nguyên phiên và chạy:
-
-```powershell
-uv run python run_episode.py gemini-web show --run "<run_dir>"
-```
-
-Sau đó báo người dùng thao tác trên cửa sổ vừa được đưa ra màn hình; không tự đóng,
-không khởi tạo lại profile và không xóa metadata phiên.
-
-Chỉ chạy lệnh phù hợp stage hiện tại; run có thể đã prepare trước. Nếu validation ghi
-stage `SUA_BEAT`, chỉ sửa các beat/finding được nêu rồi chạy `resume` với phase mới
-nhất: `script`, `tts` hoặc `video`.
-
-```powershell
-uv run python run_episode.py resume --run "<run_dir>" --phase video
-```
-
-Tối đa ba vòng; không làm lại beat sạch. TTS cache chỉ reuse trong cùng `revision_id` và
-cùng SHA-256 nguồn; revision mới tự động miss để không dính audio cũ. Không xóa `_Cache`
-trong lúc cùng revision.
+Không làm lại tình huống đã khóa nếu fingerprint và lỗi không thay đổi. Không tự ghi
+PASS; validator local kiểm range, gap, duration, TTS, EDL, frame và render.
 
 ## Văn phong
 
-Viết như người Việt đang kể chuyện tự nhiên, gọn và có nhịp; hài hợp Gen Z 2026 nhưng
-không cố nhét meme. Được dùng từ thô khi đúng cảm xúc. Tránh chuỗi câu mở bằng “lúc
-này”, “ngay sau đó”, “không ngờ rằng”, tránh văn dịch và tính từ điện ảnh sáo rỗng.
-Không dùng một khuôn câu lặp suốt tập. Ưu tiên động từ cụ thể và phản ứng thật trên
-hình.
+Viết như người Việt đang kể chuyện: dân dã, tự nhiên, gọn, có thể thô tục khi đúng cảm
+xúc. Không chửi dày đặc, không dịch sát tiếng Anh, không nhét meme gượng, không kéo dài
+bằng câu sáo rỗng. Joke chỉ đổi cách kể, không bịa hành động, động cơ hoặc người nói.
 
 ## Điều kiện dừng
 
-Chỉ báo `HOAN_THANH` khi engine audit đã xuất
-`Thanh_pham/review_anime.mp4`. Báo đường dẫn MP4, thời gian từng stage, cache hit/miss,
-beat đã sửa và finding đã xử lý. Nếu stage là `CAN_CON_NGUOI_XU_LY` hoặc có
-`BRAIN_CHANGE_REQUESTED`, báo đúng lỗi và dừng; không tuyên bố video đạt.
-
-Engine audit sẽ chặn nếu thiếu metric thật của các stage storyboard, critic script,
-TTS, proxy, critic video và final. Một báo cáo văn bản tự nhận PASS không thay thế
-được metric, anchor hoặc validation.
+Sau khi toàn tập đạt audit, dựng proxy và dừng để người dùng duyệt. Không tự duyệt proxy.
+Chỉ báo hoàn thành khi người dùng đã duyệt, engine audit cuối đạt và tạo
+`review_anime.mp4`. Nếu thiếu công cụ, dependency, plugin hoặc MCP, báo chính xác thứ cần
+người dùng cài rồi dừng; không tự cài. Nếu thiếu bằng chứng hoặc hai vòng không có tiến
+triển, báo đúng mã lỗi và dừng.
