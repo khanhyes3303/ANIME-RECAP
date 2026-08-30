@@ -21,7 +21,6 @@ from anime_review_mvp.situation_index import (
     validate_situation_index,
 )
 
-
 SOURCE = SourceRef("episode.mp4", "a" * 64, 20_000, 1920, 1080, "1/1000", 1)
 TRANSCRIPT = TranscriptDocument(
     "en",

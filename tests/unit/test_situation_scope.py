@@ -28,7 +28,6 @@ from anime_review_mvp.situations import (
     SituationDocument,
 )
 
-
 ENTRY = SituationIndexEntry(
     "situation-002",
     5_000,

@@ -5,8 +5,8 @@ from pathlib import Path
 
 from .editor_provenance import EditorTask
 from .errors import MvpError
-from .models import ShotDocument, SourceRef, TranscriptDocument
 from .jsonio import load_json
+from .models import ShotDocument, SourceRef, TranscriptDocument
 from .situation_scope import SituationScope, load_situation_scope
 from .situations import EditorialPolicy, StoryContext
 

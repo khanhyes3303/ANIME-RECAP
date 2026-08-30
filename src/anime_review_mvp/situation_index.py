@@ -8,7 +8,6 @@ from .errors import MvpError
 from .jsonio import load_json
 from .models import ShotDocument, SourceRef, TranscriptDocument
 
-
 _SITUATION_ID = re.compile(r"situation-\d{3,}")
 
 

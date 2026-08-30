@@ -13,12 +13,12 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TranscriptSegment,
 )
+from anime_review_mvp.situation_index import SituationIndexEntry
 from anime_review_mvp.situation_packets import (
     build_scoped_situation_editor_packet,
     build_situation_editor_packet,
     render_situation_editor_prompt,
 )
-from anime_review_mvp.situation_index import SituationIndexEntry
 from anime_review_mvp.situation_scope import materialize_situation_scope
 from anime_review_mvp.situations import EditorialPolicy, StoryContext
 

@@ -8,8 +8,8 @@ import pytest
 from anime_review_mvp.editor_provenance import (
     accept_antigravity_submission,
     create_editor_task,
-    load_editor_task,
     load_editor_ledger,
+    load_editor_task,
     require_antigravity_provenance,
 )
 from anime_review_mvp.errors import MvpError
