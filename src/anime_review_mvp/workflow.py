@@ -595,6 +595,22 @@ def begin_verifier_task(
     return state
 
 
+def begin_proxy_verifier_task(run_dir: Path, task_id: str, revision: int) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY:
+        raise MvpError("proxy verifier task can only begin at its wait stage")
+    if not task_id.strip() or revision < 1:
+        raise MvpError("proxy verifier task ID and revision are required")
+    state = replace(
+        state,
+        verifier_task_id=task_id.strip(),
+        current_situation_id="__episode__",
+        editorial_revision=revision,
+    )
+    _write_state(state)
+    return state
+
+
 def route_verifier_repair(
     run_dir: Path,
     situation_id: str,
@@ -669,6 +685,45 @@ def route_verifier_repair(
             last_verifier_codes=codes,
             verifier_stall_count=1,
             editorial_revision=max(1, state.editorial_revision + 1),
+        )
+    _write_state(state)
+    return state
+
+
+def route_proxy_verifier_repair(
+    run_dir: Path, situation_ids: tuple[str, ...], codes: tuple[str, ...], fingerprint: str
+) -> RunState:
+    state = read_state(run_dir)
+    normalized = tuple(dict.fromkeys(item.strip() for item in situation_ids if item.strip()))
+    if state.stage is not Stage.KIEM_DINH_PHAN_BIEN_PROXY:
+        raise MvpError("proxy verifier repair can only route from proxy validation")
+    if not normalized or not codes:
+        raise MvpError("proxy verifier repair requires situations and finding codes")
+    if len(fingerprint) != 64 or any(c not in "0123456789abcdef" for c in fingerprint):
+        raise MvpError("verifier repair fingerprint must be a lowercase SHA-256")
+    history = (*state.repair_history, RepairRecord("ANTIGRAVITY", codes, "VERIFIER", normalized))
+    repeated = state.last_verifier_fingerprint == fingerprint and state.last_verifier_codes == codes
+    stalled = state.verifier_stall_count + 1 if repeated else 1
+    if repeated and stalled >= 2:
+        state = replace(
+            state,
+            stage=Stage.CAN_CON_NGUOI_XU_LY,
+            repair_history=(*history, RepairRecord("ANTIGRAVITY", ("ANTIGRAVITY_VERIFIER_NO_PROGRESS",), "HUMAN")),
+            verifier_task_id="", last_verifier_fingerprint=fingerprint,
+            last_verifier_codes=codes, verifier_stall_count=stalled,
+        )
+    else:
+        state = replace(
+            state,
+            stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+            repair_history=history, current_situation_id=normalized[0],
+            locked_situation_ids=tuple(
+                item for item in state.locked_situation_ids if item not in normalized
+            ),
+            last_verifier_fingerprint=fingerprint, last_verifier_codes=codes,
+            verifier_stall_count=stalled, verifier_task_id="",
+            editorial_revision=max(1, state.editorial_revision + 1),
+            approved_proxy_sha256="", approved_artifact_sha256="",
         )
     _write_state(state)
     return state

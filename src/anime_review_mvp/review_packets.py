@@ -5,10 +5,10 @@ from pathlib import Path
 
 from .editor_provenance import EditorTask
 from .errors import MvpError
-from .review_contracts import CueSemanticVerdict, SituationAuditDocument
+from .proxy_evidence import ProxyEvidenceManifest
+from .review_contracts import SituationAuditDocument
 from .situation_scope import SituationScope
 from .situations import NarrationPlan
-from .proxy_evidence import ProxyEvidenceManifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +144,22 @@ def build_proxy_audit_packet(
     if len(evidence.boundaries) != 2:
         raise MvpError("VERIFIER_BOUNDARY_COVERAGE_INVALID")
     return ProxyAuditPacket(producer_context_id, verifier_context_id, evidence, str(loudness_report_path), ("proxy_audit_draft.json",))
+
+
+def render_proxy_audit_prompt(packet: ProxyAuditPacket) -> str:
+    """Render the single episode-level proxy verifier instruction."""
+    return (
+        "Bạn là verifier độc lập của Antigravity cho toàn bộ proxy. "
+        "Đọc proxy evidence manifest, từng cue, transcript/SRT, source/program frames "
+        "và loudness report; không tự suy đoán khi thiếu bằng chứng.\n"
+        "Ghi đúng một proxy_audit_draft.json, gồm đúng một verdict cho mỗi cue "
+        "(MATCH, MISMATCH hoặc INSUFFICIENT_EVIDENCE) và đúng hai boundary START/END.\n"
+        "Kiểm tra voice có đi trước hình, cue có trộn nhiều tình huống, và START/END "
+        "có lọt intro/opening/ending/credits/preview hay không.\n"
+        f"Producer context: {packet.producer_context_id}\n"
+        f"Verifier context: {packet.verifier_context_id}\n"
+        "Không sửa artifact producer; sau khi ghi file báo đường dẫn để chạy accept-verifier.\n"
+    )
 
 
 def validate_proxy_audit(

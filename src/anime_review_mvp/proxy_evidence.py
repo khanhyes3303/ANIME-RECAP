@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-import subprocess
 
 from .adaptive_edl import AdaptiveEdlDocument
 from .errors import MvpError
 from .jsonio import dump_json
 from .media import capture_frame
+from .models import TranscriptDocument
 from .semantic_timeline import SemanticTimeline
 from .situation_index import SituationIndexDocument
 from .situation_validation import validate_edl_exclusions
 from .situations import NarrationPlan
-from .models import TranscriptDocument
 
 Runner = Callable[..., object]
 _FRAME_POSITIONS = ("START", "ANCHOR", "MIDDLE", "END")

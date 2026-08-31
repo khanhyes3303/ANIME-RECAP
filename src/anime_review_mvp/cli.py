@@ -93,8 +93,19 @@ from .models import (
     SpanTtsManifest,
     TranscriptDocument,
 )
+from .operator import plan_operator_step
 from .proxy_approval import approve_proxy, reject_proxy, require_approved_artifacts
-from .render import RenderResult, render_review
+from .proxy_evidence import ProxyEvidenceManifest, extract_cue_proxy_evidence
+from .render import RenderResult, normalize_narration_loudness, render_review
+from .review_contracts import LoudnessReport, ProxyAuditDocument, SituationAuditDocument
+from .review_packets import (
+    build_proxy_audit_packet,
+    build_situation_audit_packet,
+    render_proxy_audit_prompt,
+    render_situation_audit_prompt,
+    validate_proxy_audit,
+    validate_situation_audit,
+)
 from .semantic_timeline import SemanticTimeline, build_semantic_timeline
 from .situation_index import load_situation_index, next_editable_situation
 from .situation_packets import (
@@ -147,8 +158,9 @@ from .workflow import (
     accept_structure_index,
     advance,
     begin_editor_task,
-    begin_verifier_task,
+    begin_proxy_verifier_task,
     begin_structure_task,
+    begin_verifier_task,
     fallback_to_legacy_observation,
     lock_editor_situation,
     lock_situation,
@@ -164,16 +176,10 @@ from .workflow import (
     resume_beat_repair,
     resume_browser_review,
     route_editor_repair,
+    route_proxy_verifier_repair,
     route_verifier_repair,
 )
 from .workspace import assert_inside_run, create_job, publish_candidate
-from .operator import plan_operator_step
-from .review_packets import (
-    build_situation_audit_packet,
-    render_situation_audit_prompt,
-    validate_situation_audit,
-)
-from .review_contracts import SituationAuditDocument
 
 
 def _elapsed_ms(started: float) -> int:
@@ -275,7 +281,7 @@ def _parser() -> argparse.ArgumentParser:
     operator.add_argument("--run", required=True, type=Path)
     verifier_task = subparsers.add_parser("verifier-task")
     verifier_task.add_argument("--run", required=True, type=Path)
-    verifier_task.add_argument("--kind", required=True, choices=("situation",))
+    verifier_task.add_argument("--kind", required=True, choices=("situation", "proxy"))
     accept_verifier = subparsers.add_parser("accept-verifier")
     accept_verifier.add_argument("--run", required=True, type=Path)
     accept_verifier.add_argument("--task", required=True)
@@ -394,6 +400,8 @@ def _operator_command(run_dir: Path) -> int:
 
 
 def _verifier_task_command(run_dir: Path, kind: str) -> int:
+    if kind == "proxy":
+        return _proxy_verifier_task_command(run_dir)
     if kind != "situation":
         raise MvpError("unsupported verifier task kind")
     state, episode = _episode(run_dir)
@@ -432,15 +440,104 @@ def _verifier_task_command(run_dir: Path, kind: str) -> int:
     return 0
 
 
+def _proxy_verifier_task_command(run_dir: Path) -> int:
+    state, episode = _episode(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY:
+        raise MvpError("verifier-task requires proxy verifier wait stage")
+    evidence_path = run_dir / "proxy_evidence" / "proxy_evidence_manifest.json"
+    loudness_path = run_dir / "loudness_report.json"
+    required = (
+        evidence_path,
+        loudness_path,
+        episode / "Kich_ban" / "narration_plan.json",
+        run_dir / "semantic_timeline.json",
+        run_dir / "adaptive_edl.json",
+        run_dir / "proxy" / "render_result.json",
+    )
+    if any(not path.is_file() for path in required):
+        raise MvpError("proxy verifier packet inputs are incomplete")
+    producer_records = load_editor_ledger(run_dir / "editor_ledger.jsonl")
+    if not producer_records:
+        raise MvpError("proxy verifier requires accepted producer editorial provenance")
+    producer = producer_records[-1]
+    verifier = create_editor_task(
+        run_dir,
+        run_dir.name,
+        "__episode__",
+        max(1, state.editorial_revision),
+        tuple(path for path in required),
+        task_kind="PROXY_AUDIT",
+        allowed_outputs=("proxy_audit_draft.json",),
+        expected_stage="ANTIGRAVITY_VERIFIER",
+    )
+    begin_proxy_verifier_task(run_dir, verifier.task_id, verifier.revision)
+    evidence = load_json(evidence_path, ProxyEvidenceManifest)
+    packet = build_proxy_audit_packet(
+        evidence,
+        loudness_path,
+        f"producer:{producer.task_id}:{producer.input_sha256}",
+        f"verifier:{verifier.task_id}:{verifier.input_sha256}",
+    )
+    dump_json(run_dir / "cong_viec_antigravity.json", packet)
+    (run_dir / "PROMPT_GUI_ANTIGRAVITY.txt").write_text(
+        render_proxy_audit_prompt(packet), encoding="utf-8"
+    )
+    staging = run_dir / "editor_staging" / verifier.task_id
+    _write_next(
+        run_dir,
+        "Verifier kiểm tra toàn bộ proxy theo từng cue và boundary START/END; chỉ ghi "
+        f'proxy_audit_draft.json rồi chạy accept-verifier --run "{run_dir}" --task '
+        f'{verifier.task_id} --input "{staging}".',
+    )
+    print(run_dir / "cong_viec_antigravity.json")
+    return 0
+
+
 def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> int:
     state, episode = _episode(run_dir)
     task = load_editor_task(run_dir / "editor_tasks" / f"{task_id}.json")
-    if task.task_kind != "SITUATION_AUDIT" or state.verifier_task_id != task_id:
+    if state.verifier_task_id != task_id:
         raise MvpError("verifier task does not match the active task")
+    if task.task_kind == "PROXY_AUDIT":
+        if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY:
+            raise MvpError("proxy verifier acceptance requires proxy verifier wait stage")
+        audit = load_json(staging_dir / "proxy_audit_draft.json", ProxyAuditDocument)
+        plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
+        evidence = load_json(
+            run_dir / "proxy_evidence" / "proxy_evidence_manifest.json",
+            ProxyEvidenceManifest,
+        )
+        validation = validate_proxy_audit(audit, plan, evidence)
+        if not validation.passed:
+            by_cue = {cue.cue_id: cue.situation_id for unit in plan.units for cue in unit.cues}
+            affected = tuple(dict.fromkeys(by_cue[item.cue_id] for item in audit.cue_reviews if item.verdict != "MATCH" and item.cue_id in by_cue))
+            if not affected:
+                affected = tuple(unit.situation_id for unit in plan.units)
+            fingerprint = content_fingerprint((staging_dir / "proxy_audit_draft.json",))
+            route_proxy_verifier_repair(run_dir, affected, validation.finding_codes, fingerprint)
+            _write_next(run_dir, "Verifier proxy phát hiện lỗi; Antigravity sửa đúng tình huống/cue bị ảnh hưởng rồi chạy operator.")
+            return 1
+        ledger = run_dir / "verifier_ledger.jsonl"
+        from .editor_provenance import AcceptedVerifierRevision
+        from .jsonio import atomic_append_jsonl
+        atomic_append_jsonl(
+            ledger,
+            AcceptedVerifierRevision(
+                task.task_id, task.run_id, task.task_kind, task.situation_id,
+                task.revision, "ANTIGRAVITY_VERIFIER", task.input_sha256,
+                content_fingerprint((staging_dir / "proxy_audit_draft.json",)),
+            ),
+        )
+        advance(run_dir, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY, Stage.KIEM_DINH_PHAN_BIEN_PROXY)
+        advance(run_dir, Stage.KIEM_DINH_PHAN_BIEN_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
+        _write_next(run_dir, "Proxy đã qua kiểm định độc lập từng cue và boundary; chờ người dùng duyệt proxy.")
+        return 0
+    if task.task_kind != "SITUATION_AUDIT":
+        raise MvpError("unsupported verifier task kind")
     audit_path = staging_dir / "situation_audit_draft.json"
     audit = load_json(audit_path, SituationAuditDocument)
     plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
-    scope = load_situation_scope(
+    _scope = load_situation_scope(
         run_dir / "situation_inputs" / task.situation_id / "scope.json", verify_files=True
     )
     if audit.situation_id != task.situation_id:
@@ -455,8 +552,8 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
         return 1
     # A successful verifier is independently recorded before the situation is locked.
     ledger = run_dir / "verifier_ledger.jsonl"
-    from .jsonio import atomic_append_jsonl
     from .editor_provenance import AcceptedVerifierRevision
+    from .jsonio import atomic_append_jsonl
     accepted = AcceptedVerifierRevision(
         task.task_id, task.run_id, task.task_kind, task.situation_id, task.revision,
         "ANTIGRAVITY_VERIFIER", task.input_sha256, content_fingerprint((audit_path,))
@@ -921,6 +1018,10 @@ def _render(run_dir: Path, quality: str = "final") -> int:
         if state.editorial_revision >= 1:
             if not narration_path.is_file():
                 raise MvpError("aligned narration audio is missing")
+            normalized_path = run_dir / "normalized_narration.wav"
+            loudness = normalize_narration_loudness(narration_path, normalized_path)
+            dump_json(run_dir / "loudness_report.json", loudness)
+            narration_path = normalized_path
         else:
             tts = load_json(
                 episode / "TTS" / "situation_tts_manifest.json",
@@ -2027,6 +2128,9 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
     tts = load_json(run_dir / "cue_tts_manifest.json", CueTtsManifest)
     edl = load_json(run_dir / "adaptive_edl.json", AdaptiveEdlDocument)
     render = load_json(run_dir / "proxy" / "render_result.json", RenderResult)
+    loudness_path = run_dir / "loudness_report.json"
+    if not loudness_path.is_file():
+        raise MvpError("proxy audit requires loudness_report.json")
     context_path = run_dir / "story_context.json"
     context = (
         load_json(context_path, StoryContext)
@@ -2035,7 +2139,8 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
     )
     provenance = load_editor_ledger(run_dir / "editor_ledger.jsonl")
     report = build_v2_local_audit(
-        plan, situations, timeline, tts, edl, render, provenance, context
+        plan, situations, timeline, tts, edl, render, provenance, context,
+        load_json(loudness_path, LoudnessReport),
     )
     dump_json(run_dir / "proxy" / "v2_audit.json", report)
     if not report.passed:
@@ -2051,13 +2156,21 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
         route_editor_repair(run_dir, situation_ids, codes, fingerprint)
         _write_next(run_dir, f"Antigravity sửa lỗi proxy: {', '.join(codes)}.")
         return 1
-    advance(run_dir, Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
-    _write_next(
-        run_dir,
-        "Proxy đã đạt kiểm định. Hãy xem video rồi chọn đúng một lệnh: "
-        f"approve-proxy --run \"{run_dir}\" hoặc reject-proxy --run \"{run_dir}\" "
-        "--note \"mô tả lỗi\" --situation situation-XXX. Hệ thống không tự duyệt.",
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    index = load_situation_index(
+        run_dir / "situation_index.json", source,
+        load_json(run_dir / "transcript_english.json", TranscriptDocument),
+        load_json(run_dir / "shots.json", ShotDocument), _frame_refs(run_dir),
     )
+    evidence = extract_cue_proxy_evidence(
+        Path(state.source_video), run_dir / "proxy" / "review_proxy.mp4",
+        plan, timeline, edl, index,
+        load_json(run_dir / "transcript_english.json", TranscriptDocument),
+        run_dir / "proxy_evidence",
+    )
+    dump_json(run_dir / "proxy_evidence" / "proxy_evidence_manifest.json", evidence)
+    advance(run_dir, Stage.KIEM_DINH_PROXY, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY)
+    _write_next(run_dir, "Proxy đạt kiểm định máy; chạy verifier-task --kind proxy để Antigravity đối chiếu từng cue và boundary START/END.")
     return 0
 
 
