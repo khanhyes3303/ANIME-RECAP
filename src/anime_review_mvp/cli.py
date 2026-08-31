@@ -323,7 +323,13 @@ def _episode(run_dir: Path) -> tuple[object, Path]:
     return state, Path(state.episode_dir)
 
 
-def _write_next(run_dir: Path, instruction: str, *, code: str | None = None) -> None:
+def _write_next(
+    run_dir: Path,
+    instruction: str,
+    *,
+    code: str | None = None,
+    required_tool_code: str | None = None,
+) -> None:
     state = read_state(run_dir)
     payload = {
         "stage": state.stage.value,
@@ -332,6 +338,8 @@ def _write_next(run_dir: Path, instruction: str, *, code: str | None = None) -> 
     }
     if code is not None:
         payload["code"] = code
+    if required_tool_code is not None:
+        payload["required_tool_code"] = required_tool_code
     (run_dir / "next_action.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -387,6 +395,11 @@ def _operator_command(run_dir: Path) -> int:
         "stage": state.stage.value,
         "task_id": state.editor_task_id or state.verifier_task_id,
         "instruction": next_payload.get("instruction", ""),
+        # This flag makes the handoff explicit: Antigravity must complete the
+        # prepared job, then invoke `operator` again.  The stable action names
+        # remain backwards-compatible with existing integrations.
+        "antigravity_work_required": directive.action
+        in {"PREPARE_STRUCTURE_JOB", "PREPARE_SITUATION_JOB"},
     }
     if directive.situation_id:
         status["situation_id"] = directive.situation_id
@@ -617,7 +630,19 @@ def _prepare(run_dir: Path) -> int:
     try:
         preflight_media_tools()
     except MvpError as exc:
-        _write_next(run_dir, str(exc), code="THIEU_CONG_CU")
+        message = str(exc)
+        tool_code = None
+        marker = "missing required tools:"
+        if marker in message:
+            names = message.split(marker, 1)[1].split(";", 1)[0].strip()
+            if names:
+                tool_code = f"MISSING_REQUIRED_TOOL:{names}"
+        _write_next(
+            run_dir,
+            message,
+            code="THIEU_CONG_CU",
+            required_tool_code=tool_code,
+        )
         raise
     source = probe_source(Path(state.source_video))
     dump_json(episode / "Dau_vao" / "source_ref.json", source)

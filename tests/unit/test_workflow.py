@@ -24,6 +24,7 @@ from anime_review_mvp.workflow import (
     record_stage_metric,
     resume_beat_repair,
     route_editor_repair,
+    route_proxy_verifier_repair,
     route_verifier_repair,
 )
 
@@ -370,6 +371,28 @@ def test_same_verifier_failure_twice_stops_for_human(tmp_path: Path) -> None:
     assert len(verifier_entries) == 2
     assert verifier_entries[0].codes == ("SCENE_MISMATCH",)
     assert verifier_entries[1].codes == ("SCENE_MISMATCH",)
+    assert stopped.repair_history[-1].codes == ("ANTIGRAVITY_VERIFIER_NO_PROGRESS",)
+
+
+def test_same_proxy_verifier_failure_twice_stops_for_human(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_PHAN_BIEN_PROXY)
+
+    first = route_proxy_verifier_repair(
+        run,
+        ("situation-004",),
+        ("INTRO_OPENING_LEAK",),
+        "c" * 64,
+    )
+    stopped = route_proxy_verifier_repair(
+        run,
+        ("situation-004",),
+        ("INTRO_OPENING_LEAK",),
+        "c" * 64,
+    )
+
+    assert first.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert stopped.stage is Stage.CAN_CON_NGUOI_XU_LY
     assert stopped.repair_history[-1].codes == ("ANTIGRAVITY_VERIFIER_NO_PROGRESS",)
 
 

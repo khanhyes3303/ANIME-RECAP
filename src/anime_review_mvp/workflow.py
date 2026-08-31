@@ -695,7 +695,16 @@ def route_proxy_verifier_repair(
 ) -> RunState:
     state = read_state(run_dir)
     normalized = tuple(dict.fromkeys(item.strip() for item in situation_ids if item.strip()))
-    if state.stage is not Stage.KIEM_DINH_PHAN_BIEN_PROXY:
+    # After the first failed proxy audit the operator deliberately returns to
+    # the situation-editor wait stage.  A second identical audit must still be
+    # routable so the no-progress guard can stop instead of rejecting the
+    # verifier result as being in the wrong stage.
+    repeated_wait_stage = (
+        state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+        and state.last_verifier_fingerprint == fingerprint
+        and state.last_verifier_codes == codes
+    )
+    if state.stage is not Stage.KIEM_DINH_PHAN_BIEN_PROXY and not repeated_wait_stage:
         raise MvpError("proxy verifier repair can only route from proxy validation")
     if not normalized or not codes:
         raise MvpError("proxy verifier repair requires situations and finding codes")
