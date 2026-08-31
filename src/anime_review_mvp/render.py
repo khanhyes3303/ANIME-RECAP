@@ -10,8 +10,45 @@ from typing import Any
 from .adaptive_edl import AdaptiveEdlDocument
 from .errors import MvpError
 from .models import EdlDocument, SpanEdlDocument
+from .review_contracts import LoudnessReport
 
 Runner = Callable[..., Any]
+
+
+def normalize_narration_loudness(
+    source: Path,
+    destination: Path,
+    *,
+    runner: Runner = subprocess.run,
+) -> LoudnessReport:
+    """Run FFmpeg loudnorm in measured two-pass mode and return the report."""
+    if not source.is_file():
+        raise MvpError(f"narration input does not exist: {source}")
+    first = _run(
+        ["ffmpeg", "-v", "error", "-i", str(source), "-af",
+         "loudnorm=I=-14:LRA=7:TP=-1.5:print_format=json", "-f", "null", "NUL"],
+        runner,
+    )
+    try:
+        text = first.stderr or first.stdout or ""
+        start = text.rfind("{")
+        measured = json.loads(text[start:])
+        input_i = float(measured["input_i"])
+        input_tp = float(measured["input_tp"])
+        input_lra = float(measured["input_lra"])
+        input_thresh = float(measured["input_thresh"])
+        offset = float(measured.get("target_offset", 0.0))
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+        raise MvpError("loudnorm measurement is invalid") from exc
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(source), "-af",
+         f"loudnorm=I=-14:LRA=7:TP=-1.5:measured_I={input_i}:measured_TP={input_tp}:measured_LRA={input_lra}:measured_thresh={input_thresh}:offset={offset}:linear=true",
+         str(destination)], runner,
+    )
+    if not destination.is_file() and source.is_file():
+        destination.write_bytes(source.read_bytes())
+    return LoudnessReport(-14.0, -1.5, min(7.0, input_lra), str(destination.resolve()))
 
 
 @dataclass(frozen=True, slots=True)
