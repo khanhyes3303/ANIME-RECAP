@@ -89,6 +89,7 @@ def _validate_cue_reviews(cue_reviews: tuple[CueSemanticVerdict, ...]) -> None:
 class SituationAuditDocument:
     editor: str
     policy_version: str
+    situation_id: str
     producer_task_id: str
     producer_context_id: str
     verifier_context_id: str
@@ -97,13 +98,15 @@ class SituationAuditDocument:
     def __post_init__(self) -> None:
         if not self.editor.strip() or not self.policy_version.strip():
             raise MvpError("VERIFIER_AUDIT_INVALID")
-        if not self.producer_task_id.strip():
+        if not self.situation_id.strip() or not self.producer_task_id.strip():
             raise MvpError("VERIFIER_AUDIT_INVALID")
         _validate_context_independence(
             self.producer_context_id,
             self.verifier_context_id,
         )
         _validate_cue_reviews(self.cue_reviews)
+        if any(review.situation_id != self.situation_id for review in self.cue_reviews):
+            raise MvpError("VERIFIER_SITUATION_SCOPE_INVALID")
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +126,8 @@ class ProxyAuditDocument:
             self.verifier_context_id,
         )
         _validate_cue_reviews(self.cue_reviews)
-        boundaries = {review.boundary for review in self.boundary_reviews}
-        if len(boundaries) != len(self.boundary_reviews):
-            raise MvpError("VERIFIER_BOUNDARY_DUPLICATE")
+        if len(self.boundary_reviews) != 2:
+            raise MvpError("VERIFIER_BOUNDARY_COVERAGE_INVALID")
+        boundaries = tuple(review.boundary for review in self.boundary_reviews)
+        if boundaries.count("START") != 1 or boundaries.count("END") != 1:
+            raise MvpError("VERIFIER_BOUNDARY_COVERAGE_INVALID")
