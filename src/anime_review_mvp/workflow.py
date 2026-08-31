@@ -577,6 +577,24 @@ def route_editor_repair(
     return state
 
 
+def begin_verifier_task(
+    run_dir: Path, task_id: str, situation_id: str, revision: int
+) -> RunState:
+    state = read_state(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG:
+        raise MvpError("verifier task can only begin at its wait stage")
+    if not task_id.strip() or not situation_id.strip() or revision < 1:
+        raise MvpError("verifier task ID, situation ID, and revision are required")
+    state = replace(
+        state,
+        verifier_task_id=task_id.strip(),
+        current_situation_id=situation_id.strip(),
+        editorial_revision=revision,
+    )
+    _write_state(state)
+    return state
+
+
 def route_verifier_repair(
     run_dir: Path,
     situation_id: str,
