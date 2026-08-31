@@ -6,6 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .errors import MvpError
+from .run_identity import capture_run_code_identity
 
 
 class Stage(StrEnum):
@@ -76,6 +77,9 @@ class RunState:
     stage: Stage
     episode_dir: str = ""
     source_video: str = ""
+    repository_root: str = ""
+    code_commit: str = ""
+    contract_version: str = ""
     repair_history: tuple[RepairRecord, ...] = ()
     stage_metrics: tuple[StageMetric, ...] = ()
     locked_situation_ids: tuple[str, ...] = ()
@@ -208,11 +212,15 @@ def new_state(
     source_video: Path | None = None,
 ) -> RunState:
     run_dir.mkdir(parents=True, exist_ok=True)
+    identity = capture_run_code_identity(Path(__file__).resolve().parents[2])
     state = RunState(
         run_dir=run_dir.resolve(),
         stage=stage,
         episode_dir=str(episode_dir.resolve()) if episode_dir else "",
         source_video=str(source_video.resolve()) if source_video else "",
+        repository_root=identity.repository_root,
+        code_commit=identity.git_commit,
+        contract_version=identity.contract_version,
     )
     _write_state(state)
     return state
@@ -255,12 +263,19 @@ def read_state(run_dir: Path) -> RunState:
             "last_verifier_codes",
             "verifier_stall_count",
         }
+        identity_fields = {
+            *verifier_fields,
+            "repository_root",
+            "code_commit",
+            "contract_version",
+        }
         if frozenset(raw) not in {
             frozenset(legacy_fields),
             frozenset(current_fields),
             frozenset(previous_v2_fields),
             frozenset(v2_fields),
             frozenset(verifier_fields),
+            frozenset(identity_fields),
         }:
             raise MvpError("run state fields do not match the contract")
         return RunState(
@@ -268,6 +283,9 @@ def read_state(run_dir: Path) -> RunState:
             stage=Stage(raw["stage"]),
             episode_dir=raw["episode_dir"],
             source_video=raw["source_video"],
+            repository_root=raw.get("repository_root", ""),
+            code_commit=raw.get("code_commit", ""),
+            contract_version=raw.get("contract_version", ""),
             repair_history=tuple(
                 RepairRecord(
                     item["owner"],

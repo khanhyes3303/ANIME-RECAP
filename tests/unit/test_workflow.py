@@ -36,6 +36,14 @@ def test_state_machine_is_linear_and_fail_closed(tmp_path: Path) -> None:
         advance(state.run_dir, Stage.CHUAN_BI, Stage.TAO_TTS)
 
 
+def test_new_state_persists_engine_repository_identity(tmp_path: Path) -> None:
+    state = read_state(new_state(tmp_path / "run").run_dir)
+
+    assert Path(state.repository_root).resolve() == Path(__file__).resolve().parents[2]
+    assert len(state.code_commit) == 40
+    assert state.contract_version == "anime-review-v3"
+
+
 def test_state_advances_only_from_persisted_expected_stage(tmp_path: Path) -> None:
     state = new_state(tmp_path / "run")
     advanced = advance(state.run_dir, Stage.CHUAN_BI, Stage.QUAN_SAT)

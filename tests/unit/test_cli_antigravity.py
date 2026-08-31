@@ -31,6 +31,32 @@ from anime_review_mvp.models import (
 from anime_review_mvp.workflow import Stage, advance, new_state, read_state
 
 
+def test_cli_rejects_run_created_by_another_checkout(tmp_path: Path) -> None:
+    episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
+    episode.mkdir(parents=True)
+    run = tmp_path / "Tam_dang_xu_ly" / "run"
+    new_state(run, episode_dir=episode)
+    state_path = run / "run_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["repository_root"] = str((tmp_path / "different-checkout").resolve())
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(MvpError, match="RUN_CODE_IDENTITY_MISMATCH"):
+        cli._episode(run)
+
+
+def test_autonomous_prompt_uses_absolute_engine_entrypoint(tmp_path: Path) -> None:
+    rendered = cli._autonomous_task_prompt(
+        "Làm job hiện tại.",
+        tmp_path / "run",
+        "accept-antigravity --task task-001",
+    )
+    entrypoint = Path(cli.__file__).resolve().parents[2] / "run_episode.py"
+
+    assert f'uv run python "{entrypoint}" accept-antigravity' in rendered
+    assert f'uv run python "{entrypoint}" operator' in rendered
+
+
 def _prepared_storyboard_run(tmp_path: Path) -> tuple[Path, Path]:
     episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
     for name in (

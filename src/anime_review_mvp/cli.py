@@ -100,6 +100,11 @@ from .proxy_evidence import ProxyEvidenceManifest, extract_cue_proxy_evidence
 from .reference_profile import ReferenceStyleProfile, load_reference_profile
 from .render import RenderResult, normalize_narration_loudness, render_review
 from .review_contracts import LoudnessReport, ProxyAuditDocument, SituationAuditDocument
+from .run_identity import (
+    RunCodeIdentity,
+    capture_run_code_identity,
+    validate_run_code_identity,
+)
 from .review_packets import (
     build_proxy_audit_packet,
     build_situation_audit_packet,
@@ -326,6 +331,16 @@ def _start(args: argparse.Namespace) -> int:
 
 def _episode(run_dir: Path) -> tuple[object, Path]:
     state = read_state(run_dir)
+    recorded = (
+        RunCodeIdentity(
+            state.repository_root,
+            state.code_commit,
+            state.contract_version,
+        )
+        if state.repository_root and state.code_commit and state.contract_version
+        else capture_run_code_identity(run_dir)
+    )
+    validate_run_code_identity(run_dir, recorded)
     if not state.episode_dir:
         raise MvpError("run state has no episode directory")
     return state, Path(state.episode_dir)
@@ -365,13 +380,14 @@ def _write_next(
 
 def _autonomous_task_prompt(prompt: str, run_dir: Path, accept_command: str) -> str:
     resolved_run = run_dir.resolve()
+    entrypoint = Path(__file__).resolve().parents[2] / "run_episode.py"
     return (
         prompt.rstrip() + "\n\nHỢP ĐỒNG TIẾP TỤC TỰ ĐỘNG (BẮT BUỘC)\n"
         "Sau khi ghi đủ required_outputs, tự chạy nguyên lệnh sau; không chỉ báo cáo "
         "đường dẫn:\n"
-        f"uv run python run_episode.py {accept_command}\n\n"
+        f'uv run python "{entrypoint}" {accept_command}\n\n'
         "Nếu accept thành công, bắt buộc tiếp tục chạy:\n"
-        f'uv run python run_episode.py operator --run "{resolved_run}"\n\n'
+        f'uv run python "{entrypoint}" operator --run "{resolved_run}"\n\n'
         "Đọc lại next_action.json và cong_viec_antigravity.json sau mỗi lệnh rồi thực hiện "
         "task kế tiếp. Không yêu cầu người dùng copy từng tình huống. Nếu accept thất bại, "
         "sửa đúng task hiện tại theo lỗi engine rồi chạy accept lại.\n"
