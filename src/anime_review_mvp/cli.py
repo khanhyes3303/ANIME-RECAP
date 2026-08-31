@@ -470,7 +470,12 @@ def _operator_command(run_dir: Path) -> int:
         # prepared job, then invoke `operator` again.  The stable action names
         # remain backwards-compatible with existing integrations.
         "antigravity_work_required": directive.action
-        in {"PREPARE_STRUCTURE_JOB", "PREPARE_SITUATION_JOB"},
+        in {"PREPARE_STRUCTURE_JOB", "PREPARE_SITUATION_JOB"}
+        or state.stage
+        in {
+            Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+            Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY,
+        },
     }
     if directive.situation_id:
         status["situation_id"] = directive.situation_id

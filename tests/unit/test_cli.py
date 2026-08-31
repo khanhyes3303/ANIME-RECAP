@@ -210,6 +210,7 @@ def test_operator_command_prepares_structure_job_after_local_prepare(
     assert payload["action"] == "PREPARE_STRUCTURE_JOB"
     assert payload["stage"] == "CHO_ANTIGRAVITY_CHIA_TINH_HUONG"
     assert payload["instruction"] == "Antigravity xử lý structure."
+    assert payload["antigravity_work_required"] is True
 
 
 def test_operator_does_not_duplicate_an_already_prepared_situation_task(
@@ -243,3 +244,16 @@ def test_operator_does_not_duplicate_an_already_prepared_situation_task(
     payload = json.loads((run / "operator_status.json").read_text(encoding="utf-8"))
     assert payload["action"] == "PREPARE_SITUATION_JOB"
     assert payload["task_id"] == "situation-001-revision-002"
+
+
+def test_operator_status_marks_user_gate_without_antigravity_work(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
+    cli._write_next(run, "Proxy sẵn sàng; chờ người dùng duyệt.")
+
+    assert cli._operator_command(run) == 0
+    payload = json.loads((run / "operator_status.json").read_text(encoding="utf-8"))
+    assert payload["action"] == "WAIT_FOR_USER_PROXY_APPROVAL"
+    assert payload["antigravity_work_required"] is False
