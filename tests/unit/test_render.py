@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from anime_review_mvp.render import (
     build_render_command,
     normalize_narration_loudness,
     probe_render,
+    render_review,
 )
 
 
@@ -148,6 +150,7 @@ def test_loudness_report_uses_measured_normalized_output(tmp_path: Path) -> None
     assert report.integrated_lufs == -13.8
     assert report.true_peak_dbtp == -1.7
     assert report.loudness_range_lu == 2.3
+    assert report.normalized_audio_sha256 == hashlib.sha256(b"normalized").hexdigest()
 
 
 def test_proxy_render_uses_360p_fast_preset_without_changing_timeline() -> None:
@@ -163,6 +166,38 @@ def test_proxy_render_uses_360p_fast_preset_without_changing_timeline() -> None:
     assert "scale=-2:360" in graph
     assert command[command.index("-preset") + 1] == "ultrafast"
     assert "trim=start=0.000:end=1.000" in graph
+
+
+def test_render_result_binds_the_narration_input(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    narration = tmp_path / "narration.wav"
+    output = tmp_path / "review.mp4"
+    source.write_bytes(b"source")
+    narration.write_bytes(b"exact narration")
+    payload = {
+        "streams": [
+            {"codec_type": "video", "duration": "1.000"},
+            {"codec_type": "audio", "duration": "1.000"},
+        ],
+        "format": {"duration": "1.000"},
+    }
+
+    def runner(command: list[str], **_: object) -> SimpleNamespace:
+        if command[0] == "ffmpeg":
+            output.write_bytes(b"rendered")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    result = render_review(
+        source,
+        narration,
+        _edl(),
+        output,
+        allow_short_fixture=True,
+        runner=runner,
+    )
+
+    assert result.narration_input_sha256 == hashlib.sha256(b"exact narration").hexdigest()
 
 
 def test_probe_render_rejects_stream_drift_over_80_ms(tmp_path: Path) -> None:

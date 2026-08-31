@@ -13,6 +13,8 @@ from anime_review_mvp.editor_provenance import (
     load_editor_task,
     load_verifier_ledger,
     require_antigravity_provenance,
+    validate_task_inputs,
+    validate_task_submission,
 )
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.jsonio import atomic_append_jsonl
@@ -112,6 +114,65 @@ def test_accept_rejects_changed_editor_inputs(tmp_path: Path) -> None:
 
     with pytest.raises(MvpError, match="EDITOR_INPUT_HASH_CHANGED"):
         accept_antigravity_submission(run, task_id, staging)
+
+
+def test_verifier_validation_rejects_changed_inputs(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    source = tmp_path / "narration_plan.json"
+    source.write_text('{"revision":1}', encoding="utf-8")
+    task = create_editor_task(
+        run,
+        "run-001",
+        "situation-001",
+        1,
+        (source,),
+        task_kind="SITUATION_AUDIT",
+        task_id="situation-001-audit-revision-001",
+        allowed_outputs=("situation_audit_draft.json",),
+    )
+    source.write_text('{"revision":2}', encoding="utf-8")
+
+    with pytest.raises(MvpError, match="EDITOR_INPUT_HASH_CHANGED"):
+        validate_task_inputs(task)
+
+
+def test_task_validation_rejects_changed_engine_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "run"
+    source = tmp_path / "input.json"
+    source.write_text("{}", encoding="utf-8")
+    task = create_editor_task(run, "run-001", "situation-001", 1, (source,))
+    monkeypatch.setattr(
+        "anime_review_mvp.antigravity.calculate_policy_sha256",
+        lambda _root: "f" * 64,
+    )
+
+    with pytest.raises(MvpError, match="EDITOR_POLICY_HASH_CHANGED"):
+        validate_task_inputs(task)
+
+
+def test_verifier_submission_requires_isolated_exact_output(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    source = tmp_path / "input.json"
+    source.write_text("{}", encoding="utf-8")
+    task = create_editor_task(
+        run,
+        "run-001",
+        "situation-001",
+        1,
+        (source,),
+        task_kind="SITUATION_AUDIT",
+        task_id="situation-001-audit-revision-001",
+        allowed_outputs=("situation_audit_draft.json",),
+    )
+    staging = run / "verifier_staging" / task.task_id
+    staging.mkdir(parents=True)
+    (staging / "situation_audit_draft.json").write_text("{}", encoding="utf-8")
+    (staging / "producer-draft.json").write_text("{}", encoding="utf-8")
+
+    with pytest.raises(MvpError, match="EDITOR_SUBMISSION_INVALID"):
+        validate_task_submission(run, task, staging, staging_root="verifier_staging")
 
 
 def test_accept_rejects_stale_revision_for_same_situation(tmp_path: Path) -> None:

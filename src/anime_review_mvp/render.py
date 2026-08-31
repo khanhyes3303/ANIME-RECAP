@@ -104,7 +104,13 @@ def normalize_narration_loudness(
         output_lra = float(output["input_lra"])
     except (ValueError, TypeError, KeyError) as exc:
         raise MvpError("normalized loudness verification is invalid") from exc
-    return LoudnessReport(output_i, output_tp, output_lra, str(destination.resolve()))
+    return LoudnessReport(
+        output_i,
+        output_tp,
+        output_lra,
+        str(destination.resolve()),
+        _sha256_file(destination),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +123,7 @@ class RenderResult:
     video_stream_count: int
     audio_stream_count: int
     artifact_sha256: str = field(default="", metadata={"json_optional": True})
+    narration_input_sha256: str = field(default="", metadata={"json_optional": True})
 
 
 def _sha256_file(path: Path) -> str:
@@ -304,9 +311,20 @@ def render_review(
         raise MvpError("render inputs must exist")
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(build_render_command(source, narration_wav, edl, output, quality=quality), runner)
-    return probe_render(
+    result = probe_render(
         output,
         allow_short_fixture=allow_short_fixture,
         duration_bounds_ms=duration_bounds_ms,
         runner=runner,
+    )
+    return RenderResult(
+        result.path,
+        result.duration_ms,
+        result.video_duration_ms,
+        result.audio_duration_ms,
+        result.drift_ms,
+        result.video_stream_count,
+        result.audio_stream_count,
+        result.artifact_sha256,
+        _sha256_file(narration_wav),
     )

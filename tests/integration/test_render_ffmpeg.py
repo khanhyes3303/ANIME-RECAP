@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import wave
+from dataclasses import replace
 from pathlib import Path
 
 from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
@@ -99,7 +100,9 @@ def test_real_render_contains_narration_tone_not_source_tone(tmp_path: Path) -> 
     assert result.video_stream_count == 1
     assert result.audio_stream_count == 1
     assert 950 < _dominant_zero_crossing_frequency(extracted) < 1_050
-    assert probe_render(output, allow_short_fixture=True) == result
+    assert probe_render(output, allow_short_fixture=True) == replace(
+        result, narration_input_sha256=""
+    )
 
 
 def test_real_adaptive_render_speeds_video_without_mapping_source_audio(tmp_path: Path) -> None:

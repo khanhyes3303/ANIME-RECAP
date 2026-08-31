@@ -5,6 +5,7 @@ import json
 import shutil
 import sys
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +27,8 @@ from .editor_provenance import (
     create_editor_task,
     load_editor_ledger,
     load_editor_task,
+    validate_task_inputs,
+    validate_task_submission,
 )
 from .editorial import load_locked_spans
 from .editorial_budget import validate_episode_voice_budget
@@ -106,6 +109,7 @@ from .review_packets import (
     build_situation_audit_packet,
     render_proxy_audit_prompt,
     render_situation_audit_prompt,
+    validate_audit_context,
     validate_proxy_audit,
     validate_situation_audit,
 )
@@ -392,8 +396,12 @@ def _autonomous_task_prompt(prompt: str, run_dir: Path, accept_command: str) -> 
     resolved_run = run_dir.resolve()
     entrypoint = Path(__file__).resolve().parents[2] / "run_episode.py"
     project = entrypoint.parent
+    job_path = resolved_run / "cong_viec_antigravity.json"
+    policy_marker = f"ENGINE_POLICY_SHA256: {calculate_policy_sha256(project)}"
     return (
-        prompt.rstrip() + "\n\nHỢP ĐỒNG TIẾP TỤC TỰ ĐỘNG (BẮT BUỘC)\n"
+        prompt.rstrip()
+        + f'\n\nJOB_HIEN_TAI: "{job_path}"\n{policy_marker}\n\n'
+        + "HỢP ĐỒNG TIẾP TỤC TỰ ĐỘNG (BẮT BUỘC)\n"
         "Sau khi ghi đủ required_outputs, tự chạy nguyên lệnh sau; không chỉ báo cáo "
         "đường dẫn:\n"
         f'uv run --project "{project}" python "{entrypoint}" {accept_command}\n\n'
@@ -522,7 +530,7 @@ def _operator_command(run_dir: Path) -> int:
     status = {
         "action": directive.action,
         "stage": public_stage(state.stage).value,
-        "task_id": state.editor_task_id or state.verifier_task_id,
+        "task_id": state.verifier_task_id or state.editor_task_id,
         "instruction": next_payload.get("instruction", ""),
         # This flag makes the handoff explicit: Antigravity must complete the
         # prepared job, then invoke `operator` again.  The stable action names
@@ -556,26 +564,33 @@ def _verifier_task_command(run_dir: Path, kind: str) -> int:
         raise MvpError("verifier-task requires situation verifier wait stage")
     if not state.current_situation_id or not state.editor_task_id:
         raise MvpError("verifier-task requires active producer situation task")
+    if state.verifier_task_id:
+        raise MvpError("verifier task is already active")
     producer = load_editor_task(run_dir / "editor_tasks" / f"{state.editor_task_id}.json")
     scope = load_situation_scope(
         run_dir / "situation_inputs" / state.current_situation_id / "scope.json",
         verify_files=True,
     )
     plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
+    plan_path = episode / "Kich_ban" / "narration_plan.json"
     verifier = create_editor_task(
         run_dir,
         run_dir.name,
         state.current_situation_id,
         max(1, state.editorial_revision),
-        tuple(Path(path) for path in scope.input_paths),
+        (*tuple(Path(path) for path in scope.input_paths), plan_path),
         task_kind="SITUATION_AUDIT",
+        task_id=(
+            f"{state.current_situation_id}-audit-revision-"
+            f"{max(1, state.editorial_revision):03d}-{uuid.uuid4().hex[:12]}"
+        ),
         allowed_outputs=("situation_audit_draft.json",),
         expected_stage="ANTIGRAVITY_VERIFIER",
     )
-    begin_verifier_task(run_dir, verifier.task_id, verifier.situation_id, verifier.revision)
     packet = build_situation_audit_packet(scope, plan, producer, verifier)
     dump_json(run_dir / "cong_viec_antigravity.json", packet)
-    staging = run_dir / "editor_staging" / verifier.task_id
+    staging = run_dir / "verifier_staging" / verifier.task_id
+    staging.mkdir(parents=True, exist_ok=False)
     accept_command = (
         f'accept-verifier --run "{run_dir.resolve()}" --task {verifier.task_id} '
         f'--input "{staging.resolve()}"'
@@ -584,6 +599,7 @@ def _verifier_task_command(run_dir: Path, kind: str) -> int:
         _autonomous_task_prompt(render_situation_audit_prompt(packet), run_dir, accept_command),
         encoding="utf-8",
     )
+    begin_verifier_task(run_dir, verifier.task_id, verifier.situation_id, verifier.revision)
     _write_next(
         run_dir,
         f"Verifier kiểm tra từng cue của {packet.situation_id}; chỉ ghi "
@@ -597,6 +613,8 @@ def _proxy_verifier_task_command(run_dir: Path) -> int:
     state, episode = _episode(run_dir)
     if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY:
         raise MvpError("verifier-task requires proxy verifier wait stage")
+    if state.verifier_task_id:
+        raise MvpError("verifier task is already active")
     evidence_path = run_dir / "proxy_evidence" / "proxy_evidence_manifest.json"
     loudness_path = run_dir / "loudness_report.json"
     required = (
@@ -613,6 +631,9 @@ def _proxy_verifier_task_command(run_dir: Path) -> int:
     if not producer_records:
         raise MvpError("proxy verifier requires accepted producer editorial provenance")
     producer = producer_records[-1]
+    current_policy = calculate_policy_sha256(Path(__file__).resolve().parents[2])
+    if not producer.policy_sha256 or producer.policy_sha256 != current_policy:
+        raise MvpError("EDITOR_POLICY_HASH_CHANGED")
     verifier = create_editor_task(
         run_dir,
         run_dir.name,
@@ -620,19 +641,26 @@ def _proxy_verifier_task_command(run_dir: Path) -> int:
         max(1, state.editorial_revision),
         tuple(path for path in required),
         task_kind="PROXY_AUDIT",
+        task_id=(
+            f"episode-proxy-audit-revision-{max(1, state.editorial_revision):03d}-"
+            f"{uuid.uuid4().hex[:12]}"
+        ),
         allowed_outputs=("proxy_audit_draft.json",),
         expected_stage="ANTIGRAVITY_VERIFIER",
     )
-    begin_proxy_verifier_task(run_dir, verifier.task_id, verifier.revision)
     evidence = load_json(evidence_path, ProxyEvidenceManifest)
     packet = build_proxy_audit_packet(
         evidence,
         loudness_path,
-        f"producer:{producer.task_id}:{producer.input_sha256}",
-        f"verifier:{verifier.task_id}:{verifier.input_sha256}",
+        f"producer:{producer.task_id}:{producer.input_sha256}:{producer.policy_sha256}",
+        (
+            f"verifier:{verifier.task_id}:{verifier.input_sha256}:"
+            f"{verifier.policy_sha256}"
+        ),
     )
     dump_json(run_dir / "cong_viec_antigravity.json", packet)
-    staging = run_dir / "editor_staging" / verifier.task_id
+    staging = run_dir / "verifier_staging" / verifier.task_id
+    staging.mkdir(parents=True, exist_ok=False)
     accept_command = (
         f'accept-verifier --run "{run_dir.resolve()}" --task {verifier.task_id} '
         f'--input "{staging.resolve()}"'
@@ -641,6 +669,7 @@ def _proxy_verifier_task_command(run_dir: Path) -> int:
         _autonomous_task_prompt(render_proxy_audit_prompt(packet), run_dir, accept_command),
         encoding="utf-8",
     )
+    begin_proxy_verifier_task(run_dir, verifier.task_id, verifier.revision)
     _write_next(
         run_dir,
         "Verifier kiểm tra toàn bộ proxy theo từng cue và boundary START/END; chỉ ghi "
@@ -655,15 +684,36 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
     task = load_editor_task(run_dir / "editor_tasks" / f"{task_id}.json")
     if state.verifier_task_id != task_id:
         raise MvpError("verifier task does not match the active task")
+    validate_task_inputs(task)
     if task.task_kind == "PROXY_AUDIT":
         if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY:
             raise MvpError("proxy verifier acceptance requires proxy verifier wait stage")
         require_current_proxy_machine_pass(run_dir, episode)
+        validate_task_submission(
+            run_dir, task, staging_dir, staging_root="verifier_staging"
+        )
         audit = load_json(staging_dir / "proxy_audit_draft.json", ProxyAuditDocument)
         plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
         evidence = load_json(
             run_dir / "proxy_evidence" / "proxy_evidence_manifest.json",
             ProxyEvidenceManifest,
+        )
+        producer_records = load_editor_ledger(run_dir / "editor_ledger.jsonl")
+        if not producer_records:
+            raise MvpError("proxy verifier requires accepted producer editorial provenance")
+        producer = producer_records[-1]
+        current_policy = calculate_policy_sha256(Path(__file__).resolve().parents[2])
+        if not producer.policy_sha256 or producer.policy_sha256 != current_policy:
+            raise MvpError("EDITOR_POLICY_HASH_CHANGED")
+        validate_audit_context(
+            audit,
+            producer_context_id=(
+                f"producer:{producer.task_id}:{producer.input_sha256}:"
+                f"{producer.policy_sha256}"
+            ),
+            verifier_context_id=(
+                f"verifier:{task.task_id}:{task.input_sha256}:{task.policy_sha256}"
+            ),
         )
         validation = validate_proxy_audit(audit, plan, evidence)
         if not validation.passed:
@@ -718,14 +768,25 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
         return 0
     if task.task_kind != "SITUATION_AUDIT":
         raise MvpError("unsupported verifier task kind")
+    validate_task_submission(run_dir, task, staging_dir, staging_root="verifier_staging")
     audit_path = staging_dir / "situation_audit_draft.json"
     audit = load_json(audit_path, SituationAuditDocument)
     plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
-    _scope = load_situation_scope(
+    scope = load_situation_scope(
         run_dir / "situation_inputs" / task.situation_id / "scope.json", verify_files=True
     )
     if audit.situation_id != task.situation_id:
         raise MvpError("VERIFIER_SITUATION_SCOPE_INVALID")
+    if not state.editor_task_id:
+        raise MvpError("verifier acceptance requires active producer task")
+    producer = load_editor_task(run_dir / "editor_tasks" / f"{state.editor_task_id}.json")
+    packet = build_situation_audit_packet(scope, plan, producer, task)
+    validate_audit_context(
+        audit,
+        producer_context_id=packet.producer_context_id,
+        verifier_context_id=packet.verifier_context_id,
+        producer_task_id=packet.producer_task_id,
+    )
     try:
         validate_situation_audit(audit, plan)
     except MvpError:
@@ -1625,16 +1686,21 @@ def _prompt(run_dir: Path) -> int:
         raise MvpError("run has no cong_viec_antigravity.json; run prepare first")
     output = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
     entrypoint = Path(__file__).resolve().parents[2] / "run_episode.py"
+    policy_marker = f"ENGINE_POLICY_SHA256: {calculate_policy_sha256(entrypoint.parent)}"
     if output.is_file():
         existing = output.read_text(encoding="utf-8")
-        if str(entrypoint) in existing and str(job_path.resolve()) in existing:
+        if (
+            str(entrypoint) in existing
+            and str(job_path.resolve()) in existing
+            and policy_marker in existing
+        ):
             print(output.resolve())
             return 0
     rendered = render_operator_prompt(
         run_dir,
         root / "Bo_nao_Antigravity" / "PROMPT_MOT_LAN_CHAY.md",
     )
-    output.write_text(bootstrap + rendered, encoding="utf-8")
+    output.write_text(bootstrap + rendered.rstrip() + f"\n\n{policy_marker}\n", encoding="utf-8")
     print(output.resolve())
     return 0
 
@@ -2354,6 +2420,7 @@ def _current_proxy_machine_audit(run_dir: Path, episode: Path) -> object:
     loudness_path = run_dir / "loudness_report.json"
     if not loudness_path.is_file():
         raise MvpError("proxy audit requires loudness_report.json")
+    loudness = _verified_current_loudness_report(run_dir)
     context_path = run_dir / "story_context.json"
     context = (
         load_json(context_path, StoryContext)
@@ -2370,7 +2437,7 @@ def _current_proxy_machine_audit(run_dir: Path, episode: Path) -> object:
         render,
         provenance,
         context,
-        load_json(loudness_path, LoudnessReport),
+        loudness,
     )
 
 
@@ -2385,6 +2452,22 @@ def _verified_current_proxy_render(run_dir: Path) -> RenderResult:
     ):
         raise MvpError("PROXY_RENDER_ARTIFACT_MISMATCH")
     return current
+
+
+def _verified_current_loudness_report(run_dir: Path) -> LoudnessReport:
+    expected_audio = (run_dir / "normalized_narration.wav").resolve()
+    report = load_json(run_dir / "loudness_report.json", LoudnessReport)
+    stored_render = load_json(run_dir / "proxy" / "render_result.json", RenderResult)
+    if (
+        Path(report.normalized_audio_path).resolve() != expected_audio
+        or not expected_audio.is_file()
+        or not report.normalized_audio_sha256
+        or report.normalized_audio_sha256 != sha256_file(expected_audio)
+        or not stored_render.narration_input_sha256
+        or stored_render.narration_input_sha256 != report.normalized_audio_sha256
+    ):
+        raise MvpError("LOUDNESS_AUDIO_ARTIFACT_MISMATCH")
+    return report
 
 
 def require_current_proxy_machine_pass(run_dir: Path, episode: Path) -> object:

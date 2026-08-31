@@ -57,6 +57,25 @@ class ProxyAuditValidation:
         return not self.finding_codes
 
 
+def validate_audit_context(
+    audit: object,
+    *,
+    producer_context_id: str,
+    verifier_context_id: str,
+    producer_task_id: str | None = None,
+) -> None:
+    """Reject an audit produced for any task other than the active pair."""
+    if (
+        getattr(audit, "producer_context_id", None) != producer_context_id
+        or getattr(audit, "verifier_context_id", None) != verifier_context_id
+        or (
+            producer_task_id is not None
+            and getattr(audit, "producer_task_id", None) != producer_task_id
+        )
+    ):
+        raise MvpError("VERIFIER_TASK_CONTEXT_MISMATCH")
+
+
 def semantic_review_signature(text: str) -> str:
     normalized = re.sub(r"\bshot(?:[-_\s]*\d+)?\b", "shot", text.casefold())
     normalized = re.sub(r"\d+", "", normalized)
@@ -94,8 +113,14 @@ def build_situation_audit_packet(
             )
     if not cues:
         raise MvpError("VERIFIER_AUDIT_INVALID")
-    producer_context = f"producer:{producer_task.task_id}:{producer_task.input_sha256}"
-    verifier_context = f"verifier:{verifier_task.task_id}:{verifier_task.input_sha256}"
+    producer_context = (
+        f"producer:{producer_task.task_id}:{producer_task.input_sha256}:"
+        f"{producer_task.policy_sha256}"
+    )
+    verifier_context = (
+        f"verifier:{verifier_task.task_id}:{verifier_task.input_sha256}:"
+        f"{verifier_task.policy_sha256}"
+    )
     return SituationAuditPacket(
         scope.situation_id,
         scope.source_start_ms,

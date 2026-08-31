@@ -65,6 +65,9 @@ def test_autonomous_prompt_uses_absolute_engine_entrypoint(tmp_path: Path) -> No
     project = entrypoint.parent
     assert f'uv run --project "{project}" python "{entrypoint}" accept-antigravity' in rendered
     assert f'uv run --project "{project}" python "{entrypoint}" operator' in rendered
+    job_path = (tmp_path / "run" / "cong_viec_antigravity.json").resolve()
+    assert f'JOB_HIEN_TAI: "{job_path}"' in rendered
+    assert "ENGINE_POLICY_SHA256: " in rendered
 
 
 def test_main_rejects_proxy_approval_from_another_checkout(
@@ -148,6 +151,97 @@ def test_proxy_verifier_cannot_override_failed_machine_audit(
     assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY
 
 
+def test_situation_verifier_gets_isolated_task_and_tracks_current_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
+    plan_path = episode / "Kich_ban" / "narration_plan.json"
+    plan_path.parent.mkdir(parents=True)
+    plan_path.write_text("{}\n", encoding="utf-8")
+    run = tmp_path / "Tam_dang_xu_ly" / "run"
+    new_state(
+        run,
+        stage=Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+        episode_dir=episode,
+    )
+    inputs = tuple(run / f"scope-{index}.json" for index in range(4))
+    for path in inputs:
+        path.write_text("{}\n", encoding="utf-8")
+    producer = create_editor_task(
+        run,
+        run.name,
+        "situation-001",
+        2,
+        inputs,
+        task_id="situation-001-revision-002",
+    )
+    state_path = run / "run_state.json"
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    raw.update(
+        editor_task_id=producer.task_id,
+        current_situation_id="situation-001",
+        editorial_revision=2,
+    )
+    state_path.write_text(json.dumps(raw), encoding="utf-8")
+    scope = SimpleNamespace(
+        situation_id="situation-001",
+        source_start_ms=0,
+        source_end_ms=1_000,
+        scope_path=str(inputs[3]),
+        transcript_path=str(inputs[0]),
+        shots_path=str(inputs[1]),
+        frames_path=str(inputs[2]),
+        input_paths=tuple(str(path) for path in inputs),
+    )
+    cue = SimpleNamespace(
+        cue_id="cue-001",
+        situation_id="situation-001",
+        text="Jiro cứu con mèo.",
+        transcript_refs=("Jiro sees a cat.",),
+        frame_refs=("shot-001.jpg",),
+        shot_ids=("shot-001",),
+    )
+    plan = SimpleNamespace(
+        units=(SimpleNamespace(situation_id="situation-001", cues=(cue,)),)
+    )
+    monkeypatch.setattr(cli, "load_situation_scope", lambda *_args, **_kwargs: scope)
+    monkeypatch.setattr(cli, "load_narration_plan", lambda _path: plan)
+
+    assert cli._verifier_task_command(run, "situation") == 0
+
+    verifier_id = read_state(run).verifier_task_id
+    task_payload = json.loads(
+        (run / "editor_tasks" / f"{verifier_id}.json").read_text(encoding="utf-8")
+    )
+    prompt = (run / "PROMPT_GUI_ANTIGRAVITY.txt").read_text(encoding="utf-8")
+    assert verifier_id.startswith("situation-001-audit-revision-002-")
+    assert task_payload["task_id"] != producer.task_id
+    assert str(plan_path.resolve()) in task_payload["input_paths"]
+    assert str((run / "verifier_staging" / verifier_id).resolve()) in prompt
+
+
+def test_verifier_task_refuses_duplicate_active_issuance(tmp_path: Path) -> None:
+    episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
+    episode.mkdir(parents=True)
+    run = tmp_path / "Tam_dang_xu_ly" / "run"
+    new_state(
+        run,
+        stage=Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+        episode_dir=episode,
+    )
+    state_path = run / "run_state.json"
+    raw = json.loads(state_path.read_text(encoding="utf-8"))
+    raw.update(
+        verifier_task_id="active-verifier-task",
+        editor_task_id="producer-task",
+        current_situation_id="situation-001",
+    )
+    state_path.write_text(json.dumps(raw), encoding="utf-8")
+
+    with pytest.raises(MvpError, match="verifier task is already active"):
+        cli._verifier_task_command(run, "situation")
+
+
 def test_machine_audit_rejects_proxy_changed_after_render(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -169,6 +263,38 @@ def test_machine_audit_rejects_proxy_changed_after_render(
 
     with pytest.raises(MvpError, match="PROXY_RENDER_ARTIFACT_MISMATCH"):
         cli._verified_current_proxy_render(run)
+
+
+def test_machine_audit_rejects_loudness_report_for_other_audio(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    normalized = run / "normalized_narration.wav"
+    normalized.parent.mkdir(parents=True)
+    normalized.write_bytes(b"current normalized audio")
+    current_hash = cli.sha256_file(normalized)
+    proxy = run / "proxy" / "review_proxy.mp4"
+    proxy.parent.mkdir(parents=True)
+    proxy.write_bytes(b"proxy")
+    dump_json(
+        run / "proxy" / "render_result.json",
+        RenderResult(
+            str(proxy.resolve()),
+            420_000,
+            420_000,
+            420_000,
+            0,
+            1,
+            1,
+            cli.sha256_file(proxy),
+            current_hash,
+        ),
+    )
+    dump_json(
+        run / "loudness_report.json",
+        cli.LoudnessReport(-14.0, -1.7, 2.0, str(normalized.resolve()), "0" * 64),
+    )
+
+    with pytest.raises(MvpError, match="LOUDNESS_AUDIO_ARTIFACT_MISMATCH"):
+        cli._verified_current_loudness_report(run)
 
 
 def test_next_action_exposes_only_simple_stage(tmp_path: Path) -> None:
@@ -682,6 +808,32 @@ def test_prompt_command_replaces_stale_relative_task_prompt(tmp_path: Path) -> N
     assert rendered != exact_prompt
     assert str(entrypoint) in rendered
     assert str((run / "cong_viec_antigravity.json").resolve()) in rendered
+
+
+def test_prompt_command_replaces_prompt_from_old_engine_policy(tmp_path: Path) -> None:
+    root = tmp_path
+    run, _ = _prepared_storyboard_run(root)
+    brain = root / "Bo_nao_Antigravity"
+    brain.mkdir()
+    (brain / "PROMPT_MOT_LAN_CHAY.md").write_text(
+        "Job: <ĐƯỜNG_DẪN_RUN>\\cong_viec_antigravity.json\nRun: <run_dir>\n",
+        encoding="utf-8",
+    )
+    job = run / "cong_viec_antigravity.json"
+    job.write_text("{}\n", encoding="utf-8")
+    entrypoint = Path(cli.__file__).resolve().parents[2] / "run_episode.py"
+    output = run / "PROMPT_GUI_ANTIGRAVITY.txt"
+    output.write_text(
+        f'{entrypoint}\n{job.resolve()}\nENGINE_POLICY_SHA256: {"0" * 64}\nOLD POLICY\n',
+        encoding="utf-8",
+    )
+
+    assert cli.main(["prompt", "--run", str(run)]) == 0
+
+    rendered = output.read_text(encoding="utf-8")
+    current = cli.calculate_policy_sha256(entrypoint.parent)
+    assert f"ENGINE_POLICY_SHA256: {current}" in rendered
+    assert "OLD POLICY" not in rendered
 
 
 def test_prompt_parser_accepts_run_path() -> None:

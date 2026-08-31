@@ -12,6 +12,7 @@ from anime_review_mvp.proxy_evidence import (
 )
 from anime_review_mvp.review_packets import (
     build_proxy_audit_packet,
+    validate_audit_context,
     validate_proxy_audit,
     validate_situation_audit,
 )
@@ -243,3 +244,19 @@ def test_situation_audit_rejects_fabricated_match() -> None:
 
     with pytest.raises(MvpError, match="SITUATION_AUDIT_EVIDENCE_INVALID"):
         validate_situation_audit(audit, plan)
+
+
+def test_audit_context_must_match_the_active_verifier_task() -> None:
+    audit = SimpleNamespace(
+        producer_context_id="producer:old:hash",
+        verifier_context_id="verifier:old:hash",
+        producer_task_id="old-task",
+    )
+
+    with pytest.raises(MvpError, match="VERIFIER_TASK_CONTEXT_MISMATCH"):
+        validate_audit_context(
+            audit,
+            producer_context_id="producer:new:hash",
+            verifier_context_id="verifier:new:hash",
+            producer_task_id="new-task",
+        )

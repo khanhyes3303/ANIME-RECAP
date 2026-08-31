@@ -25,6 +25,7 @@ class EditorTask:
     input_sha256: str
     allowed_outputs: tuple[str, ...]
     task_kind: str = field(default="SITUATION", metadata={"json_optional": True})
+    policy_sha256: str = field(default="", metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
         if self.task_kind not in _EDITOR_TASK_KINDS:
@@ -41,6 +42,7 @@ class AcceptedEditorialRevision:
     input_sha256: str
     situation_sha256: str
     narration_sha256: str
+    policy_sha256: str = field(default="", metadata={"json_optional": True})
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,8 @@ def create_editor_task(
     ),
     expected_stage: str = "ANTIGRAVITY_EDITORIAL",
 ) -> EditorTask:
+    from .antigravity import calculate_policy_sha256
+
     if revision < 1 or not input_paths or not allowed_outputs:
         raise MvpError("EDITOR_TASK_INVALID")
     resolved_inputs = tuple(path.resolve() for path in input_paths)
@@ -119,6 +123,7 @@ def create_editor_task(
         input_sha256=_input_sha256(resolved_inputs),
         allowed_outputs=allowed_outputs,
         task_kind=task_kind,
+        policy_sha256=calculate_policy_sha256(Path(__file__).resolve().parents[2]),
     )
     atomic_dump_json(run_dir / "editor_tasks" / f"{task.task_id}.json", task)
     return task
@@ -126,6 +131,35 @@ def create_editor_task(
 
 def load_editor_task(path: Path) -> EditorTask:
     return load_json(path, EditorTask)
+
+
+def validate_task_inputs(task: EditorTask) -> None:
+    from .antigravity import calculate_policy_sha256
+
+    current_policy = calculate_policy_sha256(Path(__file__).resolve().parents[2])
+    if not task.policy_sha256 or task.policy_sha256 != current_policy:
+        raise MvpError("EDITOR_POLICY_HASH_CHANGED")
+    current_input_hash = _input_sha256(tuple(Path(path) for path in task.input_paths))
+    if current_input_hash != task.input_sha256:
+        raise MvpError("EDITOR_INPUT_HASH_CHANGED")
+
+
+def validate_task_submission(
+    run_dir: Path,
+    task: EditorTask,
+    staging_dir: Path,
+    *,
+    staging_root: str,
+) -> None:
+    expected_dir = (run_dir / staging_root / task.task_id).resolve()
+    if staging_dir.resolve() != expected_dir:
+        raise MvpError("EDITOR_SUBMISSION_INVALID")
+    try:
+        actual_names = {path.name for path in expected_dir.iterdir() if path.is_file()}
+    except OSError as exc:
+        raise MvpError("EDITOR_SUBMISSION_INVALID") from exc
+    if actual_names != set(task.allowed_outputs):
+        raise MvpError("EDITOR_SUBMISSION_INVALID")
 
 
 def _load_jsonl_ledger[T](path: Path, cls: type[T], error_code: str) -> tuple[T, ...]:
@@ -174,17 +208,13 @@ def accept_antigravity_submission(
         for record in load_editor_ledger(ledger_path)
     ):
         raise MvpError("EDITOR_REVISION_STALE")
-    current_input_hash = _input_sha256(tuple(Path(path) for path in task.input_paths))
-    if current_input_hash != task.input_sha256:
-        raise MvpError("EDITOR_INPUT_HASH_CHANGED")
-
-    expected_names = set(task.allowed_outputs)
-    try:
-        actual_names = {path.name for path in staging_dir.iterdir() if path.is_file()}
-    except OSError as exc:
-        raise MvpError("EDITOR_SUBMISSION_INVALID") from exc
-    if actual_names != expected_names:
-        raise MvpError("EDITOR_SUBMISSION_INVALID")
+    validate_task_inputs(task)
+    validate_task_submission(
+        run_dir,
+        task,
+        staging_dir,
+        staging_root="editor_staging",
+    )
     sources = {name: staging_dir / name for name in task.allowed_outputs}
     try:
         for source in sources.values():
@@ -209,6 +239,7 @@ def accept_antigravity_submission(
         input_sha256=task.input_sha256,
         situation_sha256=_file_sha256(accepted_dir / "situation_draft.json"),
         narration_sha256=_file_sha256(accepted_dir / "narration_draft.json"),
+        policy_sha256=task.policy_sha256,
     )
     atomic_append_jsonl(ledger_path, accepted)
     return accepted
@@ -222,8 +253,7 @@ def accept_antigravity_structure_submission(
         "situation_index_draft.json",
     ):
         raise MvpError("EDITOR_TASK_KIND_INVALID")
-    if _input_sha256(tuple(Path(path) for path in task.input_paths)) != task.input_sha256:
-        raise MvpError("EDITOR_INPUT_HASH_CHANGED")
+    validate_task_inputs(task)
     try:
         actual_names = {path.name for path in staging_dir.iterdir() if path.is_file()}
     except OSError as exc:

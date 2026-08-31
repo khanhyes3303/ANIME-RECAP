@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .errors import MvpError
 
@@ -61,6 +61,7 @@ class LoudnessReport:
     true_peak_dbtp: float
     loudness_range_lu: float
     normalized_audio_path: str
+    normalized_audio_sha256: str = field(default="", metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
         if not self.normalized_audio_path.strip():
