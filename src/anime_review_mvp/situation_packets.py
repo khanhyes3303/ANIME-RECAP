@@ -7,7 +7,6 @@ from .editor_provenance import EditorTask
 from .errors import MvpError
 from .jsonio import load_json
 from .models import ShotDocument, SourceRef, TranscriptDocument
-from .reference_profile import ReferenceStyleProfile
 from .situation_scope import SituationScope, load_situation_scope
 from .situations import EditorialPolicy, StoryContext
 
@@ -34,10 +33,6 @@ class SituationEditorPacket:
     scope_path: str = field(default="", metadata={"json_optional": True})
     task_kind: str = "SITUATION"
     repair_note: str = field(default="", metadata={"json_optional": True})
-    reference: ReferenceStyleProfile = field(
-        default=ReferenceStyleProfile("", "", 0, 0, 0),
-        metadata={"json_optional": True},
-    )
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or not self.situation_id.strip() or self.revision < 1:
@@ -63,7 +58,6 @@ def build_situation_editor_packet(
     task: EditorTask,
     allowed_staging_dir: Path | None = None,
     repair_note: str = "",
-    reference: ReferenceStyleProfile | None = None,
 ) -> SituationEditorPacket:
     if not frame_manifest_path.is_file():
         raise MvpError(f"frame manifest does not exist: {frame_manifest_path}")
@@ -86,7 +80,6 @@ def build_situation_editor_packet(
         prior_context=prior_context,
         required_outputs=task.allowed_outputs,
         repair_note=repair_note,
-        reference=reference or ReferenceStyleProfile("", "", 0, 0, 0),
     )
 
 
@@ -99,7 +92,6 @@ def build_scoped_situation_editor_packet(
     task: EditorTask,
     allowed_staging_dir: Path | None = None,
     repair_note: str = "",
-    reference: ReferenceStyleProfile | None = None,
 ) -> SituationEditorPacket:
     verified_scope = load_situation_scope(Path(scope.scope_path), verify_files=True)
     if verified_scope != scope or task.situation_id != scope.situation_id:
@@ -129,7 +121,6 @@ def build_scoped_situation_editor_packet(
         scope.scope_path,
         task_kind="SITUATION",
         repair_note=repair_note,
-        reference=reference or ReferenceStyleProfile("", "", 0, 0, 0),
     )
 
 

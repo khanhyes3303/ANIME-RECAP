@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from .editor_provenance import EditorTask, create_editor_task
 from .errors import MvpError
 from .models import ShotDocument, SourceRef, TranscriptDocument
-from .reference_profile import ReferenceStyleProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,10 +21,6 @@ class StructureEditorPacket:
     frame_manifest_path: str
     required_outputs: tuple[str, ...] = ("situation_index_draft.json",)
     task_kind: str = "STRUCTURE"
-    reference: ReferenceStyleProfile = field(
-        default=ReferenceStyleProfile("", "", 0, 0, 0),
-        metadata={"json_optional": True},
-    )
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or self.revision < 1:
@@ -65,7 +60,6 @@ def build_structure_editor_packet(
     *,
     task: EditorTask,
     allowed_staging_dir: Path | None = None,
-    reference: ReferenceStyleProfile | None = None,
 ) -> StructureEditorPacket:
     if task.task_kind != "STRUCTURE":
         raise MvpError("structure packet requires a STRUCTURE task")
@@ -83,7 +77,6 @@ def build_structure_editor_packet(
         shots,
         str(frame_manifest_path.resolve()),
         task.allowed_outputs,
-        reference=reference or ReferenceStyleProfile("", "", 0, 0, 0),
     )
 
 

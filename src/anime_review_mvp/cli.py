@@ -101,7 +101,6 @@ from .operator import plan_operator_step
 from .proxy_approval import approve_proxy, reject_proxy, require_approved_artifacts
 from .proxy_evidence import ProxyEvidenceManifest, extract_cue_proxy_evidence
 from .public_workflow import public_stage
-from .reference_profile import ReferenceStyleProfile, load_reference_profile
 from .render import RenderResult, normalize_narration_loudness, probe_render, render_review
 from .review_contracts import LoudnessReport, ProxyAuditDocument, SituationAuditDocument
 from .review_packets import (
@@ -358,16 +357,6 @@ def _validate_run_command_identity(run_dir: Path) -> object:
     if not (state.repository_root and state.code_commit and state.contract_version):
         state = bind_run_code_identity(run_dir, recorded)
     return state
-
-
-def _reference_style(run_dir: Path) -> ReferenceStyleProfile:
-    cached = run_dir / "reference_style_profile.json"
-    if cached.is_file():
-        return load_json(cached, ReferenceStyleProfile)
-    root = Path(__file__).resolve().parents[2]
-    profile = load_reference_profile(root / "Bo_nao_Antigravity" / "reference_review.json")
-    dump_json(cached, profile)
-    return profile
 
 
 def _write_next(
@@ -3242,6 +3231,7 @@ def _archive_pre_index_revision(run_dir: Path, episode: Path, prior_task_id: str
         "semantic_timeline.json",
         "aligned_narration.wav",
         "cue_tts_manifest.json",
+        "reference_style_profile.json",
     )
     for name in run_outputs:
         move(run_root / name, run_root, "run")
