@@ -197,9 +197,7 @@ def build_v2_local_audit(
     initial_context: StoryContext,
     loudness: LoudnessReport | None = None,
 ) -> EngineAuditReport:
-    findings = list(
-        build_episode_coherence_audit(plan, situations, initial_context).findings
-    )
+    findings = list(build_episode_coherence_audit(plan, situations, initial_context).findings)
     situation_ids = {item.situation_id for item in situations.situations}
     proven = {
         item.situation_id
@@ -219,19 +217,19 @@ def build_v2_local_audit(
     tts_ids = tuple(cue.cue_id for cue in tts.cues)
     timeline_ids = tuple(cue.cue_id for cue in timeline.cues)
     if not (expected_ids == tts_ids == timeline_ids):
-        findings.append(
-            _finding("CUE_ID_MISMATCH", "Plan, TTS, and timeline cue IDs differ.")
-        )
+        findings.append(_finding("CUE_ID_MISMATCH", "Plan, TTS, and timeline cue IDs differ."))
 
     cue_by_id = {cue.cue_id: cue for cue in plan_cues}
-    anchor_by_id = {
-        item.cue_id: item.visual_anchor_program_ms for item in timeline.cues
-    }
-    for timing_finding in semantic_timing_findings(timeline.cues):
+    anchor_by_id = {item.cue_id: item.visual_anchor_program_ms for item in timeline.cues}
+    for timing_finding in semantic_timing_findings(timeline.cues, timeline.total_duration_ms):
         cue = cue_by_id.get(timing_finding.cue_id or "")
-        evidence = () if cue is None else (
-            *cue.frame_refs,
-            f"program-anchor-ms:{anchor_by_id[cue.cue_id]}",
+        evidence = (
+            ()
+            if cue is None
+            else (
+                *cue.frame_refs,
+                f"program-anchor-ms:{anchor_by_id[cue.cue_id]}",
+            )
         )
         findings.append(
             AuditFinding(

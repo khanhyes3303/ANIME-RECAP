@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -43,12 +44,18 @@ def test_cue_audio_command_places_each_wav_at_semantic_offset() -> None:
         _manifest(("cue-001.wav", "cue-002.wav")),
         _timeline(),
         Path("narration-aligned.wav"),
+        cue_gains_db=(1.25, -0.75),
     )
     graph = command[command.index("-filter_complex") + 1]
     assert "adelay=800|800" in graph
     assert "adelay=3400|3400" in graph
-    assert "amix=inputs=3:duration=longest" in graph
+    assert "amix=inputs=3:duration=longest:normalize=0" in graph
     assert "atrim=duration=6.000" in graph
+    assert "volume=1.250dB" in graph
+    assert "volume=-0.750dB" in graph
+    assert "alimiter=limit=0.794" in graph
+    assert "anullsrc=r=48000:cl=mono" in command
+    assert command[command.index("-ar") + 1] == "48000"
 
 
 def test_cue_audio_rejects_missing_wav(tmp_path: Path) -> None:
@@ -67,3 +74,30 @@ def test_cue_audio_rejects_overlapping_timings() -> None:
     )
     with pytest.raises(MvpError, match="overlap"):
         build_cue_audio_command(_manifest(("one.wav", "two.wav")), overlap, Path("out.wav"))
+
+
+def test_render_levels_each_cue_to_common_mean_volume(tmp_path: Path) -> None:
+    cue_paths = (tmp_path / "one.wav", tmp_path / "two.wav")
+    for path in cue_paths:
+        path.write_bytes(b"wav")
+    output = tmp_path / "out.wav"
+    measured = iter((-20.0, -16.0))
+    graphs: list[str] = []
+
+    def runner(command: list[str], **_: object) -> SimpleNamespace:
+        if "volumedetect" in command:
+            value = next(measured)
+            return SimpleNamespace(returncode=0, stdout="", stderr=f"mean_volume: {value} dB")
+        graphs.append(command[command.index("-filter_complex") + 1])
+        output.write_bytes(b"aligned")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    render_cue_audio_timeline(
+        _manifest(tuple(str(path) for path in cue_paths)),
+        _timeline(),
+        output,
+        runner=runner,
+    )
+
+    assert "volume=2.000dB" in graphs[0]
+    assert "volume=-2.000dB" in graphs[0]

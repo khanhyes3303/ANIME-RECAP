@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import pairwise
 
 from .adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from .errors import MvpError
 from .models import AuditFinding
 from .situation_validation import validate_keep_skip
-from .situations import CueTtsManifest, EditorialPolicy, NarrationPlan
+from .situations import CueTtsManifest, EditorialPolicy, NarrationCue, NarrationPlan
 from .tts import validate_cue_tts_ids
 
 
@@ -66,9 +67,7 @@ def _unit_segments(
     cursor = program_start_ms
     result: list[AdaptiveEdlSegment] = []
     for index, source_range in enumerate(unit.evidence_ranges, start=1):
-        duration = round(
-            (source_range.source_end_ms - source_range.source_start_ms) / rate
-        )
+        duration = round((source_range.source_end_ms - source_range.source_start_ms) / rate)
         if duration <= 0:
             raise MvpError("semantic EDL rounding produced an empty segment")
         result.append(
@@ -88,6 +87,97 @@ def _unit_segments(
         )
         cursor += duration
     return tuple(result)
+
+
+def _merged_intervals(
+    intervals: tuple[tuple[int, int], ...],
+) -> tuple[tuple[int, int], ...]:
+    merged: list[tuple[int, int]] = []
+    for start_ms, end_ms in sorted(intervals):
+        if merged and start_ms <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end_ms))
+        else:
+            merged.append((start_ms, end_ms))
+    return tuple(merged)
+
+
+def _map_compacted_timestamp(
+    intervals: tuple[tuple[int, int], ...], old_ms: int, program_start_ms: int
+) -> int:
+    cursor = program_start_ms
+    for start_ms, end_ms in intervals:
+        if start_ms <= old_ms <= end_ms:
+            return cursor + old_ms - start_ms
+        cursor += end_ms - start_ms
+    raise MvpError(f"semantic timestamp is outside narrated footage: {old_ms}")
+
+
+def _compact_unit(
+    segments: tuple[AdaptiveEdlSegment, ...],
+    timings: tuple[CueTiming, ...],
+    plan_cues: tuple[NarrationCue, ...],
+    program_start_ms: int,
+) -> tuple[tuple[AdaptiveEdlSegment, ...], tuple[CueTiming, ...]]:
+    """Keep only footage needed by narration anchors, speech, and postroll."""
+    intervals = _merged_intervals(
+        tuple(
+            (
+                timing.visual_anchor_program_ms,
+                min(segments[-1].program_end_ms, timing.spoken_end_ms + cue.visual_postroll_ms),
+            )
+            for timing, cue in zip(timings, plan_cues, strict=True)
+        )
+    )
+    compacted: list[AdaptiveEdlSegment] = []
+    cursor = program_start_ms
+    piece_index = 0
+    for keep_start, keep_end in intervals:
+        for segment in segments:
+            overlap_start = max(keep_start, segment.program_start_ms)
+            overlap_end = min(keep_end, segment.program_end_ms)
+            if overlap_end <= overlap_start:
+                continue
+            source_start = segment.source_start_ms + round(
+                (overlap_start - segment.program_start_ms) * segment.playback_rate
+            )
+            source_end = segment.source_start_ms + round(
+                (overlap_end - segment.program_start_ms) * segment.playback_rate
+            )
+            source_start = min(
+                max(source_start, segment.source_start_ms),
+                segment.source_end_ms - 1,
+            )
+            source_end = min(max(source_end, source_start + 1), segment.source_end_ms)
+            duration = overlap_end - overlap_start
+            piece_index += 1
+            compacted.append(
+                AdaptiveEdlSegment(
+                    f"{segment.segment_id}-clip-{piece_index:03d}",
+                    segment.unit_id,
+                    segment.situation_id,
+                    segment.range_id,
+                    source_start,
+                    source_end,
+                    cursor,
+                    cursor + duration,
+                    segment.playback_rate,
+                    segment.shot_ids,
+                    segment.event_ids,
+                )
+            )
+            cursor += duration
+    if not compacted:
+        raise MvpError("semantic timeline compaction removed all footage")
+    compacted_timings = tuple(
+        CueTiming(
+            timing.cue_id,
+            _map_compacted_timestamp(intervals, timing.spoken_start_ms, program_start_ms),
+            _map_compacted_timestamp(intervals, timing.spoken_end_ms, program_start_ms),
+            _map_compacted_timestamp(intervals, timing.visual_anchor_program_ms, program_start_ms),
+        )
+        for timing in timings
+    )
+    return tuple(compacted), compacted_timings
 
 
 def build_semantic_timeline(
@@ -132,9 +222,7 @@ def build_semantic_timeline(
                 if spoken_end + cue.visual_postroll_ms > unit_end:
                     valid = False
                     break
-                candidate_timings.append(
-                    CueTiming(cue.cue_id, spoken_start, spoken_end, anchor)
-                )
+                candidate_timings.append(CueTiming(cue.cue_id, spoken_start, spoken_end, anchor))
                 cue_previous_end = spoken_end
             if valid:
                 selected_segments = candidates
@@ -144,6 +232,9 @@ def build_semantic_timeline(
             raise MvpError(
                 "SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence"
             )
+        selected_segments, selected_timings = _compact_unit(
+            selected_segments, selected_timings, unit.cues, program_cursor
+        )
         segments.extend(selected_segments)
         timings.extend(selected_timings)
         program_cursor = selected_segments[-1].program_end_ms
@@ -155,6 +246,7 @@ def build_semantic_timeline(
 
 def semantic_timing_findings(
     cues: tuple[CueTiming, ...],
+    total_duration_ms: int | None = None,
 ) -> tuple[AuditFinding, ...]:
     findings: list[AuditFinding] = []
     for cue in cues:
@@ -167,6 +259,40 @@ def semantic_timing_findings(
                     cue.cue_id,
                     f"Voice starts at {cue.spoken_start_ms} ms, anchor is "
                     f"{cue.visual_anchor_program_ms} ms; lead is {lead} ms.",
+                    (),
+                )
+            )
+    if total_duration_ms is not None and cues and cues[0].spoken_start_ms > 1_200:
+        findings.append(
+            AuditFinding(
+                "ERROR",
+                "LEADING_NARRATION_SILENCE",
+                cues[0].cue_id,
+                f"Narration starts after {cues[0].spoken_start_ms} ms of silence.",
+                (),
+            )
+        )
+    for current, following in pairwise(cues if total_duration_ms is not None else ()):
+        gap_ms = following.spoken_start_ms - current.spoken_end_ms
+        if gap_ms > 2_500:
+            findings.append(
+                AuditFinding(
+                    "ERROR",
+                    "NARRATION_GAP_TOO_LONG",
+                    following.cue_id,
+                    f"Narration gap is {gap_ms} ms; maximum is 2500 ms.",
+                    (),
+                )
+            )
+    if total_duration_ms is not None and cues:
+        trailing_ms = total_duration_ms - cues[-1].spoken_end_ms
+        if trailing_ms > 1_200:
+            findings.append(
+                AuditFinding(
+                    "ERROR",
+                    "TRAILING_NARRATION_SILENCE",
+                    cues[-1].cue_id,
+                    f"Video ends with {trailing_ms} ms of narration silence.",
                     (),
                 )
             )

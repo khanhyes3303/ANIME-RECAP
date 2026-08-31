@@ -15,6 +15,18 @@ from .review_contracts import LoudnessReport
 Runner = Callable[..., Any]
 
 
+def _loudnorm_payload(result: Any, error_message: str) -> dict[str, Any]:
+    try:
+        text = result.stderr or result.stdout or ""
+        start = text.rfind("{")
+        payload, _ = json.JSONDecoder().raw_decode(text[start:])
+        if not isinstance(payload, dict):
+            raise TypeError("loudnorm payload must be an object")
+        return payload
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise MvpError(error_message) from exc
+
+
 def normalize_narration_loudness(
     source: Path,
     destination: Path,
@@ -25,30 +37,73 @@ def normalize_narration_loudness(
     if not source.is_file():
         raise MvpError(f"narration input does not exist: {source}")
     first = _run(
-        ["ffmpeg", "-v", "error", "-i", str(source), "-af",
-         "loudnorm=I=-14:LRA=7:TP=-1.5:print_format=json", "-f", "null", "NUL"],
+        [
+            "ffmpeg",
+            "-v",
+            "info",
+            "-i",
+            str(source),
+            "-af",
+            "loudnorm=I=-14:LRA=7:TP=-2:print_format=json",
+            "-f",
+            "null",
+            "NUL",
+        ],
         runner,
     )
     try:
-        text = first.stderr or first.stdout or ""
-        start = text.rfind("{")
-        measured = json.loads(text[start:])
+        measured = _loudnorm_payload(first, "loudnorm measurement is invalid")
         input_i = float(measured["input_i"])
         input_tp = float(measured["input_tp"])
         input_lra = float(measured["input_lra"])
         input_thresh = float(measured["input_thresh"])
         offset = float(measured.get("target_offset", 0.0))
-    except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+    except (ValueError, TypeError, KeyError) as exc:
         raise MvpError("loudnorm measurement is invalid") from exc
     destination.parent.mkdir(parents=True, exist_ok=True)
     _run(
-        ["ffmpeg", "-y", "-v", "error", "-i", str(source), "-af",
-         f"loudnorm=I=-14:LRA=7:TP=-1.5:measured_I={input_i}:measured_TP={input_tp}:measured_LRA={input_lra}:measured_thresh={input_thresh}:offset={offset}:linear=true",
-         str(destination)], runner,
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(source),
+            "-af",
+            f"loudnorm=I=-14:LRA=7:TP=-2:measured_I={input_i}:measured_TP={input_tp}:measured_LRA={input_lra}:measured_thresh={input_thresh}:offset={offset}:linear=true",
+            "-ar",
+            "48000",
+            "-ac",
+            "1",
+            str(destination),
+        ],
+        runner,
     )
-    if not destination.is_file() and source.is_file():
-        destination.write_bytes(source.read_bytes())
-    return LoudnessReport(-14.0, -1.5, min(7.0, input_lra), str(destination.resolve()))
+    if not destination.is_file():
+        raise MvpError("loudness normalization did not create output")
+    verified = _run(
+        [
+            "ffmpeg",
+            "-v",
+            "info",
+            "-i",
+            str(destination),
+            "-af",
+            "loudnorm=I=-14:LRA=7:TP=-2:print_format=json",
+            "-f",
+            "null",
+            "NUL",
+        ],
+        runner,
+    )
+    try:
+        output = _loudnorm_payload(verified, "normalized loudness verification is invalid")
+        output_i = float(output["input_i"])
+        output_tp = float(output["input_tp"])
+        output_lra = float(output["input_lra"])
+    except (ValueError, TypeError, KeyError) as exc:
+        raise MvpError("normalized loudness verification is invalid") from exc
+    return LoudnessReport(output_i, output_tp, output_lra, str(destination.resolve()))
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +196,8 @@ def build_render_command(
             "yuv420p",
             "-c:a",
             "aac",
+            "-ar",
+            "48000",
             "-movflags",
             "+faststart",
             str(output),

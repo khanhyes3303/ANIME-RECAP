@@ -9,7 +9,12 @@ import pytest
 from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import EdlDocument, EdlSegment
-from anime_review_mvp.render import build_filter_graph, build_render_command, probe_render
+from anime_review_mvp.render import (
+    build_filter_graph,
+    build_render_command,
+    normalize_narration_loudness,
+    probe_render,
+)
 
 
 def _edl() -> EdlDocument:
@@ -80,9 +85,7 @@ def test_adaptive_filter_graph_pads_frame_quantization_before_duration_trim() ->
     graph = build_filter_graph(edl, quality="proxy")
 
     assert "tpad=stop_mode=clone:stop_duration=0.125" in graph
-    assert graph.index("tpad=stop_mode=clone") < graph.index(
-        "trim=duration=2.400"
-    )
+    assert graph.index("tpad=stop_mode=clone") < graph.index("trim=duration=2.400")
 
 
 def test_ffmpeg_maps_only_rendered_video_and_tts_audio() -> None:
@@ -94,6 +97,57 @@ def test_ffmpeg_maps_only_rendered_video_and_tts_audio() -> None:
     assert "1:a:0" in command
     assert "0:a" not in command
     assert "-shortest" not in command
+    assert command[command.index("-ar") + 1] == "48000"
+
+
+def test_loudness_report_uses_measured_normalized_output(tmp_path: Path) -> None:
+    source = tmp_path / "aligned.wav"
+    destination = tmp_path / "normalized.wav"
+    source.write_bytes(b"wav")
+    measurements = iter(
+        (
+            {
+                "input_i": "-21.0",
+                "input_tp": "-4.0",
+                "input_lra": "4.0",
+                "input_thresh": "-31.0",
+                "target_offset": "0.1",
+            },
+            {
+                "input_i": "-13.8",
+                "input_tp": "-1.7",
+                "input_lra": "2.3",
+                "input_thresh": "-23.8",
+                "target_offset": "0.0",
+            },
+        )
+    )
+    commands: list[list[str]] = []
+
+    def runner(command: list[str], **_: object) -> SimpleNamespace:
+        commands.append(command)
+        if str(destination) in command and "-f" not in command:
+            destination.write_bytes(b"normalized")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        payload = next(measurements)
+        return SimpleNamespace(
+            returncode=0,
+            stdout="",
+            stderr=f"ffmpeg log\n{json.dumps(payload)}\nvideo:0kB audio:0kB",
+        )
+
+    report = normalize_narration_loudness(source, destination, runner=runner)
+
+    assert len(commands) == 3
+    assert str(destination) in commands[-1]
+    assert commands[0][commands[0].index("-v") + 1] == "info"
+    assert commands[-1][commands[-1].index("-v") + 1] == "info"
+    normalization = commands[1][commands[1].index("-af") + 1]
+    assert "TP=-2" in normalization
+    assert "linear=true" in normalization
+    assert report.integrated_lufs == -13.8
+    assert report.true_peak_dbtp == -1.7
+    assert report.loudness_range_lu == 2.3
 
 
 def test_proxy_render_uses_360p_fast_preset_without_changing_timeline() -> None:
