@@ -646,6 +646,7 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
     if task.task_kind == "PROXY_AUDIT":
         if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY:
             raise MvpError("proxy verifier acceptance requires proxy verifier wait stage")
+        require_current_proxy_machine_pass(run_dir, episode)
         audit = load_json(staging_dir / "proxy_audit_draft.json", ProxyAuditDocument)
         plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
         evidence = load_json(
@@ -2322,10 +2323,7 @@ def _gemini_web(args: argparse.Namespace) -> int:
     )
 
 
-def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
-    state = read_state(run_dir)
-    if state.stage is not Stage.KIEM_DINH_PROXY:
-        raise MvpError("proxy audit requires KIEM_DINH_PROXY stage")
+def _current_proxy_machine_audit(run_dir: Path, episode: Path) -> object:
     plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
     situations = load_situations(episode / "Su_that" / "situations.json")
     timeline = load_json(run_dir / "semantic_timeline.json", SemanticTimeline)
@@ -2342,7 +2340,7 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
         else StoryContext((), (), (), "")
     )
     provenance = load_editor_ledger(run_dir / "editor_ledger.jsonl")
-    report = build_v2_local_audit(
+    return build_v2_local_audit(
         plan,
         situations,
         timeline,
@@ -2353,6 +2351,22 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
         context,
         load_json(loudness_path, LoudnessReport),
     )
+
+
+def require_current_proxy_machine_pass(run_dir: Path, episode: Path) -> object:
+    report = _current_proxy_machine_audit(run_dir, episode)
+    if not report.passed:
+        codes = tuple(dict.fromkeys(item.code for item in report.findings))
+        raise MvpError(f"PROXY_MACHINE_AUDIT_REQUIRED: {','.join(codes)}")
+    return report
+
+
+def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
+    state = read_state(run_dir)
+    if state.stage is not Stage.KIEM_DINH_PROXY:
+        raise MvpError("proxy audit requires KIEM_DINH_PROXY stage")
+    situations = load_situations(episode / "Su_that" / "situations.json")
+    report = _current_proxy_machine_audit(run_dir, episode)
     dump_json(run_dir / "proxy" / "v2_audit.json", report)
     if not report.passed:
         codes = tuple(dict.fromkeys(item.code for item in report.findings))
@@ -2367,6 +2381,9 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
         route_editor_repair(run_dir, situation_ids, codes, fingerprint)
         _write_next(run_dir, f"Antigravity sửa lỗi proxy: {', '.join(codes)}.")
         return 1
+    plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
+    timeline = load_json(run_dir / "semantic_timeline.json", SemanticTimeline)
+    edl = load_json(run_dir / "adaptive_edl.json", AdaptiveEdlDocument)
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     index = load_situation_index(
         run_dir / "situation_index.json",

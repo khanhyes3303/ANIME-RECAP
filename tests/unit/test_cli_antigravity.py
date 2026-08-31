@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from anime_review_mvp import cli, gemini_session
+from anime_review_mvp.editor_provenance import create_editor_task
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.gemini_session import GeminiSessionMetadata, GeminiSessionRegistry
 from anime_review_mvp.gemini_web import account_sha256
@@ -28,7 +29,13 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TruthDocument,
 )
-from anime_review_mvp.workflow import Stage, advance, new_state, read_state
+from anime_review_mvp.workflow import (
+    Stage,
+    advance,
+    begin_proxy_verifier_task,
+    new_state,
+    read_state,
+)
 
 
 def test_cli_rejects_run_created_by_another_checkout(tmp_path: Path) -> None:
@@ -55,6 +62,44 @@ def test_autonomous_prompt_uses_absolute_engine_entrypoint(tmp_path: Path) -> No
 
     assert f'uv run python "{entrypoint}" accept-antigravity' in rendered
     assert f'uv run python "{entrypoint}" operator' in rendered
+
+
+def test_proxy_verifier_cannot_override_failed_machine_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
+    episode.mkdir(parents=True)
+    run = tmp_path / "Tam_dang_xu_ly" / "run"
+    new_state(
+        run,
+        stage=Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY,
+        episode_dir=episode,
+    )
+    machine_input = run / "proxy" / "render_result.json"
+    machine_input.parent.mkdir(parents=True)
+    machine_input.write_text("{}", encoding="utf-8")
+    task = create_editor_task(
+        run,
+        run.name,
+        "__episode__",
+        1,
+        (machine_input,),
+        task_kind="PROXY_AUDIT",
+        task_id="__episode__-revision-001",
+        allowed_outputs=("proxy_audit_draft.json",),
+        expected_stage="ANTIGRAVITY_VERIFIER",
+    )
+    begin_proxy_verifier_task(run, task.task_id, task.revision)
+
+    def reject_machine_audit(_run: Path, _episode: Path) -> object:
+        raise MvpError("PROXY_MACHINE_AUDIT_REQUIRED: PRODUCTION_DURATION_OUT_OF_RANGE")
+
+    monkeypatch.setattr(cli, "require_current_proxy_machine_pass", reject_machine_audit)
+
+    with pytest.raises(MvpError, match="PROXY_MACHINE_AUDIT_REQUIRED"):
+        cli._accept_verifier_command(run, task.task_id, run / "staging")
+
+    assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY
 
 
 def _prepared_storyboard_run(tmp_path: Path) -> tuple[Path, Path]:
