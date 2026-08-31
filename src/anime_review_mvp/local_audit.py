@@ -12,6 +12,7 @@ from .models import (
     EngineAuditReport,
     FrameAnchorDocument,
 )
+from .review_contracts import LoudnessReport
 from .render import RenderResult
 from .semantic_timeline import SemanticTimeline, semantic_timing_findings
 from .situation_validation import (
@@ -194,6 +195,7 @@ def build_v2_local_audit(
     render: RenderResult,
     provenance: tuple[AcceptedEditorialRevision, ...],
     initial_context: StoryContext,
+    loudness: LoudnessReport | None = None,
 ) -> EngineAuditReport:
     findings = list(
         build_episode_coherence_audit(plan, situations, initial_context).findings
@@ -248,4 +250,15 @@ def build_v2_local_audit(
         )
     if render.video_stream_count != 1 or render.audio_stream_count != 1:
         findings.append(_finding("STREAM_COUNT_INVALID", "Render must have one video and audio."))
+    if loudness is not None and (
+        not -15.0 <= loudness.integrated_lufs <= -13.0
+        or loudness.true_peak_dbtp > -1.5
+        or loudness.loudness_range_lu > 7.0
+    ):
+        findings.append(
+            _finding(
+                "NARRATION_LOUDNESS_OUT_OF_RANGE",
+                "Narration loudness must be -14 LUFS ±1, TP <= -1.5 dBTP, LRA <= 7 LU.",
+            )
+        )
     return EngineAuditReport(not findings, "1" if not findings else "0", tuple(findings))
