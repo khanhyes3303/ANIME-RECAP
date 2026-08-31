@@ -165,6 +165,7 @@ from .workflow import (
     accept_editor_revision,
     accept_structure_index,
     advance,
+    bind_run_code_identity,
     begin_editor_task,
     begin_proxy_verifier_task,
     begin_structure_task,
@@ -332,6 +333,14 @@ def _start(args: argparse.Namespace) -> int:
 
 
 def _episode(run_dir: Path) -> tuple[object, Path]:
+    state = _validate_run_command_identity(run_dir)
+
+    if not state.episode_dir:
+        raise MvpError("run state has no episode directory")
+    return state, Path(state.episode_dir)
+
+
+def _validate_run_command_identity(run_dir: Path) -> object:
     state = read_state(run_dir)
     recorded = (
         RunCodeIdentity(
@@ -343,9 +352,9 @@ def _episode(run_dir: Path) -> tuple[object, Path]:
         else capture_run_code_identity(run_dir)
     )
     validate_run_code_identity(run_dir, recorded)
-    if not state.episode_dir:
-        raise MvpError("run state has no episode directory")
-    return state, Path(state.episode_dir)
+    if not (state.repository_root and state.code_commit and state.contract_version):
+        state = bind_run_code_identity(run_dir, recorded)
+    return state
 
 
 def _reference_style(run_dir: Path) -> ReferenceStyleProfile:
@@ -384,13 +393,15 @@ def _write_next(
 def _autonomous_task_prompt(prompt: str, run_dir: Path, accept_command: str) -> str:
     resolved_run = run_dir.resolve()
     entrypoint = Path(__file__).resolve().parents[2] / "run_episode.py"
+    project = entrypoint.parent
     return (
         prompt.rstrip() + "\n\nHỢP ĐỒNG TIẾP TỤC TỰ ĐỘNG (BẮT BUỘC)\n"
         "Sau khi ghi đủ required_outputs, tự chạy nguyên lệnh sau; không chỉ báo cáo "
         "đường dẫn:\n"
-        f'uv run python "{entrypoint}" {accept_command}\n\n'
+        f'uv run --project "{project}" python "{entrypoint}" {accept_command}\n\n'
         "Nếu accept thành công, bắt buộc tiếp tục chạy:\n"
-        f'uv run python "{entrypoint}" operator --run "{resolved_run}"\n\n'
+        f'uv run --project "{project}" python "{entrypoint}" '
+        f'operator --run "{resolved_run}"\n\n'
         "Đọc lại next_action.json và cong_viec_antigravity.json sau mỗi lệnh rồi thực hiện "
         "task kế tiếp. Không yêu cầu người dùng copy từng tình huống. Nếu accept thất bại, "
         "sửa đúng task hiện tại theo lỗi engine rồi chạy accept lại.\n"
@@ -1604,10 +1615,12 @@ def _prompt(run_dir: Path) -> int:
     job_path = run_dir / "cong_viec_antigravity.json"
     bootstrap = ""
     if not job_path.is_file() and state.stage is Stage.CHUAN_BI:
+        entrypoint = Path(__file__).resolve().parents[2] / "run_episode.py"
         bootstrap = (
             "RUN MOI DANG O CHUAN_BI\n"
             "Truoc tien chay dung mot lenh sau de tao job dau tien:\n"
-            f'uv run python run_episode.py operator --run "{run_dir.resolve()}"\n'
+            f'uv run --project "{entrypoint.parent}" python "{entrypoint}" '
+            f'operator --run "{run_dir.resolve()}"\n'
             "Sau khi lenh ket thuc, doc next_action.json va "
             "cong_viec_antigravity.json roi tiep tuc theo hop dong ben duoi.\n\n"
         )
@@ -2146,7 +2159,11 @@ def _gemini_web_run(
     except GeminiBrowserError as exc:
         code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")
         mark_human_required(run_dir, code)
-        show_command = f'uv run python run_episode.py gemini-web show --run "{run_dir.resolve()}"'
+        entrypoint = Path(__file__).resolve().parents[2] / "run_episode.py"
+        show_command = (
+            f'uv run --project "{entrypoint.parent}" python "{entrypoint}" '
+            f'gemini-web show --run "{run_dir.resolve()}"'
+        )
         _write_next(
             run_dir,
             f"Gemini Web dừng: {exc}. Giữ nguyên Chrome. Nếu cửa sổ không hiện, "
@@ -3214,6 +3231,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
+        if args.command != "start" and hasattr(args, "run"):
+            _validate_run_command_identity(args.run)
         if args.command == "start":
             return _start(args)
         if args.command == "prepare":

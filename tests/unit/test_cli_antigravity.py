@@ -36,6 +36,7 @@ from anime_review_mvp.workflow import (
     new_state,
     read_state,
 )
+from anime_review_mvp.run_identity import RunCodeIdentity
 
 
 def test_cli_rejects_run_created_by_another_checkout(tmp_path: Path) -> None:
@@ -60,8 +61,52 @@ def test_autonomous_prompt_uses_absolute_engine_entrypoint(tmp_path: Path) -> No
     )
     entrypoint = Path(cli.__file__).resolve().parents[2] / "run_episode.py"
 
-    assert f'uv run python "{entrypoint}" accept-antigravity' in rendered
-    assert f'uv run python "{entrypoint}" operator' in rendered
+    project = entrypoint.parent
+    assert f'uv run --project "{project}" python "{entrypoint}" accept-antigravity' in rendered
+    assert f'uv run --project "{project}" python "{entrypoint}" operator' in rendered
+
+
+def test_main_rejects_proxy_approval_from_another_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
+    episode.mkdir(parents=True)
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.CHO_NGUOI_DUNG_DUYET_PROXY, episode_dir=episode)
+    state_path = run / "run_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["repository_root"] = str((tmp_path / "other-checkout").resolve())
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    called: list[Path] = []
+    monkeypatch.setattr(cli, "_approve_proxy_command", lambda path: called.append(path) or 0)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["approve-proxy", "--run", str(run)])
+
+    assert exc.value.code == 2
+    assert called == []
+
+
+def test_legacy_run_identity_is_persisted_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "run"
+    new_state(run)
+    state_path = run / "run_state.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    for field in ("repository_root", "code_commit", "contract_version"):
+        payload.pop(field)
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    identity = RunCodeIdentity(str(tmp_path.resolve()), "c" * 40)
+    monkeypatch.setattr(cli, "capture_run_code_identity", lambda _path: identity)
+    monkeypatch.setattr(cli, "validate_run_code_identity", lambda *_args: None)
+
+    cli._validate_run_command_identity(run)
+
+    persisted = read_state(run)
+    assert persisted.repository_root == identity.repository_root
+    assert persisted.code_commit == identity.git_commit
+    assert persisted.contract_version == identity.contract_version
 
 
 def test_proxy_verifier_cannot_override_failed_machine_audit(

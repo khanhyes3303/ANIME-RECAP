@@ -85,6 +85,12 @@ def render_operator_prompt(run_dir: Path, template_path: Path) -> str:
     rendered = template.replace(placeholder, str(job_path)).replace(
         "<run_dir>", str(run_dir.resolve())
     )
+    entrypoint = Path(__file__).resolve().parents[2] / "run_episode.py"
+    operator_command = (
+        f'uv run --project "{entrypoint.parent}" python "{entrypoint}" '
+        f'operator --run "{run_dir.resolve()}"'
+    )
+    rendered = rendered.replace("<operator_command>", operator_command)
     missing_goal = "goal" not in rendered
     missing_teamwork = "teamwork-preview" not in rendered
     if missing_goal or missing_teamwork:
@@ -93,7 +99,7 @@ def render_operator_prompt(run_dir: Path, template_path: Path) -> str:
             "Mục tiêu duy nhất: đưa run đến CHO_NGUOI_DUNG_DUYET_PROXY.\n"
             "Không kết thúc sau STRUCTURE hoặc một SITUATION.\n"
             "Sau mỗi lần accept thành công, chạy lại:\n"
-            'uv run python run_episode.py operator --run "<run_dir>"\n'
+            f"{operator_command}\n"
             "Nếu thiếu thẻ bắt buộc, báo ANTIGRAVITY_CAPABILITY_MISSING và dừng.\n"
             "Required attached capabilities: "
             + ("goal" if missing_goal else "")
@@ -101,7 +107,7 @@ def render_operator_prompt(run_dir: Path, template_path: Path) -> str:
             + ("teamwork-preview" if missing_teamwork else "")
             + ".\n"
         )
-        rendered += tagged_contract.replace("<run_dir>", str(run_dir.resolve()))
+        rendered += tagged_contract
     return rendered
 
 

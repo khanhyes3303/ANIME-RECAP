@@ -293,7 +293,11 @@ def test_operator_prompt_renderer_requires_goal_and_teamwork_preview_once(
     assert rendered.count("goal") == 1
     assert rendered.count("teamwork-preview") == 1
     assert "CHO_NGUOI_DUNG_DUYET_PROXY" in rendered
-    assert 'uv run python run_episode.py operator --run "' in rendered
+    entrypoint = Path(antigravity_module.__file__).resolve().parents[2] / "run_episode.py"
+    assert (
+        f'uv run --project "{entrypoint.parent}" python "{entrypoint}" operator --run "'
+        in rendered
+    )
 
 
 def test_policy_hash_covers_every_runtime_python_module(tmp_path: Path) -> None:

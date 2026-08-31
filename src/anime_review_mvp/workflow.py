@@ -6,7 +6,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from .errors import MvpError
-from .run_identity import capture_run_code_identity
+from .run_identity import RunCodeIdentity, capture_run_code_identity
 
 
 class Stage(StrEnum):
@@ -218,6 +218,28 @@ def new_state(
         stage=stage,
         episode_dir=str(episode_dir.resolve()) if episode_dir else "",
         source_video=str(source_video.resolve()) if source_video else "",
+        repository_root=identity.repository_root,
+        code_commit=identity.git_commit,
+        contract_version=identity.contract_version,
+    )
+    _write_state(state)
+    return state
+
+
+def bind_run_code_identity(run_dir: Path, identity: RunCodeIdentity) -> RunState:
+    """Persist identity for a legacy run exactly once."""
+    state = read_state(run_dir)
+    existing = (state.repository_root, state.code_commit, state.contract_version)
+    if any(existing):
+        if existing != (
+            identity.repository_root,
+            identity.git_commit,
+            identity.contract_version,
+        ):
+            raise MvpError("RUN_CODE_IDENTITY_MISMATCH")
+        return state
+    state = replace(
+        state,
         repository_root=identity.repository_root,
         code_commit=identity.git_commit,
         contract_version=identity.contract_version,
