@@ -174,6 +174,19 @@ def test_new_timeline_places_voice_after_visual_preroll() -> None:
     assert map_source_timestamp(edl, 3_800) == timeline.cues[1].visual_anchor_program_ms
 
 
+def test_partial_episode_timeline_does_not_require_seven_minutes() -> None:
+    edl, timeline = build_semantic_timeline(
+        _plan(),
+        _tts(),
+        source_duration_ms=6_000,
+        policy=EditorialPolicy(),
+        enforce_episode_duration=False,
+    )
+
+    assert edl.total_duration_ms == timeline.total_duration_ms
+    assert edl.total_duration_ms < EditorialPolicy().target_minimum_ms
+
+
 def test_cue_window_uses_only_the_compact_approved_shot() -> None:
     plan = _plan()
     cue = replace(

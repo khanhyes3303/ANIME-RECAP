@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -292,9 +293,20 @@ def test_timeline_failure_routes_current_situation_to_editor_repair(
             else measured_shots
         ),
     )
+    monkeypatch.setattr(cli, "_frame_refs", lambda _run: ())
+    monkeypatch.setattr(
+        cli,
+        "load_situation_index",
+        lambda *_args: SimpleNamespace(
+            situations=(SimpleNamespace(situation_id="situation-041", excluded=False),)
+        ),
+    )
 
-    def fail_timeline(_plan, _tts, _duration, _policy, shots):
+    def fail_timeline(
+        _plan, _tts, _duration, _policy, shots, *, enforce_episode_duration
+    ):
         assert shots is measured_shots
+        assert enforce_episode_duration is True
         raise MvpError(
             "SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence"
         )
@@ -320,6 +332,63 @@ def test_timeline_failure_routes_current_situation_to_editor_repair(
     assert repair_notes == [
         "SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence"
     ]
+
+
+def test_partial_timeline_skips_full_episode_voice_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _empty_run(tmp_path)
+    raw_state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    raw_state.update(
+        {
+            "stage": Stage.LAP_TIMELINE_TINH_HUONG.value,
+            "current_situation_id": "situation-001",
+            "locked_situation_ids": [],
+        }
+    )
+    (run / "run_state.json").write_text(json.dumps(raw_state), encoding="utf-8")
+
+    monkeypatch.setattr(cli, "load_narration_plan", lambda _path: object())
+    source = SourceRef("episode.mp4", "a" * 64, 60_000, 320, 180, "1/1000", 1)
+    monkeypatch.setattr(
+        cli,
+        "load_json",
+        lambda path, _type: source if Path(path).name == "source_ref.json" else object(),
+    )
+    index = SimpleNamespace(
+        situations=(
+            SimpleNamespace(situation_id="situation-001", excluded=False),
+            SimpleNamespace(situation_id="situation-002", excluded=False),
+        )
+    )
+    monkeypatch.setattr(cli, "load_situation_index", lambda *_args: index)
+    monkeypatch.setattr(cli, "_frame_refs", lambda _run: ())
+
+    def forbidden_budget(*_args: object) -> None:
+        raise AssertionError("full episode budget ran before all situations were accepted")
+
+    monkeypatch.setattr(cli, "validate_episode_voice_budget", forbidden_budget)
+
+    observed: list[bool] = []
+
+    def fail_timeline(
+        _plan: object,
+        _tts: object,
+        _duration: int,
+        _policy: object,
+        _shots: object,
+        *,
+        enforce_episode_duration: bool,
+    ) -> object:
+        observed.append(enforce_episode_duration)
+        raise MvpError("SEMANTIC_TIMELINE_DOES_NOT_FIT: cue mismatch")
+
+    monkeypatch.setattr(cli, "build_semantic_timeline", fail_timeline)
+    monkeypatch.setattr(cli, "content_fingerprint", lambda _paths: "b" * 64)
+    monkeypatch.setattr(cli, "_editor_task_command", lambda *_args, **_kwargs: 0)
+
+    assert cli._timeline_command(run, "situation-001") == 1
+    assert observed == [False]
 
 
 def test_accepted_index_drives_a_scoped_editor_task(tmp_path: Path) -> None:

@@ -154,6 +154,8 @@ def build_semantic_timeline(
     source_duration_ms: int,
     policy: EditorialPolicy,
     shots: ShotDocument | None = None,
+    *,
+    enforce_episode_duration: bool = True,
 ) -> tuple[AdaptiveEdlDocument, SemanticTimeline]:
     if plan.policy_version != "situation-v2" or tts.policy_version != "situation-v2":
         raise MvpError("semantic timeline requires situation-v2")
@@ -216,7 +218,9 @@ def build_semantic_timeline(
             program_cursor = segment_end
             previous_spoken_end = spoken_end
 
-    if not policy.target_minimum_ms <= program_cursor <= policy.target_maximum_ms:
+    if enforce_episode_duration and not (
+        policy.target_minimum_ms <= program_cursor <= policy.target_maximum_ms
+    ):
         raise MvpError(
             "SEMANTIC_TIMELINE_DURATION_INVALID: Antigravity must revise accepted "
             "cue evidence to fit 7-12 minutes"

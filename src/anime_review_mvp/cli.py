@@ -2889,14 +2889,29 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
     tts = load_json(run_dir / "cue_tts_manifest.json", CueTtsManifest)
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     shots = load_json(run_dir / "shots.json", ShotDocument)
+    transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
+    index = load_situation_index(
+        run_dir / "situation_index.json",
+        source,
+        transcript,
+        shots,
+        _frame_refs(run_dir),
+    )
+    editable_ids = {
+        item.situation_id for item in index.situations if not item.excluded
+    }
+    accepted_or_current = {*state.locked_situation_ids, state.current_situation_id}
+    episode_content_complete = editable_ids <= accepted_or_current
     try:
-        validate_episode_voice_budget(tts, EditorialPolicy())
+        if episode_content_complete:
+            validate_episode_voice_budget(tts, EditorialPolicy())
         edl, timeline = build_semantic_timeline(
             plan,
             tts,
             source.duration_ms,
             EditorialPolicy(),
             shots,
+            enforce_episode_duration=episode_content_complete,
         )
     except MvpError as exc:
         if str(exc).startswith(
@@ -2908,15 +2923,6 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
         ):
             return _route_situation_validation_failure(run_dir, episode, state, exc)
         raise
-    transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
-    shots = load_json(run_dir / "shots.json", ShotDocument)
-    index = load_situation_index(
-        run_dir / "situation_index.json",
-        source,
-        transcript,
-        shots,
-        _frame_refs(run_dir),
-    )
     validate_edl_exclusions(edl, index)
     dump_json(run_dir / "adaptive_edl.json", edl)
     dump_json(run_dir / "semantic_timeline.json", timeline)
