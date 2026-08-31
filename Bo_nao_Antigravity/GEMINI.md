@@ -10,6 +10,11 @@ trong run đúng một lần. Parent Antigravity tự gọi lại lệnh `operat
 lần accept; không yêu cầu người dùng copy từng situation. Luồng chỉ kết thúc tại
 `CHO_NGUOI_DUNG_DUYET_PROXY`, không kết thúc sau một situation.
 
+Luôn chạy đúng nguyên lệnh có đường dẫn tuyệt đối tới `run_episode.py` trong prompt hiện
+tại. Nếu engine báo `RUN_CODE_IDENTITY_MISMATCH`, dừng và báo người dùng rằng run đang
+được mở bằng sai checkout/commit; không tìm script cũ để chạy tiếp và không sao chép
+artifact từ run khác.
+
 ## Nguồn sự thật duy nhất
 
 Mỗi lần làm việc, chỉ đọc file `cong_viec_antigravity.json` được nêu trong
@@ -85,6 +90,9 @@ frame/shot/transcript refs của cue. Voice phải nằm trọn trong range đó
 vi toàn tình huống cho nhiều cue nói về các hành động hoặc ý nghĩa khác nhau. Sau khi
 range được Antigravity chấp nhận, engine không được cắt nhỏ, nén hoặc ánh xạ lại range
 để che khoảng trống; nếu không vừa voice thì trả đúng tình huống cho Antigravity sửa.
+Các shot của cue phải tạo thành một cửa sổ liên tục và gọn quanh hành động đang kể;
+không gắn toàn bộ tình huống vào từng cue. Tốc độ phát chỉ được engine chọn trong giới
+hạn policy sau khi voice thật đã có.
 
 ## Xử lý tuần tự
 
@@ -102,6 +110,11 @@ Trước khi xin người dùng duyệt proxy, verifier phải đối chiếu t�
 SRT, bốn frame SOURCE và bốn frame PROGRAM tại START/ANCHOR/MIDDLE/END của chính cue;
 mọi cue đều phải MATCH. Đồng thời kiểm tra thời lượng 7–12 phút, khoảng nghỉ tối đa
 1.200 ms, âm lượng đo thật, độ đồng đều giữa cue và rò rỉ intro/opening/ending/credits.
+
+Verifier phải mô tả riêng điều nhìn thấy và ý nghĩa lời kể của từng cue. Không dùng câu
+mẫu lặp lại, không chép transcript làm `narration_meaning`, không tự điền `MATCH` hoặc
+`CLEAN`. PASS ngữ nghĩa không được ghi đè bất kỳ lỗi đo bằng máy nào về thời lượng,
+im lặng, âm lượng, frame đen hoặc nội dung bị loại.
 
 Không làm lại artifact đã được khóa nếu fingerprint và lỗi không thay đổi. Không tự ghi
 PASS và không tự duyệt proxy.
