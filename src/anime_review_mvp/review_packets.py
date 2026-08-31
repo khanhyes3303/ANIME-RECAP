@@ -8,6 +8,7 @@ from .errors import MvpError
 from .review_contracts import CueSemanticVerdict, SituationAuditDocument
 from .situation_scope import SituationScope
 from .situations import NarrationPlan
+from .proxy_evidence import ProxyEvidenceManifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +36,24 @@ class SituationAuditPacket:
     verifier_context_id: str
     cues: tuple[SituationAuditCue, ...]
     required_outputs: tuple[str, ...] = ("situation_audit_draft.json",)
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyAuditPacket:
+    producer_context_id: str
+    verifier_context_id: str
+    evidence: ProxyEvidenceManifest
+    loudness_report_path: str
+    required_outputs: tuple[str, ...] = ("proxy_audit_draft.json",)
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyAuditValidation:
+    finding_codes: tuple[str, ...]
+
+    @property
+    def passed(self) -> bool:
+        return not self.finding_codes
 
 
 def build_situation_audit_packet(
@@ -112,3 +131,39 @@ def validate_situation_audit(
     if any(item.verdict != "MATCH" for item in audit.cue_reviews):
         raise MvpError("SITUATION_AUDIT_FAILED")
     return audit
+
+
+def build_proxy_audit_packet(
+    evidence: ProxyEvidenceManifest,
+    loudness_report_path: Path,
+    producer_context_id: str,
+    verifier_context_id: str,
+) -> ProxyAuditPacket:
+    if not producer_context_id.strip() or not verifier_context_id.strip() or producer_context_id == verifier_context_id:
+        raise MvpError("VERIFIER_CONTEXT_NOT_INDEPENDENT")
+    if len(evidence.boundaries) != 2:
+        raise MvpError("VERIFIER_BOUNDARY_COVERAGE_INVALID")
+    return ProxyAuditPacket(producer_context_id, verifier_context_id, evidence, str(loudness_report_path), ("proxy_audit_draft.json",))
+
+
+def validate_proxy_audit(
+    audit: object,
+    plan: NarrationPlan,
+    evidence: ProxyEvidenceManifest,
+) -> ProxyAuditValidation:
+    expected = tuple(cue.cue_id for unit in plan.units for cue in unit.cues)
+    reviews = tuple(getattr(audit, "cue_reviews", ()))
+    observed = tuple(item.cue_id for item in reviews)
+    codes: list[str] = []
+    if observed != expected or len(set(observed)) != len(observed):
+        codes.append("PROXY_AUDIT_CUE_COVERAGE_INVALID")
+    if len(getattr(audit, "boundary_reviews", ())) != 2:
+        codes.append("VERIFIER_BOUNDARY_COVERAGE_INVALID")
+    if any(item.verdict != "MATCH" for item in reviews):
+        codes.extend(item.finding_codes or ("PROXY_CUE_MISMATCH",) for item in reviews if item.verdict != "MATCH")
+    if any(item.boundary == "START" and item.verdict == "LEAKED_EXCLUDED_CONTENT" for item in getattr(audit, "boundary_reviews", ())):
+        codes.append("INTRO_OPENING_LEAK")
+    known = {item.cue_id for item in evidence.cues}
+    if set(observed) - known:
+        codes.append("PROXY_EVIDENCE_REFERENCE_INVALID")
+    return ProxyAuditValidation(tuple(dict.fromkeys(code for item in codes for code in (item if isinstance(item, tuple) else (item,)))))
