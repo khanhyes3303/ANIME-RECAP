@@ -367,23 +367,94 @@ def _operator_editable_ids(run_dir: Path) -> tuple[str, ...]:
     return tuple(result)
 
 
+def _operator_engine_step(run_dir: Path, state: object) -> bool:
+    """Run one deterministic local stage, returning whether it advanced.
+
+    Antigravity owns every content decision.  This dispatcher only invokes
+    already-validated engine stages (TTS, timeline, audits and rendering), so
+    the tagged parent can call ``operator`` after each accept without manually
+    relaying the next numbered situation.
+    """
+    stage = state.stage
+    if stage is Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG:
+        if not state.verifier_task_id:
+            _verifier_task_command(run_dir, "situation")
+            return True
+        return False
+    if stage is Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY:
+        if not state.verifier_task_id:
+            _verifier_task_command(run_dir, "proxy")
+            return True
+        return False
+    if stage is Stage.KIEM_DINH_TINH_HUONG:
+        _audit(run_dir, "situation", None)
+        return True
+    if stage is Stage.TAO_TTS_TINH_HUONG:
+        _tts(run_dir, state.current_situation_id)
+        return True
+    if stage is Stage.LAP_TIMELINE_TINH_HUONG:
+        _timeline_command(run_dir, state.current_situation_id)
+        return True
+    if stage is Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG:
+        _audit(run_dir, "situation", None)
+        return True
+    if stage is Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP:
+        _audit(run_dir, "episode", None)
+        return True
+    if stage is Stage.DUNG_PROXY:
+        _render(run_dir, "proxy")
+        return True
+    if stage is Stage.KIEM_DINH_PROXY:
+        _audit(run_dir, "proxy", None)
+        return True
+    if stage is Stage.DUNG_VIDEO_CUOI:
+        _render(run_dir, "final")
+        return True
+    if stage is Stage.KIEM_DINH_ENGINE:
+        _audit(run_dir, "engine", None)
+        return True
+    return False
+
+
 def _operator_command(run_dir: Path) -> int:
-    """Execute local deterministic preparation until a human/Antigravity gate."""
+    """Advance local stages until a deterministic Antigravity/user gate."""
+    directive = None
     state = read_state(run_dir)
-    if state.stage is Stage.CHUAN_BI:
-        _prepare(run_dir)
+    # The bound keeps a corrupt state from spinning forever while still
+    # allowing the complete v2 pipeline to run in one tagged invocation.
+    for _ in range(64):
         state = read_state(run_dir)
-    directive = plan_operator_step(
-        state, editable_ids=_operator_editable_ids(run_dir)
-    )
-    if directive.action == "PREPARE_STRUCTURE_JOB":
-        _structure_task_command(run_dir)
-        state = read_state(run_dir)
-    elif directive.action == "PREPARE_SITUATION_JOB":
-        # The accepted index already records the next situation.  The editor
-        # command performs all scope/hash checks before exposing a job.
-        _editor_task_command(run_dir)
-        state = read_state(run_dir)
+        if state.stage is Stage.CHUAN_BI:
+            _prepare(run_dir)
+            continue
+        directive = plan_operator_step(
+            state, editable_ids=_operator_editable_ids(run_dir)
+        )
+        if directive.action == "PREPARE_STRUCTURE_JOB":
+            # A repair path may already have prepared the active task before
+            # returning here.  Never create a duplicate task on resume.
+            if not state.editor_task_id:
+                _structure_task_command(run_dir)
+            state = read_state(run_dir)
+            break
+        if directive.action == "PREPARE_SITUATION_JOB":
+            # The accepted index already records the next situation.  The
+            # editor command performs all scope/hash checks before exposing a
+            # job, and Antigravity completes it before the next invocation.
+            if not state.editor_task_id:
+                _editor_task_command(run_dir)
+            state = read_state(run_dir)
+            break
+        if directive.action in {"WAIT_FOR_USER_PROXY_APPROVAL", "STOP"}:
+            break
+        if not _operator_engine_step(run_dir, state):
+            break
+    else:
+        raise MvpError("operator exceeded deterministic stage limit")
+    if directive is None:
+        directive = plan_operator_step(
+            state, editable_ids=_operator_editable_ids(run_dir)
+        )
     try:
         next_payload = json.loads(
             (run_dir / "next_action.json").read_text(encoding="utf-8")

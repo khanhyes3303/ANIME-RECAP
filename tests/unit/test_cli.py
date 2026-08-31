@@ -210,3 +210,36 @@ def test_operator_command_prepares_structure_job_after_local_prepare(
     assert payload["action"] == "PREPARE_STRUCTURE_JOB"
     assert payload["stage"] == "CHO_ANTIGRAVITY_CHIA_TINH_HUONG"
     assert payload["instruction"] == "Antigravity xử lý structure."
+
+
+def test_operator_does_not_duplicate_an_already_prepared_situation_task(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG)
+    raw_state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    raw_state.update(
+        {
+            "current_situation_id": "situation-001",
+            "editor_task_id": "situation-001-revision-002",
+        }
+    )
+    (run / "run_state.json").write_text(
+        json.dumps(raw_state), encoding="utf-8"
+    )
+    (run / "situation_index.json").write_text(
+        json.dumps({"situations": [{"situation_id": "situation-001"}]}),
+        encoding="utf-8",
+    )
+    cli._write_next(run, "Đang chờ Antigravity hoàn tất task hiện tại.")
+
+    def duplicate(_run: Path) -> int:
+        raise AssertionError("operator created a duplicate editor task")
+
+    monkeypatch.setattr(cli, "_editor_task_command", duplicate)
+
+    assert cli._operator_command(run) == 0
+    payload = json.loads((run / "operator_status.json").read_text(encoding="utf-8"))
+    assert payload["action"] == "PREPARE_SITUATION_JOB"
+    assert payload["task_id"] == "situation-001-revision-002"
