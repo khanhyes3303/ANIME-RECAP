@@ -257,3 +257,52 @@ def test_operator_status_marks_user_gate_without_antigravity_work(
     payload = json.loads((run / "operator_status.json").read_text(encoding="utf-8"))
     assert payload["action"] == "WAIT_FOR_USER_PROXY_APPROVAL"
     assert payload["antigravity_work_required"] is False
+
+
+def test_operator_drives_local_stages_until_verifier_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_TINH_HUONG)
+    calls: list[str] = []
+
+    def set_stage(stage: Stage) -> None:
+        raw = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+        raw["stage"] = stage.value
+        (run / "run_state.json").write_text(json.dumps(raw), encoding="utf-8")
+
+    def fake_audit(_run: Path, phase: str, _review: object) -> int:
+        calls.append(f"audit:{phase}")
+        state = read_state(run)
+        if state.stage is Stage.KIEM_DINH_TINH_HUONG:
+            set_stage(Stage.TAO_TTS_TINH_HUONG)
+        else:
+            set_stage(Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG)
+        return 0
+
+    def fake_tts(_run: Path, _situation: str) -> int:
+        calls.append("tts")
+        set_stage(Stage.LAP_TIMELINE_TINH_HUONG)
+        return 0
+
+    def fake_timeline(_run: Path, _situation: str) -> int:
+        calls.append("timeline")
+        set_stage(Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG)
+        return 0
+
+    def fake_verifier(_run: Path, kind: str) -> int:
+        calls.append(f"verifier:{kind}")
+        raw = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+        raw["verifier_task_id"] = "situation-001-audit-001"
+        (run / "run_state.json").write_text(json.dumps(raw), encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(cli, "_audit", fake_audit)
+    monkeypatch.setattr(cli, "_tts", fake_tts)
+    monkeypatch.setattr(cli, "_timeline_command", fake_timeline)
+    monkeypatch.setattr(cli, "_verifier_task_command", fake_verifier)
+
+    assert cli._operator_command(run) == 0
+    assert calls == ["audit:situation", "tts", "timeline", "audit:situation", "verifier:situation"]
+    assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG
