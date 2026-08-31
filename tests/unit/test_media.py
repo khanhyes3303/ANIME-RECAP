@@ -26,6 +26,7 @@ from anime_review_mvp.models import (
     Claim,
     DenseEvidenceDocument,
     DenseFrame,
+    FrameAnchor,
     NarrationSpan,
     NarrationSpanDocument,
     Shot,
@@ -419,3 +420,17 @@ def test_extract_program_anchors_allows_nonstandard_jpeg_pixel_format(
         for command in jpeg_commands
         if "-strict" in command
     )
+
+
+def test_frame_anchor_accepts_anchor_position(tmp_path: Path) -> None:
+    anchor = FrameAnchor(
+        "anchor-001",
+        "span-001",
+        "range-001",
+        "PROGRAM",
+        "ANCHOR",
+        123,
+        str(tmp_path / "anchor.jpg"),
+    )
+
+    assert anchor.position == "ANCHOR"

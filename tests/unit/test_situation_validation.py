@@ -6,14 +6,17 @@ import pytest
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import Event, Shot, SourceRegionAnnotation, TruthDocument
+from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from anime_review_mvp.situation_validation import (
     coherence_findings,
     validate_causal_chains,
+    validate_edl_exclusions,
     validate_keep_skip,
     validate_narration_plan,
     validate_semantic_range,
     validate_situations,
 )
+from anime_review_mvp.situation_index import SituationIndexDocument, SituationIndexEntry
 from anime_review_mvp.situations import (
     EditorialPolicy,
     EvidenceRange,
@@ -154,6 +157,50 @@ def test_rejects_kept_range_in_confirmed_opening() -> None:
         validate_narration_plan(
             plan, _document(), _truth(excluded=True), SHOTS, POLICY, 20_000
         )
+
+
+def test_validate_edl_exclusions_rejects_overlap_by_one_millisecond() -> None:
+    edl = AdaptiveEdlDocument(
+        (
+            AdaptiveEdlSegment(
+                "segment-001",
+                "unit-001",
+                "situation-001",
+                "range-001",
+                9_999,
+                12_000,
+                0,
+                2_001,
+                1.0,
+                ("shot-001",),
+                ("event-001",),
+            ),
+        ),
+        2_001,
+    )
+    index = SituationIndexDocument(
+        "ANTIGRAVITY",
+        "situation-index-v1",
+        "a" * 64,
+        (
+            SituationIndexEntry(
+                "situation-001",
+                0,
+                10_000,
+                "Opening",
+                "Excluded opening",
+                "Opening boundary",
+                (0,),
+                ("shot-001",),
+                ("frames/shot-001.jpg",),
+                True,
+                "Opening credits",
+            ),
+        ),
+    )
+
+    with pytest.raises(MvpError, match="EDL_EXCLUDED_SOURCE_OVERLAP"):
+        validate_edl_exclusions(edl, index)
 
 
 def test_requires_real_omitted_gap_between_kept_ranges() -> None:

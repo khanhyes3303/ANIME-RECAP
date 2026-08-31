@@ -47,11 +47,16 @@ class ProxyEvidenceManifest:
 
 
 def _capture(runner: Callable[..., object], video: Path, timestamp: int, position: str, output: Path) -> ProxyEvidenceFrame:
-    try:
-        result = runner(video, timestamp, output)
-    except TypeError:
-        result = runner(video, timestamp, output, position)
-    path = str(result if isinstance(result, (str, Path)) else output)
+    result = runner(
+        ["ffmpeg", "-y", "-v", "error", "-ss", f"{timestamp / 1000:.3f}",
+         "-i", str(video), "-frames:v", "1", str(output)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if getattr(result, "returncode", 0) != 0:
+        raise MvpError("PROXY_EVIDENCE_FRAME_EXTRACTION_FAILED")
+    path = str(output)
     return ProxyEvidenceFrame(position, timestamp, path)
 
 
@@ -61,6 +66,7 @@ def extract_cue_proxy_evidence(
     plan: NarrationPlan,
     timeline: SemanticTimeline,
     edl: AdaptiveEdlDocument,
+    index: object,
     transcript: TranscriptDocument,
     output_dir: Path,
     *,
@@ -89,7 +95,23 @@ def extract_cue_proxy_evidence(
         cues.append(CueProxyEvidence(cue.cue_id, cue.situation_id, (source_start, source_end), (program_start, program_end), source_frames, program_frames, indexes, texts, cue.shot_ids))
     if not cues:
         raise MvpError("PROXY_EVIDENCE_CUE_COVERAGE_INVALID")
-    return ProxyEvidenceManifest(tuple(cues), ())
+    first = min(segment.program_start_ms for segment in edl.segments)
+    last = max(segment.program_end_ms for segment in edl.segments)
+    boundaries = (
+        BoundaryProxyEvidence(
+            "START",
+            (_capture(runner, proxy, first, "START", output_dir / "boundary-start.jpg"),),
+            tuple((item.source_start_ms, item.source_end_ms) for item in getattr(index, "situations", ()) if getattr(item, "excluded", False)),
+            (),
+        ),
+        BoundaryProxyEvidence(
+            "END",
+            (_capture(runner, proxy, max(first, last - 1), "END", output_dir / "boundary-end.jpg"),),
+            tuple((item.source_start_ms, item.source_end_ms) for item in getattr(index, "situations", ()) if getattr(item, "excluded", False)),
+            (),
+        ),
+    )
+    return ProxyEvidenceManifest(tuple(cues), boundaries)
 
 
 def validate_edl_exclusions(edl: AdaptiveEdlDocument, index: SituationIndexDocument) -> None:

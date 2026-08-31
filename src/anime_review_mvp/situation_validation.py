@@ -21,6 +21,19 @@ def _normalized_words(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
 
 
+def validate_edl_exclusions(edl: object, index: object) -> None:
+    """Reject any EDL interval intersecting an indexed excluded interval."""
+    for segment in getattr(edl, "segments", ()):
+        for item in getattr(index, "situations", ()):
+            if getattr(item, "excluded", False) and _overlap(
+                segment.source_start_ms,
+                segment.source_end_ms,
+                item.source_start_ms,
+                item.source_end_ms,
+            ):
+                raise MvpError("EDL_EXCLUDED_SOURCE_OVERLAP")
+
+
 def validate_causal_chains(document: SituationDocument) -> None:
     if document.policy_version != "situation-v2":
         return
