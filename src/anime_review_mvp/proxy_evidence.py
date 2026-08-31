@@ -105,12 +105,16 @@ def _frame_bundle(
 ) -> tuple[ProxyEvidenceFrame, ...]:
     if start_ms < 0 or end_ms <= start_ms:
         raise MvpError("proxy evidence interval is invalid")
+    # A timing anchor can land exactly on a rounded EDL boundary. Clamp it to
+    # the last real frame instead of asking the operator to repair harmless
+    # one-millisecond rounding.
+    anchor_ms = min(max(anchor_ms, start_ms), end_ms - 1)
     midpoint = (start_ms + end_ms) // 2
     timestamps = (
         ("START", start_ms),
         ("ANCHOR", anchor_ms),
         ("MIDDLE", midpoint),
-        ("END", end_ms),
+        ("END", max(start_ms, end_ms - 1)),
     )
     frames: list[ProxyEvidenceFrame] = []
     for position, timestamp_ms in timestamps:
@@ -270,7 +274,7 @@ def extract_cue_proxy_evidence(
             _frame_bundle(
                 proxy_video,
                 end_program_start_ms,
-                end_program_end_ms,
+                max(end_program_start_ms, end_program_end_ms - 1),
                 end_program_end_ms,
                 boundary_output / "end",
                 runner=runner,
