@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 from anime_review_mvp.editor_provenance import load_editor_task
@@ -11,7 +10,6 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TranscriptSegment,
 )
-from anime_review_mvp.reference_profile import ReferenceStyleProfile
 from anime_review_mvp.structure_packets import (
     build_structure_editor_packet,
     create_structure_task,
@@ -76,7 +74,7 @@ def test_structure_prompt_separates_boundaries_without_writing_narration(
     assert "Gemini Web" not in prompt
 
 
-def test_structure_prompt_requires_antigravity_to_watch_reference_video(
+def test_structure_prompt_does_not_require_unrelated_reference_video(
     tmp_path: Path,
 ) -> None:
     frames = tmp_path / "frames.json"
@@ -95,14 +93,6 @@ def test_structure_prompt_requires_antigravity_to_watch_reference_video(
         frames,
         task=task,
     )
-    packet = replace(
-        packet,
-        reference=ReferenceStyleProfile(
-            str((tmp_path / "reference.mp4").resolve()), "b" * 64, 350, 900, 1200
-        ),
-    )
-
     prompt = render_structure_editor_prompt(packet)
 
-    assert packet.reference.video_path in prompt
-    assert "xem trực tiếp video mẫu" in prompt
+    assert "xem trực tiếp video mẫu" not in prompt

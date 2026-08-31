@@ -88,17 +88,7 @@ def build_structure_editor_packet(
 
 
 def render_structure_editor_prompt(packet: StructureEditorPacket) -> str:
-    reference_instruction = (
-        "Trước khi chia tập, bắt buộc xem trực tiếp video mẫu "
-        f"`{packet.reference.video_path}` (SHA-256 `{packet.reference.sha256}`) để học "
-        "nhịp kể, cách chuyển tình huống và mật độ hình. Video mẫu chỉ là chuẩn phong "
-        "cách; không sao chép nội dung và không dùng thời lượng của video mẫu làm mục tiêu.\n\n"
-        if packet.reference.video_path
-        else ""
-    )
     return f"""Antigravity là biên tập viên duy nhất được chia cấu trúc tập phim.
-
-{reference_instruction}
 
 Task `{packet.task_id}` chỉ lập chỉ mục tình huống từ transcript, shots và frame
 manifest `{packet.frame_manifest_path}`. Không viết lời review, không chọn EDL, không

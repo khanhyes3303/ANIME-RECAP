@@ -13,7 +13,6 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TranscriptSegment,
 )
-from anime_review_mvp.reference_profile import ReferenceStyleProfile
 from anime_review_mvp.situation_index import SituationIndexEntry
 from anime_review_mvp.situation_packets import (
     build_scoped_situation_editor_packet,
@@ -66,9 +65,6 @@ def test_prompt_defines_local_situation_editor_contract(tmp_path: Path) -> None:
         POLICY,
         StoryContext((), (), (), "Tập trước Jiro vừa gặp Rago."),
         task=TASK,
-        reference=ReferenceStyleProfile(
-            str((tmp_path / "reference.mp4").resolve()), "b" * 64, 350, 900, 1200
-        ),
     )
 
     prompt = render_situation_editor_prompt(packet)
@@ -84,7 +80,7 @@ def test_prompt_defines_local_situation_editor_contract(tmp_path: Path) -> None:
     assert "situation_draft.json" in prompt
     assert "narration_draft.json" in prompt
     assert "xử lý xong và khóa một tình huống" in normalized
-    assert "xem trực tiếp video mẫu" in normalized
+    assert "xem trực tiếp video mẫu" not in normalized
     assert str(packet.policy.target_minimum_ms) in normalized
     assert str(packet.policy.target_maximum_ms) in normalized
     assert "mỗi cue chỉ được khóa vào đúng một evidence range" in normalized

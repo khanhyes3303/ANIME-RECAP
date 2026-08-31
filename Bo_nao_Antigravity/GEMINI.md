@@ -42,12 +42,10 @@ ghi trực tiếp TTS, timeline, EDL, audit, proxy, video cuối, PASS report ho
 MCP hoặc repo. Nếu thiếu công cụ, ghi rõ tên công cụ cần người dùng cài rồi dừng.
 Gemini Web không thuộc luồng mặc định và không được tự gọi.
 
-## Video mẫu và chuẩn toàn tập
+## Chuẩn toàn tập
 
-Mỗi job có `reference` chứa đường dẫn và SHA-256 của video mẫu. Antigravity phải xem
-trực tiếp video mẫu trước khi chia hoặc biên tập tập mới để học nhịp kể liên tục, cách
-đổi hình theo câu đang kể và mật độ cảnh. Video mẫu chỉ là chuẩn phong cách; không sao
-chép nội dung và không lấy thời lượng của video mẫu làm thời lượng tập mới.
+Chỉ dùng video nguồn, transcript/SRT, shot và frame của chính tập đang xử lý để quyết
+định lấy hoặc bỏ cảnh. Không bắt buộc xem video mẫu hay dùng tài nguyên của tập cũ.
 
 Proxy và video cuối của một tập phải dài 420.000–720.000 ms, ưu tiên 480.000–600.000
 ms. Khoảng nghỉ tự nhiên giữa các câu thường 350–900 ms và tuyệt đối không quá 1.200

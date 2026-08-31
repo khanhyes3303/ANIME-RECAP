@@ -850,7 +850,6 @@ def _prepare(run_dir: Path) -> int:
         raise MvpError("prepare requires CHUAN_BI stage")
     try:
         preflight_media_tools()
-        _reference_style(run_dir)
     except MvpError as exc:
         message = str(exc)
         tool_code = None
@@ -2778,7 +2777,6 @@ def _structure_task_command(run_dir: Path) -> int:
         load_json(input_paths[1], ShotDocument),
         input_paths[2],
         task=task,
-        reference=_reference_style(run_dir),
     )
     begin_structure_task(run_dir, task.task_id, task.revision)
     output = run_dir / "cong_viec_antigravity.json"
@@ -2882,7 +2880,6 @@ def _editor_task_command(run_dir: Path, *, repair_note: str = "") -> int:
         context,
         task=task,
         repair_note=repair_note,
-        reference=_reference_style(run_dir),
     )
     output = run_dir / "cong_viec_antigravity.json"
     dump_json(output, packet)

@@ -142,19 +142,8 @@ def render_situation_editor_prompt(packet: SituationEditorPacket) -> str:
         if packet.repair_note
         else ""
     )
-    reference = (
-        "Trước khi biên tập, bắt buộc xem trực tiếp video mẫu "
-        f"`{packet.reference.video_path}` (SHA-256 `{packet.reference.sha256}`). Học "
-        "nhịp kể liên tục và cách đổi hình theo ý đang kể; không sao chép nội dung. "
-        f"Khoảng nghỉ tự nhiên {packet.reference.normal_pause_min_ms}–"
-        f"{packet.reference.normal_pause_max_ms} ms, tuyệt đối không quá "
-        f"{packet.reference.hard_pause_max_ms} ms.\n\n"
-        if packet.reference.video_path
-        else ""
-    )
     return f"""Antigravity là biên tập viên duy nhất của nội dung tập phim.
 
-{reference}
 Bạn chỉ xử lý task `{packet.task_id}`, revision {packet.revision}, tình huống
 `{packet.situation_id}`. Không xử lý tình huống khác trong lượt này. Input SHA-256 đã khóa:
 `{packet.input_sha256}`.
