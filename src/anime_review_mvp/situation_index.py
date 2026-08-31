@@ -79,6 +79,9 @@ def validate_situation_index(
     if index.source_sha256 != source.sha256:
         raise MvpError("situation index source hash does not match the episode")
     shot_by_id = {shot.shot_id: shot for shot in shots.shots}
+    shot_edges = {shot.start_ms for shot in shots.shots} | {
+        shot.end_ms for shot in shots.shots
+    }
     known_frames = set(frame_refs)
     seen_ids: set[str] = set()
     previous_end = -1
@@ -91,6 +94,11 @@ def validate_situation_index(
             raise MvpError("situation range exceeds source duration")
         if entry.source_start_ms < previous_end:
             raise MvpError("situation ranges overlap or are not ordered")
+        if (
+            entry.source_start_ms not in shot_edges
+            or entry.source_end_ms not in shot_edges
+        ):
+            raise MvpError("SITUATION_INDEX_BOUNDARY_NOT_ON_SHOT_EDGE")
         previous_end = entry.source_end_ms
         for segment_index in entry.transcript_segment_indexes:
             if segment_index < 0 or segment_index >= len(transcript.segments):

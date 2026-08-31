@@ -102,8 +102,9 @@ Mỗi entry phải có `situation_id`, `source_start_ms`, `source_end_ms`, `summ
 `frame_refs`, `excluded` và `exclusion_reason`. Đánh dấu opening, ending, recap,
 credit, preview và nội dung dư bằng `excluded=true`. Mọi tham chiếu phải có thật và
 nằm trong range. Range đầu tiên phải bắt đầu ở 0, range cuối phải kết thúc đúng
-theo thời lượng source đã đo, các range kề nhau phải chạm biên nhau, và mỗi `shot_id`
-phải xuất hiện đúng một lần trên toàn bộ tập tình huống.
+theo thời lượng source đã đo, các range kề nhau phải chạm biên nhau, mọi ranh giới
+phải trùng với ranh giới shot thực tế, và mỗi `shot_id` phải xuất hiện đúng một
+lần trên toàn bộ tập tình huống.
 
 Ghi đúng cấu trúc JSON sau (thay các giá trị mẫu bằng bằng chứng thật):
 {{
