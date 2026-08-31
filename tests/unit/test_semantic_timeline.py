@@ -218,7 +218,37 @@ def test_cue_window_uses_only_the_compact_approved_shot() -> None:
     assert window.source_start_ms == 1_000
     assert window.source_end_ms == 4_000
     assert window.shot_ids == ("shot-001",)
-    assert window.playback_rate == pytest.approx(1.25)
+    assert window.playback_rate == pytest.approx(1.0)
+
+
+def test_cue_window_rejects_evidence_that_cuts_through_a_shot() -> None:
+    plan = _plan()
+    cue = replace(
+        plan.units[0].cues[0],
+        visual_anchor_source_ms=1_500,
+        shot_ids=("shot-whole",),
+    )
+    evidence = replace(
+        plan.units[0].evidence_ranges[0],
+        source_start_ms=1_200,
+        source_end_ms=3_800,
+        shot_ids=("shot-whole",),
+        shot_uses=(
+            replace(
+                plan.units[0].evidence_ranges[0].shot_uses[0],
+                shot_id="shot-whole",
+            ),
+        ),
+    )
+
+    with pytest.raises(MvpError, match="CUE_TIMELINE_DOES_NOT_FIT"):
+        select_cue_source_window(
+            evidence,
+            cue,
+            ShotDocument((Shot("shot-whole", 1_000, 4_000),)),
+            voice_ms=1_000,
+            policy=EditorialPolicy(target_minimum_ms=1_000, target_maximum_ms=60_000),
+        )
 
 
 def test_each_cue_range_selects_its_own_playback_rate() -> None:

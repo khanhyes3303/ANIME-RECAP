@@ -84,22 +84,20 @@ def _source_windows(
         for shot in shots.shots
         if shot.shot_id in allowed
         and shot.shot_id in evidence.shot_ids
-        and shot.end_ms > evidence.source_start_ms
-        and shot.start_ms < evidence.source_end_ms
+        and shot.start_ms >= evidence.source_start_ms
+        and shot.end_ms <= evidence.source_end_ms
     )
     windows: list[tuple[int, int, tuple[str, ...]]] = []
     for start_index in range(len(ordered)):
         selected: list[object] = []
         previous_end: int | None = None
         for shot in ordered[start_index:]:
-            clipped_start = max(shot.start_ms, evidence.source_start_ms)
-            clipped_end = min(shot.end_ms, evidence.source_end_ms)
-            if previous_end is not None and clipped_start > previous_end + 1:
+            if previous_end is not None and shot.start_ms > previous_end + 1:
                 break
             selected.append(shot)
-            previous_end = clipped_end
-            start_ms = max(selected[0].start_ms, evidence.source_start_ms)
-            end_ms = clipped_end
+            previous_end = shot.end_ms
+            start_ms = selected[0].start_ms
+            end_ms = shot.end_ms
             if start_ms <= cue.visual_anchor_source_ms < end_ms:
                 windows.append(
                     (start_ms, end_ms, tuple(item.shot_id for item in selected))
@@ -115,7 +113,7 @@ def select_cue_source_window(
     voice_ms: int,
     policy: EditorialPolicy,
 ) -> CueSourceWindow:
-    candidates: list[tuple[int, float, int, CueSourceWindow]] = []
+    candidates: list[tuple[float, int, int, CueSourceWindow]] = []
     for source_start_ms, source_end_ms, shot_ids in _source_windows(evidence, cue, shots):
         source_ms = source_end_ms - source_start_ms
         anchor_offset_ms = cue.visual_anchor_source_ms - source_start_ms
@@ -132,8 +130,8 @@ def select_cue_source_window(
                 continue
             candidates.append(
                 (
-                    trailing_ms,
                     abs(rate - 1.0),
+                    trailing_ms,
                     program_ms,
                     CueSourceWindow(source_start_ms, source_end_ms, rate, shot_ids),
                 )
