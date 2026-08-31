@@ -276,10 +276,30 @@ def test_v2_run_requires_antigravity_submission_and_user_proxy_approval(
         Stage.LAP_TIMELINE_TINH_HUONG,
         Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
     )
+    advance(
+        run,
+        Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+    )
+    advance(
+        run,
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+        Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG,
+    )
     lock_editor_situation(run, "situation-001")
     advance(run, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY)
     advance(run, Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY)
-    advance(run, Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
+    advance(run, Stage.KIEM_DINH_PROXY, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY)
+    advance(
+        run,
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY,
+        Stage.KIEM_DINH_PHAN_BIEN_PROXY,
+    )
+    advance(
+        run,
+        Stage.KIEM_DINH_PHAN_BIEN_PROXY,
+        Stage.CHO_NGUOI_DUNG_DUYET_PROXY,
+    )
     with pytest.raises(MvpError, match="proxy approval"):
         advance(run, Stage.CHO_NGUOI_DUNG_DUYET_PROXY, Stage.DUNG_VIDEO_CUOI)
 

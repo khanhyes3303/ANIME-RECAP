@@ -24,6 +24,7 @@ from anime_review_mvp.workflow import (
     record_stage_metric,
     resume_beat_repair,
     route_editor_repair,
+    route_verifier_repair,
 )
 
 
@@ -102,6 +103,12 @@ def replace_state(run: Path, stage: Stage) -> RunState:
         episode_dir=Path(state.episode_dir),
         source_video=Path(state.source_video) if state.source_video else None,
     )
+
+
+def seeded_verifier_run(tmp_path: Path) -> Path:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG)
+    return run
 
 
 def test_content_repair_returns_to_codex_editor(tmp_path: Path) -> None:
@@ -264,12 +271,34 @@ def test_v2_path_waits_for_explicit_user_proxy_approval(tmp_path: Path) -> None:
         (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
         (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
         (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG),
+        (
+            Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
+            Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+        ),
+        (
+            Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+            Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG,
+        ),
     ):
         advance(run, expected, target)
     lock_editor_situation(run, "situation-001", next_situation_id="")
     advance(run, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY)
     advance(run, Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY)
-    advance(run, Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
+    advance(
+        run,
+        Stage.KIEM_DINH_PROXY,
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY,
+    )
+    advance(
+        run,
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY,
+        Stage.KIEM_DINH_PHAN_BIEN_PROXY,
+    )
+    advance(
+        run,
+        Stage.KIEM_DINH_PHAN_BIEN_PROXY,
+        Stage.CHO_NGUOI_DUNG_DUYET_PROXY,
+    )
     assert read_state(run).stage is Stage.CHO_NGUOI_DUNG_DUYET_PROXY
     with pytest.raises(MvpError, match="proxy approval"):
         advance(run, Stage.CHO_NGUOI_DUNG_DUYET_PROXY, Stage.DUNG_VIDEO_CUOI)
@@ -298,6 +327,44 @@ def test_v2_content_repair_increments_revision_for_retry(tmp_path: Path) -> None
         run, ("situation-005",), ("SEMANTIC_TIMELINE_DOES_NOT_FIT",), "b" * 64
     )
     assert state.editorial_revision == 2
+
+
+def test_situation_must_pass_independent_verifier_before_locking(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG)
+
+    waiting = advance(
+        run,
+        Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+    )
+
+    assert waiting.stage is Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG
+    with pytest.raises(MvpError, match="verifier validation"):
+        lock_editor_situation(run, "situation-004")
+
+
+def test_same_verifier_failure_twice_stops_for_human(tmp_path: Path) -> None:
+    run = seeded_verifier_run(tmp_path)
+
+    first = route_verifier_repair(
+        run,
+        "situation-004",
+        ("SCENE_MISMATCH",),
+        "a" * 64,
+    )
+    stopped = route_verifier_repair(
+        run,
+        "situation-004",
+        ("SCENE_MISMATCH",),
+        "a" * 64,
+    )
+
+    assert first.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert stopped.stage is Stage.CAN_CON_NGUOI_XU_LY
+    assert stopped.repair_history[-1].codes == ("ANTIGRAVITY_VERIFIER_NO_PROGRESS",)
 
 
 def test_v2_requires_structure_index_before_situation_editor(tmp_path: Path) -> None:

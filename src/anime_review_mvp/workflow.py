@@ -44,8 +44,12 @@ class Stage(StrEnum):
     TAO_TTS_TINH_HUONG = "TAO_TTS_TINH_HUONG"
     LAP_TIMELINE_TINH_HUONG = "LAP_TIMELINE_TINH_HUONG"
     KIEM_DINH_NGU_NGHIA_TINH_HUONG = "KIEM_DINH_NGU_NGHIA_TINH_HUONG"
+    CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG = "CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG"
+    KIEM_DINH_PHAN_BIEN_TINH_HUONG = "KIEM_DINH_PHAN_BIEN_TINH_HUONG"
     KIEM_DINH_MACH_TRUYEN_TOAN_TAP = "KIEM_DINH_MACH_TRUYEN_TOAN_TAP"
     KIEM_DINH_PROXY = "KIEM_DINH_PROXY"
+    CHO_ANTIGRAVITY_KIEM_DINH_PROXY = "CHO_ANTIGRAVITY_KIEM_DINH_PROXY"
+    KIEM_DINH_PHAN_BIEN_PROXY = "KIEM_DINH_PHAN_BIEN_PROXY"
     CHO_NGUOI_DUNG_DUYET_PROXY = "CHO_NGUOI_DUNG_DUYET_PROXY"
 
 
@@ -79,11 +83,15 @@ class RunState:
     last_local_repair_fingerprint: str = ""
     last_local_repair_codes: tuple[str, ...] = ()
     editor_task_id: str = ""
+    verifier_task_id: str = ""
     editorial_revision: int = 0
     approved_proxy_sha256: str = ""
     approved_artifact_sha256: str = ""
     proxy_rejection_note: str = ""
     accepted_situation_index_sha256: str = ""
+    last_verifier_fingerprint: str = ""
+    last_verifier_codes: tuple[str, ...] = ()
+    verifier_stall_count: int = 0
 
 
 _NEXT_STAGE = {
@@ -136,9 +144,23 @@ _V2_TRANSITIONS = {
     (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
     (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
     (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG),
+    (
+        Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+    ),
+    (
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+        Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG,
+    ),
+    (Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP),
     (Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY),
     (Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY),
-    (Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY),
+    (Stage.KIEM_DINH_PROXY, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY),
+    (
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY,
+        Stage.KIEM_DINH_PHAN_BIEN_PROXY,
+    ),
+    (Stage.KIEM_DINH_PHAN_BIEN_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY),
     (Stage.CHO_NGUOI_DUNG_DUYET_PROXY, Stage.DUNG_VIDEO_CUOI),
 }
 
@@ -172,6 +194,7 @@ def _write_state(state: RunState) -> None:
     ]
     payload["locked_situation_ids"] = list(state.locked_situation_ids)
     payload["last_local_repair_codes"] = list(state.last_local_repair_codes)
+    payload["last_verifier_codes"] = list(state.last_verifier_codes)
     _state_path(state.run_dir).write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -225,11 +248,19 @@ def read_state(run_dir: Path) -> RunState:
             *previous_v2_fields,
             "accepted_situation_index_sha256",
         }
+        verifier_fields = {
+            *v2_fields,
+            "verifier_task_id",
+            "last_verifier_fingerprint",
+            "last_verifier_codes",
+            "verifier_stall_count",
+        }
         if frozenset(raw) not in {
             frozenset(legacy_fields),
             frozenset(current_fields),
             frozenset(previous_v2_fields),
             frozenset(v2_fields),
+            frozenset(verifier_fields),
         }:
             raise MvpError("run state fields do not match the contract")
         return RunState(
@@ -261,6 +292,7 @@ def read_state(run_dir: Path) -> RunState:
             last_local_repair_fingerprint=raw.get("last_local_repair_fingerprint", ""),
             last_local_repair_codes=tuple(raw.get("last_local_repair_codes", ())),
             editor_task_id=raw.get("editor_task_id", ""),
+            verifier_task_id=raw.get("verifier_task_id", ""),
             editorial_revision=raw.get("editorial_revision", 0),
             approved_proxy_sha256=raw.get("approved_proxy_sha256", ""),
             approved_artifact_sha256=raw.get("approved_artifact_sha256", ""),
@@ -268,6 +300,9 @@ def read_state(run_dir: Path) -> RunState:
             accepted_situation_index_sha256=raw.get(
                 "accepted_situation_index_sha256", ""
             ),
+            last_verifier_fingerprint=raw.get("last_verifier_fingerprint", ""),
+            last_verifier_codes=tuple(raw.get("last_verifier_codes", ())),
+            verifier_stall_count=raw.get("verifier_stall_count", 0),
         )
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         raise MvpError(f"cannot read run state: {run_dir}") from exc
@@ -391,8 +426,8 @@ def lock_editor_situation(
 ) -> RunState:
     state = read_state(run_dir)
     normalized = situation_id.strip()
-    if state.stage is not Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG:
-        raise MvpError("editor situation can only lock after semantic validation")
+    if state.stage is not Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG:
+        raise MvpError("editor situation can only lock after verifier validation")
     if not normalized or normalized in state.locked_situation_ids:
         raise MvpError("editor situation ID is missing or already locked")
     following = next_situation_id.strip()
@@ -406,6 +441,7 @@ def lock_editor_situation(
         locked_situation_ids=(*state.locked_situation_ids, normalized),
         current_situation_id=following,
         editor_task_id="",
+        verifier_task_id="",
     )
     _write_state(state)
     return state
@@ -534,6 +570,78 @@ def route_editor_repair(
             last_local_repair_fingerprint=fingerprint,
             last_local_repair_codes=codes,
             editor_task_id="",
+            verifier_task_id="",
+            editorial_revision=max(1, state.editorial_revision + 1),
+        )
+    _write_state(state)
+    return state
+
+
+def route_verifier_repair(
+    run_dir: Path,
+    situation_id: str,
+    codes: tuple[str, ...],
+    fingerprint: str,
+) -> RunState:
+    state = read_state(run_dir)
+    normalized = situation_id.strip()
+    allowed_validation_stages = {
+        Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG,
+        Stage.KIEM_DINH_PHAN_BIEN_PROXY,
+    }
+    repeated_wait_stage = (
+        state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+        and state.last_verifier_fingerprint == fingerprint
+        and state.last_verifier_codes == codes
+    )
+    if state.stage not in allowed_validation_stages and not repeated_wait_stage:
+        raise MvpError("verifier repair can only route from verifier validation")
+    if not normalized or not codes:
+        raise MvpError("verifier repair requires a situation ID and finding codes")
+    if len(fingerprint) != 64 or any(
+        character not in "0123456789abcdef" for character in fingerprint
+    ):
+        raise MvpError("verifier repair fingerprint must be a lowercase SHA-256")
+    history = (
+        *state.repair_history,
+        RepairRecord("ANTIGRAVITY", codes, "VERIFIER", (normalized,)),
+    )
+    if (
+        state.last_verifier_fingerprint == fingerprint
+        and state.last_verifier_codes == codes
+    ):
+        stalled = state.verifier_stall_count + 1
+        if stalled >= 2:
+            stopped = mark_human_required(run_dir, "ANTIGRAVITY_VERIFIER_NO_PROGRESS")
+            state = replace(
+                stopped,
+                verifier_task_id="",
+                last_verifier_fingerprint=fingerprint,
+                last_verifier_codes=codes,
+                verifier_stall_count=stalled,
+            )
+        else:
+            state = replace(
+                state,
+                stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+                repair_history=history,
+                current_situation_id=normalized,
+                verifier_task_id="",
+                last_verifier_fingerprint=fingerprint,
+                last_verifier_codes=codes,
+                verifier_stall_count=stalled,
+                editorial_revision=max(1, state.editorial_revision + 1),
+            )
+    else:
+        state = replace(
+            state,
+            stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+            repair_history=history,
+            current_situation_id=normalized,
+            verifier_task_id="",
+            last_verifier_fingerprint=fingerprint,
+            last_verifier_codes=codes,
+            verifier_stall_count=1,
             editorial_revision=max(1, state.editorial_revision + 1),
         )
     _write_state(state)
