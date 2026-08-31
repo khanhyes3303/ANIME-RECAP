@@ -29,6 +29,8 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TruthDocument,
 )
+from anime_review_mvp.render import RenderResult
+from anime_review_mvp.run_identity import RunCodeIdentity
 from anime_review_mvp.workflow import (
     Stage,
     advance,
@@ -36,8 +38,6 @@ from anime_review_mvp.workflow import (
     new_state,
     read_state,
 )
-from anime_review_mvp.render import RenderResult
-from anime_review_mvp.run_identity import RunCodeIdentity
 
 
 def test_cli_rejects_run_created_by_another_checkout(tmp_path: Path) -> None:
@@ -171,15 +171,15 @@ def test_machine_audit_rejects_proxy_changed_after_render(
         cli._verified_current_proxy_render(run)
 
 
-def test_next_action_exposes_simple_public_stage(tmp_path: Path) -> None:
+def test_next_action_exposes_only_simple_stage(tmp_path: Path) -> None:
     run = tmp_path / "run"
     new_state(run, stage=Stage.TAO_TTS_TINH_HUONG)
 
     cli._write_next(run, "Tạo voice rồi khớp cảnh.")
 
     payload = json.loads((run / "next_action.json").read_text(encoding="utf-8"))
-    assert payload["stage"] == "TAO_TTS_TINH_HUONG"
-    assert payload["public_stage"] == "TAO_VOICE_VA_KHOP_CANH"
+    assert payload["stage"] == "TAO_VOICE_VA_KHOP_CANH"
+    assert "public_stage" not in payload
 
 
 def _prepared_storyboard_run(tmp_path: Path) -> tuple[Path, Path]:
@@ -658,7 +658,7 @@ def test_prompt_command_bootstraps_fresh_run_before_first_job(tmp_path: Path) ->
     assert str((run / "cong_viec_antigravity.json").resolve()) in rendered
 
 
-def test_prompt_command_preserves_task_specific_prompt(tmp_path: Path) -> None:
+def test_prompt_command_replaces_stale_relative_task_prompt(tmp_path: Path) -> None:
     root = tmp_path
     run, _ = _prepared_storyboard_run(root)
     brain = root / "Bo_nao_Antigravity"
@@ -677,7 +677,11 @@ def test_prompt_command_preserves_task_specific_prompt(tmp_path: Path) -> None:
 
     assert cli.main(["prompt", "--run", str(run)]) == 0
 
-    assert output.read_text(encoding="utf-8") == exact_prompt
+    rendered = output.read_text(encoding="utf-8")
+    entrypoint = Path(cli.__file__).resolve().parents[2] / "run_episode.py"
+    assert rendered != exact_prompt
+    assert str(entrypoint) in rendered
+    assert str((run / "cong_viec_antigravity.json").resolve()) in rendered
 
 
 def test_prompt_parser_accepts_run_path() -> None:

@@ -208,7 +208,8 @@ def test_operator_command_prepares_structure_job_after_local_prepare(
 
     payload = json.loads((run / "operator_status.json").read_text(encoding="utf-8"))
     assert payload["action"] == "PREPARE_STRUCTURE_JOB"
-    assert payload["stage"] == "CHO_ANTIGRAVITY_CHIA_TINH_HUONG"
+    assert payload["stage"] == "PHAN_TICH"
+    assert "public_stage" not in payload
     assert payload["instruction"] == "Antigravity xử lý structure."
     assert payload["antigravity_work_required"] is True
 

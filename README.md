@@ -40,8 +40,9 @@ mọi situation và verifier; người dùng chỉ xem proxy và chọn approve 
 6. CHO_NGUOI_DUNG_DUYET_PROXY: dừng để người dùng approve hoặc reject.
 ```
 
-`next_action.json` và `operator_status.json` hiển thị `public_stage` theo sáu bước trên;
-`stage` chi tiết vẫn được giữ để engine biết chính xác công việc nội bộ.
+`next_action.json` và `operator_status.json` chỉ hiển thị trường `stage` theo sáu bước
+trên. Trạng thái kỹ thuật được giữ kín trong engine, không đưa vào prompt làm
+Antigravity phải suy luận thêm.
 
 Mỗi cue phải dùng một cửa sổ shot liên tục, gọn, nằm trong evidence đã được duyệt. Engine
 chỉ được chọn tốc độ trong giới hạn policy; nếu voice không vừa cảnh hoặc tạo hơn 1.200 ms
@@ -53,6 +54,10 @@ Mỗi run được gắn với repository và commit engine đã tạo nó. Nế
 hoặc code không cùng lịch sử, lệnh dừng với `RUN_CODE_IDENTITY_MISMATCH`; hãy quay lại
 đúng checkout hiện tại và chạy lại lệnh tuyệt đối ghi trong prompt. Không sao chép draft,
 audit `MATCH/CLEAN` hay artifact từ run cũ để tiếp tục.
+
+Lệnh `prompt` chỉ giữ lại prompt đã chứa đúng entrypoint tuyệt đối và đúng job hiện tại;
+prompt tương đối hoặc prompt từ engine cũ sẽ bị tạo lại. Muốn Antigravity làm lại một
+tập, hãy tạo run mới từ video nguồn; không đưa đường dẫn run/proxy cũ vào cuộc hội thoại.
 
 Mỗi job khai báo `task_kind`, `required_outputs` và `allowed_staging_dir`. Không dùng file
 mẫu, task cũ, artifact trong `revisions` hoặc tài liệu lịch sử để đoán việc hiện tại.

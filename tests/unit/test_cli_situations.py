@@ -199,7 +199,8 @@ def test_prepare_missing_tools_writes_clear_next_action(
         cli._prepare(run)
 
     payload = json.loads((run / "next_action.json").read_text(encoding="utf-8"))
-    assert payload["stage"] == "CHUAN_BI"
+    assert payload["stage"] == "PHAN_TICH"
+    assert "public_stage" not in payload
     assert payload["code"] == "THIEU_CONG_CU"
     assert "ffmpeg, ffprobe" in payload["instruction"]
 

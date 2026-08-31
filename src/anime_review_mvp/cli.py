@@ -101,11 +101,6 @@ from .public_workflow import public_stage
 from .reference_profile import ReferenceStyleProfile, load_reference_profile
 from .render import RenderResult, normalize_narration_loudness, probe_render, render_review
 from .review_contracts import LoudnessReport, ProxyAuditDocument, SituationAuditDocument
-from .run_identity import (
-    RunCodeIdentity,
-    capture_run_code_identity,
-    validate_run_code_identity,
-)
 from .review_packets import (
     build_proxy_audit_packet,
     build_situation_audit_packet,
@@ -113,6 +108,11 @@ from .review_packets import (
     render_situation_audit_prompt,
     validate_proxy_audit,
     validate_situation_audit,
+)
+from .run_identity import (
+    RunCodeIdentity,
+    capture_run_code_identity,
+    validate_run_code_identity,
 )
 from .semantic_timeline import SemanticTimeline, build_semantic_timeline
 from .situation_index import load_situation_index, next_editable_situation
@@ -165,11 +165,11 @@ from .workflow import (
     accept_editor_revision,
     accept_structure_index,
     advance,
-    bind_run_code_identity,
     begin_editor_task,
     begin_proxy_verifier_task,
     begin_structure_task,
     begin_verifier_task,
+    bind_run_code_identity,
     fallback_to_legacy_observation,
     lock_editor_situation,
     lock_situation,
@@ -320,8 +320,7 @@ def _start(args: argparse.Namespace) -> int:
         source_video=paths.source_video,
     )
     next_action = {
-        "stage": state.stage.value,
-        "public_stage": public_stage(state.stage).value,
+        "stage": public_stage(state.stage).value,
         "instruction": "Đọc Bo_nao_Antigravity/GEMINI.md rồi chạy bước prepare.",
         "run_dir": str(state.run_dir),
     }
@@ -376,8 +375,7 @@ def _write_next(
 ) -> None:
     state = read_state(run_dir)
     payload = {
-        "stage": state.stage.value,
-        "public_stage": public_stage(state.stage).value,
+        "stage": public_stage(state.stage).value,
         "instruction": instruction,
         "run_dir": str(state.run_dir),
     }
@@ -523,8 +521,7 @@ def _operator_command(run_dir: Path) -> int:
         next_payload = {}
     status = {
         "action": directive.action,
-        "stage": state.stage.value,
-        "public_stage": public_stage(state.stage).value,
+        "stage": public_stage(state.stage).value,
         "task_id": state.editor_task_id or state.verifier_task_id,
         "instruction": next_payload.get("instruction", ""),
         # This flag makes the handoff explicit: Antigravity must complete the
@@ -1627,9 +1624,12 @@ def _prompt(run_dir: Path) -> int:
     elif not job_path.is_file():
         raise MvpError("run has no cong_viec_antigravity.json; run prepare first")
     output = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
-    if output.is_file() and output.read_text(encoding="utf-8").strip():
-        print(output.resolve())
-        return 0
+    entrypoint = Path(__file__).resolve().parents[2] / "run_episode.py"
+    if output.is_file():
+        existing = output.read_text(encoding="utf-8")
+        if str(entrypoint) in existing and str(job_path.resolve()) in existing:
+            print(output.resolve())
+            return 0
     rendered = render_operator_prompt(
         run_dir,
         root / "Bo_nao_Antigravity" / "PROMPT_MOT_LAN_CHAY.md",

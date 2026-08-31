@@ -1,88 +1,147 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
+from dataclasses import replace
+from types import SimpleNamespace
 
-from anime_review_mvp import cli
-from anime_review_mvp.editor_provenance import (
-    accept_antigravity_submission,
-    create_editor_task,
+from anime_review_mvp.models import Shot, ShotDocument
+from anime_review_mvp.proxy_evidence import (
+    BoundaryProxyEvidence,
+    CueProxyEvidence,
+    ProxyEvidenceFrame,
+    ProxyEvidenceManifest,
 )
-from anime_review_mvp.workflow import (
-    Stage,
-    accept_editor_revision,
-    accept_structure_index,
-    advance,
-    begin_editor_task,
-    lock_editor_situation,
-    new_state,
-    read_state,
+from anime_review_mvp.review_packets import validate_proxy_audit
+from anime_review_mvp.semantic_timeline import build_semantic_timeline
+from anime_review_mvp.situations import (
+    CueTts,
+    CueTtsManifest,
+    EditorialPolicy,
+    EvidenceRange,
+    NarrationClaim,
+    NarrationCue,
+    NarrationPlan,
+    NarrationUnit,
+    SemanticShotUse,
 )
 
 
-def test_simplified_pipeline_reaches_proxy_gate_without_external_services(
-    tmp_path: Path,
-) -> None:
-    run = tmp_path / "run"
-    new_state(run)
-
-    advance(run, Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG)
-    advance(run, Stage.TRICH_XUAT_BANG_CHUNG, Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG)
-    advance(
-        run,
-        Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
-        Stage.KIEM_DINH_CHI_MUC_TINH_HUONG,
+def _episode_plan() -> tuple[NarrationPlan, CueTtsManifest, ShotDocument]:
+    units: list[NarrationUnit] = []
+    claims: list[NarrationClaim] = []
+    tts: list[CueTts] = []
+    shots: list[Shot] = []
+    for number, (start_ms, end_ms) in enumerate(((0, 210_000), (210_500, 420_500)), 1):
+        situation_id = f"situation-{number:03d}"
+        cue_id = f"cue-{number:03d}"
+        claim_id = f"claim-{number:03d}"
+        shot_id = f"shot-{number:03d}"
+        event_id = f"event-{number:03d}"
+        transcript = f"transcript-{number:03d}"
+        frame = f"frame-{number:03d}"
+        meaning = f"Hành động cốt truyện thứ {number} diễn ra."
+        shot_use = SemanticShotUse(shot_id, event_id, "ACTION", meaning)
+        evidence = EvidenceRange(
+            f"range-{number:03d}", situation_id, start_ms, end_ms, (shot_id,),
+            (event_id,), (transcript,), (frame,), meaning, event_id, "ACTION",
+            meaning, (shot_use,),
+        )
+        cue = NarrationCue(
+            cue_id, situation_id, f"Lời review cho hành động thứ {number}.",
+            (claim_id,), start_ms, "ACTION", (transcript,), (frame,), (shot_id,),
+            ("Jiro",), ("Jiro",), (), (), 300, 300,
+        )
+        units.append(
+            NarrationUnit(
+                f"unit-{number:03d}", situation_id, (meaning,), cue.text, "", "",
+                (evidence,), "LOCKED", (cue,),
+            )
+        )
+        claims.append(NarrationClaim(claim_id, meaning, (event_id,)))
+        tts.append(
+            CueTts(
+                cue_id, f"unit-{number:03d}", f"{cue_id}.wav", f"{cue_id}.mp3",
+                209_400, f"{number}" * 64,
+            )
+        )
+        shots.append(Shot(shot_id, start_ms, end_ms))
+    return (
+        NarrationPlan("LOCAL_EDITOR", "situation-v2", tuple(units), tuple(claims)),
+        CueTtsManifest(tuple(tts), "fake", "voice", "situation-v2", 0, 2),
+        ShotDocument(tuple(shots)),
     )
-    accept_structure_index(run, "a" * 64, "situation-001")
 
-    transcript = run / "transcript.json"
-    frames = run / "frames.json"
-    transcript.write_text('{"text":"Jiro về nhà"}', encoding="utf-8")
-    frames.write_text('{"shots":["shot-001"]}', encoding="utf-8")
-    task = create_editor_task(run, "run-001", "situation-001", 1, (transcript, frames))
-    begin_editor_task(run, task.task_id, task.situation_id, task.revision)
-    staging = run / "editor_staging" / task.task_id
-    staging.mkdir(parents=True)
-    situation = staging / "situation_draft.json"
-    narration = staging / "narration_draft.json"
-    situation.write_text('{"situation_id":"situation-001"}', encoding="utf-8")
-    narration.write_text('{"cue_id":"cue-001"}', encoding="utf-8")
-    accepted = accept_antigravity_submission(run, task.task_id, staging)
-    accept_editor_revision(run, task.task_id, accepted.revision)
 
-    transitions = (
-        (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
-        (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
-        (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG),
+def _frames(prefix: str) -> tuple[ProxyEvidenceFrame, ...]:
+    return tuple(
+        ProxyEvidenceFrame(position, index * 100, f"{prefix}-{position.lower()}.jpg")
+        for index, position in enumerate(("START", "ANCHOR", "MIDDLE", "END"), 1)
+    )
+
+
+def test_simplified_pipeline_builds_real_timeline_and_validates_evidence_offline() -> None:
+    plan, tts, shots = _episode_plan()
+    policy = EditorialPolicy()
+    partial_plan = replace(plan, units=plan.units[:1], claims=plan.claims[:1])
+    partial_tts = replace(tts, cues=tts.cues[:1], cache_misses=1)
+
+    partial_edl, _ = build_semantic_timeline(
+        partial_plan, partial_tts, 422_000, policy, shots,
+        enforce_episode_duration=False,
+    )
+    edl, timeline = build_semantic_timeline(plan, tts, 422_000, policy, shots)
+
+    assert partial_edl.total_duration_ms == 210_000
+    assert edl.total_duration_ms == 420_000
+    assert all(segment.playback_rate == 1.0 for segment in edl.segments)
+    assert timeline.cues[1].spoken_start_ms - timeline.cues[0].spoken_end_ms <= 1_200
+
+    cue_evidence = tuple(
+        CueProxyEvidence(
+            cue.cue_id, cue.situation_id,
+            (segment.source_start_ms, segment.source_end_ms),
+            (segment.program_start_ms, segment.program_end_ms),
+            _frames(f"source-{cue.cue_id}"), _frames(f"program-{cue.cue_id}"),
+            (index,), (f"transcript-{index + 1:03d}",), segment.shot_ids,
+        )
+        for index, (cue, segment) in enumerate(
+            zip((unit.cues[0] for unit in plan.units), edl.segments, strict=True)
+        )
+    )
+    evidence = ProxyEvidenceManifest(
+        cue_evidence,
         (
-            Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
-            Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
-        ),
-        (
-            Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
-            Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG,
+            BoundaryProxyEvidence("START", _frames("boundary-start"), (), ()),
+            BoundaryProxyEvidence("END", _frames("boundary-end"), (), ()),
         ),
     )
-    for current, following in transitions:
-        advance(run, current, following)
+    observations = (
+        ("Jiro mở cổng rồi lao vào sân.", "Lời review giải thích Jiro bắt đầu truy đuổi."),
+        ("Rago chắn trước con quái vật trong rừng.", "Lời review giải thích Rago bảo vệ Jiro."),
+    )
+    reviews = tuple(
+        SimpleNamespace(
+            cue_id=item.cue_id, situation_id=item.situation_id, verdict="MATCH",
+            finding_codes=(),
+            frame_refs=tuple(frame.path for frame in (*item.source_frames, *item.program_frames)),
+            transcript_refs=item.transcript_text, voice_before_visual=False,
+            mixed_semantics=False,
+            observed_visual=observations[index][0],
+            narration_meaning=observations[index][1],
+            note=f"Đã đối chiếu tám frame riêng cho {item.cue_id}.",
+        )
+        for index, item in enumerate(evidence.cues)
+    )
+    boundary_reviews = tuple(
+        SimpleNamespace(
+            boundary=item.boundary, verdict="CLEAN",
+            frame_refs=tuple(frame.path for frame in item.program_frames),
+            transcript_refs=(), finding_codes=(),
+        )
+        for item in evidence.boundaries
+    )
 
-    lock_editor_situation(run, "situation-001")
-    for current, following in (
-        (Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY),
-        (Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY),
-        (Stage.KIEM_DINH_PROXY, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY),
-        (
-            Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY,
-            Stage.KIEM_DINH_PHAN_BIEN_PROXY,
-        ),
-        (Stage.KIEM_DINH_PHAN_BIEN_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY),
-    ):
-        advance(run, current, following)
-
-    cli._write_next(run, "Người dùng xem proxy rồi approve hoặc reject.")
-    status = json.loads((run / "next_action.json").read_text(encoding="utf-8"))
-
-    assert read_state(run).stage is Stage.CHO_NGUOI_DUNG_DUYET_PROXY
-    assert status["public_stage"] == "CHO_NGUOI_DUNG_DUYET_PROXY"
-    assert not (run / "tts").exists()
-    assert not (run / "proxy" / "review_proxy.mp4").exists()
+    assert validate_proxy_audit(
+        SimpleNamespace(cue_reviews=reviews, boundary_reviews=boundary_reviews),
+        plan,
+        evidence,
+    ).passed is True

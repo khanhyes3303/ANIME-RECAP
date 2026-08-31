@@ -21,6 +21,9 @@ Mỗi lần làm việc, chỉ đọc file `cong_viec_antigravity.json` được
 `PROMPT_GUI_ANTIGRAVITY.txt`. Hai trường `task_kind` và `required_outputs` trong job
 quyết định chính xác việc phải làm và file được phép tạo. Không suy đoán từ artifact
 cũ, task cũ, thư mục `revisions`, tài liệu trong `docs` hoặc cuộc trò chuyện trước.
+Không tạo script scratch để tự động điền draft/audit hoặc chạy tắt nhiều job. Chỉ chạy
+nguyên lệnh tuyệt đối do prompt hiện tại cung cấp, rồi đọc lại `next_action.json` và job
+mới do engine sinh ra.
 
 - `task_kind: STRUCTURE`: chia toàn tập thành các tình huống; chỉ tạo
   `situation_index_draft.json`.
