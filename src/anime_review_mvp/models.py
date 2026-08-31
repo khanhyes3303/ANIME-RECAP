@@ -318,7 +318,7 @@ class FrameAnchor:
         _non_empty(self.range_id, "anchor range_id")
         if self.timeline not in {"SOURCE", "PROGRAM"}:
             raise MvpError("anchor timeline is invalid")
-        if self.position not in {"START", "MIDDLE", "END"}:
+        if self.position not in {"START", "ANCHOR", "MIDDLE", "END"}:
             raise MvpError("anchor position is invalid")
         if self.timestamp_ms < 0:
             raise MvpError("anchor timestamp must not be negative")
