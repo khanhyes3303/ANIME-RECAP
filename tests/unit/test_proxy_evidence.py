@@ -4,16 +4,22 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
-from anime_review_mvp.models import Shot, ShotDocument, SourceRef, TranscriptDocument, TranscriptSegment
+from anime_review_mvp.models import (
+    Shot,
+    ShotDocument,
+    SourceRef,
+    TranscriptDocument,
+    TranscriptSegment,
+)
 from anime_review_mvp.proxy_evidence import extract_cue_proxy_evidence
 from anime_review_mvp.semantic_timeline import CueTiming, SemanticTimeline
 from anime_review_mvp.situation_index import SituationIndexDocument, SituationIndexEntry
 from anime_review_mvp.situations import (
+    EvidenceRange,
     NarrationClaim,
     NarrationCue,
     NarrationPlan,
     NarrationUnit,
-    EvidenceRange,
     SemanticShotUse,
 )
 

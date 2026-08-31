@@ -433,8 +433,10 @@ def _verifier_task_command(run_dir: Path, kind: str) -> int:
     )
     _write_next(
         run_dir,
-        f"Verifier kiểm tra từng cue của {packet.situation_id}; chỉ ghi situation_audit_draft.json rồi chạy accept-verifier --run "
-        f'"{run_dir}" --task {verifier.task_id} --input "{run_dir / "editor_staging" / verifier.task_id}".',
+        f"Verifier kiểm tra từng cue của {packet.situation_id}; chỉ ghi "
+        "situation_audit_draft.json rồi chạy accept-verifier --run "
+        f'"{run_dir}" --task {verifier.task_id} --input '
+        f'"{run_dir / "editor_staging" / verifier.task_id}".',
     )
     print(run_dir / "cong_viec_antigravity.json")
     return 0
@@ -510,12 +512,22 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
         validation = validate_proxy_audit(audit, plan, evidence)
         if not validation.passed:
             by_cue = {cue.cue_id: cue.situation_id for unit in plan.units for cue in unit.cues}
-            affected = tuple(dict.fromkeys(by_cue[item.cue_id] for item in audit.cue_reviews if item.verdict != "MATCH" and item.cue_id in by_cue))
+            affected = tuple(
+                dict.fromkeys(
+                    by_cue[item.cue_id]
+                    for item in audit.cue_reviews
+                    if item.verdict != "MATCH" and item.cue_id in by_cue
+                )
+            )
             if not affected:
                 affected = tuple(unit.situation_id for unit in plan.units)
             fingerprint = content_fingerprint((staging_dir / "proxy_audit_draft.json",))
             route_proxy_verifier_repair(run_dir, affected, validation.finding_codes, fingerprint)
-            _write_next(run_dir, "Verifier proxy phát hiện lỗi; Antigravity sửa đúng tình huống/cue bị ảnh hưởng rồi chạy operator.")
+            _write_next(
+                run_dir,
+                "Verifier proxy phát hiện lỗi; Antigravity sửa đúng tình huống/cue "
+                "bị ảnh hưởng rồi chạy operator.",
+            )
             return 1
         ledger = run_dir / "verifier_ledger.jsonl"
         from .editor_provenance import AcceptedVerifierRevision
@@ -530,7 +542,11 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
         )
         advance(run_dir, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY, Stage.KIEM_DINH_PHAN_BIEN_PROXY)
         advance(run_dir, Stage.KIEM_DINH_PHAN_BIEN_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
-        _write_next(run_dir, "Proxy đã qua kiểm định độc lập từng cue và boundary; chờ người dùng duyệt proxy.")
+        _write_next(
+            run_dir,
+            "Proxy đã qua kiểm định độc lập từng cue và boundary; chờ người dùng "
+            "duyệt proxy.",
+        )
         return 0
     if task.task_kind != "SITUATION_AUDIT":
         raise MvpError("unsupported verifier task kind")
@@ -545,10 +561,22 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
     try:
         validate_situation_audit(audit, plan)
     except MvpError:
-        codes = tuple(dict.fromkeys(code for item in audit.cue_reviews for code in item.finding_codes)) or ("SITUATION_AUDIT_FAILED",)
-        advance(run_dir, Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG, Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG)
+        codes = tuple(
+            dict.fromkeys(
+                code for item in audit.cue_reviews for code in item.finding_codes
+            )
+        ) or ("SITUATION_AUDIT_FAILED",)
+        advance(
+            run_dir,
+            Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+            Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG,
+        )
         route_verifier_repair(run_dir, task.situation_id, codes, content_fingerprint((audit_path,)))
-        _write_next(run_dir, f"Verifier phát hiện lỗi ở {task.situation_id}; Antigravity sửa rồi chạy editor-task lại.")
+        _write_next(
+            run_dir,
+            f"Verifier phát hiện lỗi ở {task.situation_id}; Antigravity sửa rồi "
+            "chạy editor-task lại.",
+        )
         return 1
     # A successful verifier is independently recorded before the situation is locked.
     ledger = run_dir / "verifier_ledger.jsonl"
@@ -559,11 +587,25 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
         "ANTIGRAVITY_VERIFIER", task.input_sha256, content_fingerprint((audit_path,))
     )
     atomic_append_jsonl(ledger, accepted)
-    advance(run_dir, Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG, Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG)
+    advance(
+        run_dir,
+        Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
+        Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG,
+    )
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
-    index = load_situation_index(run_dir / "situation_index.json", source, load_json(run_dir / "transcript_english.json", TranscriptDocument), load_json(run_dir / "shots.json", ShotDocument), _frame_refs(run_dir))
+    index = load_situation_index(
+        run_dir / "situation_index.json",
+        source,
+        load_json(run_dir / "transcript_english.json", TranscriptDocument),
+        load_json(run_dir / "shots.json", ShotDocument),
+        _frame_refs(run_dir),
+    )
     following = next_editable_situation(index, (*state.locked_situation_ids, task.situation_id))
-    lock_editor_situation(run_dir, task.situation_id, next_situation_id="" if following is None else following.situation_id)
+    lock_editor_situation(
+        run_dir,
+        task.situation_id,
+        next_situation_id="" if following is None else following.situation_id,
+    )
     _write_next(run_dir, "Verifier đạt MATCH; tình huống đã khóa và operator có thể tiếp tục.")
     return 0
 
@@ -2170,7 +2212,11 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
     )
     dump_json(run_dir / "proxy_evidence" / "proxy_evidence_manifest.json", evidence)
     advance(run_dir, Stage.KIEM_DINH_PROXY, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY)
-    _write_next(run_dir, "Proxy đạt kiểm định máy; chạy verifier-task --kind proxy để Antigravity đối chiếu từng cue và boundary START/END.")
+    _write_next(
+        run_dir,
+        "Proxy đạt kiểm định máy; chạy verifier-task --kind proxy để Antigravity "
+        "đối chiếu từng cue và boundary START/END.",
+    )
     return 0
 
 
@@ -2229,7 +2275,10 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
             Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
             Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
         )
-        _write_next(run_dir, "Timing đạt; chạy verifier-task --kind situation để kiểm tra từng cue.")
+        _write_next(
+            run_dir,
+            "Timing đạt; chạy verifier-task --kind situation để kiểm tra từng cue.",
+        )
         return 0
     raise MvpError("situation audit stage is invalid")
 

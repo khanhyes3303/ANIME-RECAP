@@ -14,8 +14,8 @@ from anime_review_mvp.editor_provenance import (
     load_verifier_ledger,
     require_antigravity_provenance,
 )
-from anime_review_mvp.jsonio import atomic_append_jsonl
 from anime_review_mvp.errors import MvpError
+from anime_review_mvp.jsonio import atomic_append_jsonl
 
 
 def _prepared_submission(

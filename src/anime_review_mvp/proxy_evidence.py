@@ -49,9 +49,13 @@ class CueProxyEvidence:
     def __post_init__(self) -> None:
         if not self.cue_id.strip() or not self.situation_id.strip():
             raise MvpError("proxy evidence cue metadata is invalid")
-        if self.source_interval_ms[0] < 0 or self.source_interval_ms[1] <= self.source_interval_ms[0]:
+        if self.source_interval_ms[0] < 0 or (
+            self.source_interval_ms[1] <= self.source_interval_ms[0]
+        ):
             raise MvpError("proxy evidence source interval is invalid")
-        if self.program_interval_ms[0] < 0 or self.program_interval_ms[1] <= self.program_interval_ms[0]:
+        if self.program_interval_ms[0] < 0 or (
+            self.program_interval_ms[1] <= self.program_interval_ms[0]
+        ):
             raise MvpError("proxy evidence program interval is invalid")
         if len(self.source_frames) != 4 or len(self.program_frames) != 4:
             raise MvpError("proxy evidence requires four source and program frames")

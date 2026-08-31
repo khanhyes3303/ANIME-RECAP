@@ -76,7 +76,9 @@ def approve_proxy(
     state = read_state(run_dir)
     if state.stage is not Stage.CHO_NGUOI_DUNG_DUYET_PROXY:
         raise MvpError("proxy approval is only valid while waiting for the user")
-    if state.editorial_revision >= 1 and (run_dir / "proxy_evidence" / "proxy_evidence_manifest.json").is_file():
+    if state.editorial_revision >= 1 and (
+        run_dir / "proxy_evidence" / "proxy_evidence_manifest.json"
+    ).is_file():
         accepted_proxy_verifiers = tuple(
             record for record in load_verifier_ledger(run_dir / "verifier_ledger.jsonl")
             if record.task_kind == "PROXY_AUDIT" and record.actor == "ANTIGRAVITY_VERIFIER"

@@ -708,7 +708,14 @@ def route_proxy_verifier_repair(
         state = replace(
             state,
             stage=Stage.CAN_CON_NGUOI_XU_LY,
-            repair_history=(*history, RepairRecord("ANTIGRAVITY", ("ANTIGRAVITY_VERIFIER_NO_PROGRESS",), "HUMAN")),
+            repair_history=(
+                *history,
+                RepairRecord(
+                    "ANTIGRAVITY",
+                    ("ANTIGRAVITY_VERIFIER_NO_PROGRESS",),
+                    "HUMAN",
+                ),
+            ),
             verifier_task_id="", last_verifier_fingerprint=fingerprint,
             last_verifier_codes=codes, verifier_stall_count=stalled,
         )

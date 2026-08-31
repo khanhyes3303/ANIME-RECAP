@@ -64,7 +64,10 @@ def build_situation_audit_packet(
 ) -> SituationAuditPacket:
     if producer_task.task_kind != "SITUATION" or verifier_task.task_kind != "SITUATION_AUDIT":
         raise MvpError("VERIFIER_TASK_KIND_INVALID")
-    if producer_task.situation_id != scope.situation_id or verifier_task.situation_id != scope.situation_id:
+    if (
+        producer_task.situation_id != scope.situation_id
+        or verifier_task.situation_id != scope.situation_id
+    ):
         raise MvpError("VERIFIER_SITUATION_SCOPE_INVALID")
     cues: list[SituationAuditCue] = []
     for unit in plan.units:
@@ -107,7 +110,8 @@ def render_situation_audit_prompt(packet: SituationAuditPacket) -> str:
         f"{packet.situation_id}, đọc toàn bộ transcript/shots/frames trong packet và từng cue.\n"
         "Không sửa artifact của producer. Ghi đúng một situation_audit_draft.json.\n"
         "Mỗi cue phải có verdict MATCH, MISMATCH hoặc INSUFFICIENT_EVIDENCE; "
-        "nếu frame/transcript không chứng minh lời dẫn thì bắt buộc dùng MISMATCH hoặc INSUFFICIENT_EVIDENCE.\n"
+        "nếu frame/transcript không chứng minh lời dẫn thì bắt buộc dùng MISMATCH "
+        "hoặc INSUFFICIENT_EVIDENCE.\n"
         f"Producer context: {packet.producer_context_id}\n"
         f"Verifier context: {packet.verifier_context_id}\n"
         "Không kết thúc luồng; sau khi ghi file, báo đường dẫn để chạy accept-verifier.\n"
@@ -139,11 +143,21 @@ def build_proxy_audit_packet(
     producer_context_id: str,
     verifier_context_id: str,
 ) -> ProxyAuditPacket:
-    if not producer_context_id.strip() or not verifier_context_id.strip() or producer_context_id == verifier_context_id:
+    if (
+        not producer_context_id.strip()
+        or not verifier_context_id.strip()
+        or producer_context_id == verifier_context_id
+    ):
         raise MvpError("VERIFIER_CONTEXT_NOT_INDEPENDENT")
     if len(evidence.boundaries) != 2:
         raise MvpError("VERIFIER_BOUNDARY_COVERAGE_INVALID")
-    return ProxyAuditPacket(producer_context_id, verifier_context_id, evidence, str(loudness_report_path), ("proxy_audit_draft.json",))
+    return ProxyAuditPacket(
+        producer_context_id,
+        verifier_context_id,
+        evidence,
+        str(loudness_report_path),
+        ("proxy_audit_draft.json",),
+    )
 
 
 def render_proxy_audit_prompt(packet: ProxyAuditPacket) -> str:
@@ -176,10 +190,25 @@ def validate_proxy_audit(
     if len(getattr(audit, "boundary_reviews", ())) != 2:
         codes.append("VERIFIER_BOUNDARY_COVERAGE_INVALID")
     if any(item.verdict != "MATCH" for item in reviews):
-        codes.extend(item.finding_codes or ("PROXY_CUE_MISMATCH",) for item in reviews if item.verdict != "MATCH")
-    if any(item.boundary == "START" and item.verdict == "LEAKED_EXCLUDED_CONTENT" for item in getattr(audit, "boundary_reviews", ())):
+        codes.extend(
+            item.finding_codes or ("PROXY_CUE_MISMATCH",)
+            for item in reviews
+            if item.verdict != "MATCH"
+        )
+    if any(
+        item.boundary == "START" and item.verdict == "LEAKED_EXCLUDED_CONTENT"
+        for item in getattr(audit, "boundary_reviews", ())
+    ):
         codes.append("INTRO_OPENING_LEAK")
     known = {item.cue_id for item in evidence.cues}
     if set(observed) - known:
         codes.append("PROXY_EVIDENCE_REFERENCE_INVALID")
-    return ProxyAuditValidation(tuple(dict.fromkeys(code for item in codes for code in (item if isinstance(item, tuple) else (item,)))))
+    return ProxyAuditValidation(
+        tuple(
+            dict.fromkeys(
+                code
+                for item in codes
+                for code in (item if isinstance(item, tuple) else (item,))
+            )
+        )
+    )

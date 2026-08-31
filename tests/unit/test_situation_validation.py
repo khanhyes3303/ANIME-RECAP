@@ -4,9 +4,10 @@ from dataclasses import replace
 
 import pytest
 
+from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import Event, Shot, SourceRegionAnnotation, TruthDocument
-from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
+from anime_review_mvp.situation_index import SituationIndexDocument, SituationIndexEntry
 from anime_review_mvp.situation_validation import (
     coherence_findings,
     validate_causal_chains,
@@ -16,7 +17,6 @@ from anime_review_mvp.situation_validation import (
     validate_semantic_range,
     validate_situations,
 )
-from anime_review_mvp.situation_index import SituationIndexDocument, SituationIndexEntry
 from anime_review_mvp.situations import (
     EditorialPolicy,
     EvidenceRange,

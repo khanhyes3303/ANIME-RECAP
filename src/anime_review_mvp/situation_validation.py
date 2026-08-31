@@ -63,7 +63,12 @@ def validate_edl_exclusions(edl: object, index: object) -> None:
     excluded = tuple(item for item in getattr(index, "situations", ()) if item.excluded)
     for segment in edl.segments:
         for item in excluded:
-            if _overlap(segment.source_start_ms, segment.source_end_ms, item.source_start_ms, item.source_end_ms):
+            if _overlap(
+                segment.source_start_ms,
+                segment.source_end_ms,
+                item.source_start_ms,
+                item.source_end_ms,
+            ):
                 raise MvpError("EDL_EXCLUDED_SOURCE_OVERLAP")
 
 
