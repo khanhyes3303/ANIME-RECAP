@@ -364,6 +364,12 @@ def test_same_verifier_failure_twice_stops_for_human(tmp_path: Path) -> None:
 
     assert first.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
     assert stopped.stage is Stage.CAN_CON_NGUOI_XU_LY
+    verifier_entries = [
+        record for record in stopped.repair_history if record.phase == "VERIFIER"
+    ]
+    assert len(verifier_entries) == 2
+    assert verifier_entries[0].codes == ("SCENE_MISMATCH",)
+    assert verifier_entries[1].codes == ("SCENE_MISMATCH",)
     assert stopped.repair_history[-1].codes == ("ANTIGRAVITY_VERIFIER_NO_PROGRESS",)
 
 

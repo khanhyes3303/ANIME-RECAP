@@ -612,9 +612,17 @@ def route_verifier_repair(
     ):
         stalled = state.verifier_stall_count + 1
         if stalled >= 2:
-            stopped = mark_human_required(run_dir, "ANTIGRAVITY_VERIFIER_NO_PROGRESS")
             state = replace(
-                stopped,
+                state,
+                stage=Stage.CAN_CON_NGUOI_XU_LY,
+                repair_history=(
+                    *history,
+                    RepairRecord(
+                        "ANTIGRAVITY",
+                        ("ANTIGRAVITY_VERIFIER_NO_PROGRESS",),
+                        "HUMAN",
+                    ),
+                ),
                 verifier_task_id="",
                 last_verifier_fingerprint=fingerprint,
                 last_verifier_codes=codes,
