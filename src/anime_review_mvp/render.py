@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +116,15 @@ class RenderResult:
     drift_ms: int
     video_stream_count: int
     audio_stream_count: int
+    artifact_sha256: str = field(default="", metadata={"json_optional": True})
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def build_filter_graph(
@@ -275,6 +285,7 @@ def probe_render(
         drift_ms,
         video_count,
         audio_count,
+        _sha256_file(output),
     )
 
 

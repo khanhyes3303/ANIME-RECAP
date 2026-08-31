@@ -36,6 +36,7 @@ from anime_review_mvp.workflow import (
     new_state,
     read_state,
 )
+from anime_review_mvp.render import RenderResult
 from anime_review_mvp.run_identity import RunCodeIdentity
 
 
@@ -145,6 +146,29 @@ def test_proxy_verifier_cannot_override_failed_machine_audit(
         cli._accept_verifier_command(run, task.task_id, run / "staging")
 
     assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY
+
+
+def test_machine_audit_rejects_proxy_changed_after_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = tmp_path / "run"
+    proxy = run / "proxy" / "review_proxy.mp4"
+    proxy.parent.mkdir(parents=True)
+    proxy.write_bytes(b"changed proxy")
+    dump_json(
+        run / "proxy" / "render_result.json",
+        RenderResult(str(proxy.resolve()), 420_000, 420_000, 420_000, 0, 1, 1, "a" * 64),
+    )
+    monkeypatch.setattr(
+        cli,
+        "probe_render",
+        lambda _path: RenderResult(
+            str(proxy.resolve()), 420_000, 420_000, 420_000, 0, 1, 1, "b" * 64
+        ),
+    )
+
+    with pytest.raises(MvpError, match="PROXY_RENDER_ARTIFACT_MISMATCH"):
+        cli._verified_current_proxy_render(run)
 
 
 def test_next_action_exposes_simple_public_stage(tmp_path: Path) -> None:

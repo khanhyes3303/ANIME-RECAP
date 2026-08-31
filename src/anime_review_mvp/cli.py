@@ -99,7 +99,7 @@ from .proxy_approval import approve_proxy, reject_proxy, require_approved_artifa
 from .proxy_evidence import ProxyEvidenceManifest, extract_cue_proxy_evidence
 from .public_workflow import public_stage
 from .reference_profile import ReferenceStyleProfile, load_reference_profile
-from .render import RenderResult, normalize_narration_loudness, render_review
+from .render import RenderResult, normalize_narration_loudness, probe_render, render_review
 from .review_contracts import LoudnessReport, ProxyAuditDocument, SituationAuditDocument
 from .run_identity import (
     RunCodeIdentity,
@@ -2350,7 +2350,7 @@ def _current_proxy_machine_audit(run_dir: Path, episode: Path) -> object:
     timeline = load_json(run_dir / "semantic_timeline.json", SemanticTimeline)
     tts = load_json(run_dir / "cue_tts_manifest.json", CueTtsManifest)
     edl = load_json(run_dir / "adaptive_edl.json", AdaptiveEdlDocument)
-    render = load_json(run_dir / "proxy" / "render_result.json", RenderResult)
+    render = _verified_current_proxy_render(run_dir)
     loudness_path = run_dir / "loudness_report.json"
     if not loudness_path.is_file():
         raise MvpError("proxy audit requires loudness_report.json")
@@ -2372,6 +2372,19 @@ def _current_proxy_machine_audit(run_dir: Path, episode: Path) -> object:
         context,
         load_json(loudness_path, LoudnessReport),
     )
+
+
+def _verified_current_proxy_render(run_dir: Path) -> RenderResult:
+    proxy = (run_dir / "proxy" / "review_proxy.mp4").resolve()
+    stored = load_json(run_dir / "proxy" / "render_result.json", RenderResult)
+    current = probe_render(proxy)
+    if (
+        Path(stored.path).resolve() != proxy
+        or not stored.artifact_sha256
+        or stored.artifact_sha256 != current.artifact_sha256
+    ):
+        raise MvpError("PROXY_RENDER_ARTIFACT_MISMATCH")
+    return current
 
 
 def require_current_proxy_machine_pass(run_dir: Path, episode: Path) -> object:

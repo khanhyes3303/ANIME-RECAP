@@ -1,6 +1,9 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from anime_review_mvp.errors import MvpError
 from anime_review_mvp.proxy_evidence import (
     BoundaryProxyEvidence,
     CueProxyEvidence,
@@ -10,6 +13,7 @@ from anime_review_mvp.proxy_evidence import (
 from anime_review_mvp.review_packets import (
     build_proxy_audit_packet,
     validate_proxy_audit,
+    validate_situation_audit,
 )
 
 
@@ -188,3 +192,54 @@ def test_proxy_audit_rejects_repeated_visual_template() -> None:
     )
 
     assert "PROXY_AUDIT_BOILERPLATE_INVALID" in result.finding_codes
+
+
+def test_proxy_audit_requires_exact_boundary_frames() -> None:
+    audit = SimpleNamespace(
+        cue_reviews=(_review("cue-001"),),
+        boundary_reviews=(
+            SimpleNamespace(
+                boundary="START",
+                verdict="CLEAN",
+                frame_refs=("unrelated.jpg",),
+                transcript_refs=(),
+                finding_codes=(),
+            ),
+            SimpleNamespace(
+                boundary="END",
+                verdict="CLEAN",
+                frame_refs=tuple(frame.path for frame in _frames()),
+                transcript_refs=(),
+                finding_codes=(),
+            ),
+        ),
+    )
+
+    result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
+
+    assert "PROXY_BOUNDARY_EVIDENCE_INVALID" in result.finding_codes
+
+
+def test_situation_audit_rejects_fabricated_match() -> None:
+    cue = SimpleNamespace(
+        cue_id="cue-001",
+        transcript_refs=("Jiro nhìn thấy con mèo",),
+        frame_refs=("frame-001.jpg",),
+    )
+    plan = SimpleNamespace(
+        units=(SimpleNamespace(situation_id="situation-001", cues=(cue,)),)
+    )
+    review = _review(
+        "cue-001",
+        observed_visual="Hình ảnh video proxy đúng nội dung trong shot-001.",
+        narration_meaning="Jiro nhìn thấy con mèo",
+    )
+    review.frame_refs = ("wrong.jpg",)
+    review.transcript_refs = ("Jiro nhìn thấy con mèo",)
+    audit = SimpleNamespace(
+        situation_id="situation-001",
+        cue_reviews=(review,),
+    )
+
+    with pytest.raises(MvpError, match="SITUATION_AUDIT_EVIDENCE_INVALID"):
+        validate_situation_audit(audit, plan)

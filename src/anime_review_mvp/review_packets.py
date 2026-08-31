@@ -129,12 +129,13 @@ def render_situation_audit_prompt(packet: SituationAuditPacket) -> str:
 def validate_situation_audit(
     audit: SituationAuditDocument, plan: NarrationPlan
 ) -> SituationAuditDocument:
-    expected = tuple(
-        cue.cue_id
+    expected_cues = tuple(
+        cue
         for unit in plan.units
         if unit.situation_id == audit.situation_id
         for cue in unit.cues
     )
+    expected = tuple(cue.cue_id for cue in expected_cues)
     observed = tuple(item.cue_id for item in audit.cue_reviews)
     if observed != expected or len(set(observed)) != len(observed):
         raise MvpError("SITUATION_AUDIT_CUE_COVERAGE_INVALID")
@@ -142,6 +143,31 @@ def validate_situation_audit(
         raise MvpError("VERIFIER_SITUATION_SCOPE_INVALID")
     if any(item.verdict != "MATCH" for item in audit.cue_reviews):
         raise MvpError("SITUATION_AUDIT_FAILED")
+    cue_by_id = {cue.cue_id: cue for cue in expected_cues}
+    visual_signatures: list[str] = []
+    for item in audit.cue_reviews:
+        cue = cue_by_id[item.cue_id]
+        visual = semantic_review_signature(item.observed_visual)
+        narration = semantic_review_signature(item.narration_meaning)
+        transcript = semantic_review_signature(" ".join(cue.transcript_refs))
+        if (
+            set(item.frame_refs) != set(cue.frame_refs)
+            or set(item.transcript_refs) != set(cue.transcript_refs)
+            or not visual
+            or visual
+            in {
+                semantic_review_signature(
+                    "Hình ảnh video proxy thể hiện chính xác nội dung câu chuyện trong shot"
+                ),
+                semantic_review_signature("Hình ảnh video proxy đúng nội dung trong shot"),
+            }
+            or not narration
+            or (transcript and narration == transcript)
+        ):
+            raise MvpError("SITUATION_AUDIT_EVIDENCE_INVALID")
+        visual_signatures.append(visual)
+    if len(visual_signatures) != len(set(visual_signatures)):
+        raise MvpError("SITUATION_AUDIT_EVIDENCE_INVALID")
     return audit
 
 
@@ -257,6 +283,16 @@ def validate_proxy_audit(
             not narration_meaning or narration_meaning == transcript_meaning
         ):
             codes.append("PROXY_AUDIT_NARRATION_MEANING_INVALID")
+    boundary_evidence = {item.boundary: item for item in evidence.boundaries}
+    for item in getattr(audit, "boundary_reviews", ()):
+        expected_boundary = boundary_evidence.get(item.boundary)
+        expected_frames = (
+            set()
+            if expected_boundary is None
+            else {frame.path for frame in expected_boundary.program_frames}
+        )
+        if expected_boundary is None or set(getattr(item, "frame_refs", ())) != expected_frames:
+            codes.append("PROXY_BOUNDARY_EVIDENCE_INVALID")
     visual_signatures = tuple(
         semantic_review_signature(getattr(item, "observed_visual", ""))
         for item in reviews
