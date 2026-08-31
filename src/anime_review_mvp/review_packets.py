@@ -205,6 +205,17 @@ def validate_proxy_audit(
         for item in getattr(audit, "boundary_reviews", ())
     ):
         codes.append("ENDING_CREDITS_LEAK")
+    non_clean_boundaries = tuple(
+        item
+        for item in getattr(audit, "boundary_reviews", ())
+        if item.verdict != "CLEAN"
+    )
+    if non_clean_boundaries:
+        codes.extend(
+            getattr(item, "finding_codes", ())
+            or ("PROXY_BOUNDARY_EVIDENCE_INVALID",)
+            for item in non_clean_boundaries
+        )
     evidence_by_cue = {item.cue_id: item for item in evidence.cues}
     if set(observed) - set(evidence_by_cue):
         codes.append("PROXY_EVIDENCE_REFERENCE_INVALID")

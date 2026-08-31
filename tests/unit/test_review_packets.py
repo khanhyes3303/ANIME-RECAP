@@ -108,3 +108,17 @@ def test_proxy_audit_rejects_cue_scope_mismatch() -> None:
         audit, _plan("cue-001"), _evidence("cue-001")
     )
     assert "PROXY_EVIDENCE_SCOPE_INVALID" in result.finding_codes
+
+
+def test_proxy_audit_rejects_insufficient_boundary_evidence() -> None:
+    audit = SimpleNamespace(
+        cue_reviews=(_review("cue-001"),),
+        boundary_reviews=(
+            SimpleNamespace(boundary="START", verdict="INSUFFICIENT_EVIDENCE"),
+            SimpleNamespace(boundary="END", verdict="CLEAN"),
+        ),
+    )
+    result = validate_proxy_audit(
+        audit, _plan("cue-001"), _evidence("cue-001")
+    )
+    assert "PROXY_BOUNDARY_EVIDENCE_INVALID" in result.finding_codes
