@@ -1102,6 +1102,7 @@ def _render(run_dir: Path, quality: str = "final") -> int:
             edl,
             output,
             quality="proxy",
+            duration_bounds_ms=None,
         )
         dump_json(run_dir / "proxy" / "render_result.json", result)
         extract_adaptive_program_anchors(
@@ -1144,6 +1145,7 @@ def _render(run_dir: Path, quality: str = "final") -> int:
             edl,
             output,
             quality="final",
+            duration_bounds_ms=None,
         )
         dump_json(run_dir / "final_render_result.json", result)
         extract_adaptive_program_anchors(
@@ -2252,18 +2254,21 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
         shots = load_json(run_dir / "shots.json", ShotDocument)
         situations = load_situations(episode / "Su_that" / "situations.json")
         plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
-        validate_situations(
-            situations, None, shots.shots, source_duration_ms=source.duration_ms
-        )
-        validate_narration_plan(
-            plan,
-            situations,
-            None,
-            shots.shots,
-            _editorial_policy(episode),
-            source.duration_ms,
-            require_bridges=False,
-        )
+        try:
+            validate_situations(
+                situations, None, shots.shots, source_duration_ms=source.duration_ms
+            )
+            validate_narration_plan(
+                plan,
+                situations,
+                None,
+                shots.shots,
+                _editorial_policy(episode),
+                source.duration_ms,
+                require_bridges=False,
+            )
+        except MvpError as exc:
+            return _route_situation_validation_failure(run_dir, episode, state, exc)
         advance(
             run_dir,
             Stage.KIEM_DINH_TINH_HUONG,
@@ -2283,7 +2288,7 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
         report = build_episode_coherence_audit(plan, situations, context)
         if not report.passed:
             codes = tuple(dict.fromkeys(item.code for item in report.findings))
-            route_editor_repair(
+            routed = route_editor_repair(
                 run_dir,
                 (state.current_situation_id,),
                 codes,
@@ -2293,6 +2298,20 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
                         run_dir / "semantic_timeline.json",
                     )
                 ),
+            )
+            if routed.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+                _editor_task_command(
+                    run_dir,
+                    repair_note="; ".join(
+                        f"{item.code}: {item.message}" for item in report.findings
+                    ),
+                )
+                return 1
+            _write_next(
+                run_dir,
+                f"Cần người xử lý situation {state.current_situation_id}: "
+                f"{', '.join(codes)}",
+                code="SITUATION_VALIDATION_REPAIR_STALLED",
             )
             return 1
         advance(
@@ -2533,7 +2552,7 @@ def _accept_situation_index_command(
     return 0
 
 
-def _editor_task_command(run_dir: Path) -> int:
+def _editor_task_command(run_dir: Path, *, repair_note: str = "") -> int:
     state, episode = _episode(run_dir)
     if state.stage is not Stage.CHO_ANTIGRAVITY_TINH_HUONG:
         raise MvpError("editor-task requires CHO_ANTIGRAVITY_TINH_HUONG stage")
@@ -2582,6 +2601,7 @@ def _editor_task_command(run_dir: Path) -> int:
         _editorial_policy(episode),
         context,
         task=task,
+        repair_note=repair_note,
     )
     output = run_dir / "cong_viec_antigravity.json"
     dump_json(output, packet)
@@ -2709,6 +2729,14 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
     plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
     tts = load_json(run_dir / "cue_tts_manifest.json", CueTtsManifest)
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    try:
+        edl, timeline = build_semantic_timeline(
+            plan, tts, source.duration_ms, EditorialPolicy()
+        )
+    except MvpError as exc:
+        if str(exc).startswith("SEMANTIC_TIMELINE_DOES_NOT_FIT"):
+            return _route_situation_validation_failure(run_dir, episode, state, exc)
+        raise
     transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
     shots = load_json(run_dir / "shots.json", ShotDocument)
     index = load_situation_index(
@@ -2717,9 +2745,6 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
         transcript,
         shots,
         _frame_refs(run_dir),
-    )
-    edl, timeline = build_semantic_timeline(
-        plan, tts, source.duration_ms, EditorialPolicy()
     )
     validate_edl_exclusions(edl, index)
     dump_json(run_dir / "adaptive_edl.json", edl)
@@ -2801,6 +2826,53 @@ def _migrate_run(run_dir: Path, reason: str) -> int:
     _write_next(run_dir, "Chạy editor-task để Antigravity tạo revision 2.")
     print(revision_root)
     return 0
+
+
+def _situation_validation_code(error: MvpError) -> str:
+    message = str(error).strip().casefold()
+    if "shot ids" in message and "source interval" in message:
+        return "KEPT_RANGE_SHOT_ALIGNMENT_INVALID"
+    if "supporting plot" in message and "future payoff" in message:
+        return "SUPPORTING_PLOT_FUTURE_PAYOFF_MISSING"
+    if message.startswith("semantic_"):
+        return str(error).split(":", 1)[0].strip().upper()
+    return "SITUATION_VALIDATION_FAILED"
+
+
+def _route_situation_validation_failure(
+    run_dir: Path,
+    episode: Path,
+    state: object,
+    error: MvpError,
+) -> int:
+    """Return a failed situation audit to the active Antigravity repair task."""
+    # The accepted episode artifacts are the source of the repair fingerprint.  A
+    # different submission therefore gets a new revision, while an unchanged
+    # submission reaches the human-stop guard in route_editor_repair.
+    fingerprint = content_fingerprint(
+        (
+            episode / "Su_that" / "situations.json",
+            episode / "Kich_ban" / "narration_plan.json",
+        )
+    )
+    routed = route_editor_repair(
+        run_dir,
+        (state.current_situation_id,),
+        (_situation_validation_code(error),),
+        fingerprint,
+    )
+    if routed.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+        _editor_task_command(run_dir, repair_note=str(error))
+        # The repair task is prepared, but the original audit still failed.
+        # Returning non-zero prevents callers from mistakenly running TTS on
+        # the rejected revision.
+        return 1
+    _write_next(
+        run_dir,
+        f"Cần người xử lý situation {state.current_situation_id}: {error}",
+        code="SITUATION_VALIDATION_REPAIR_STALLED",
+    )
+    return 1
 
 
 def _filter_current_revision_artifacts(

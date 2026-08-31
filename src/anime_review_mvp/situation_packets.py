@@ -32,6 +32,7 @@ class SituationEditorPacket:
     accepted_index_sha256: str = field(default="", metadata={"json_optional": True})
     scope_path: str = field(default="", metadata={"json_optional": True})
     task_kind: str = "SITUATION"
+    repair_note: str = field(default="", metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or not self.situation_id.strip() or self.revision < 1:
@@ -56,6 +57,7 @@ def build_situation_editor_packet(
     *,
     task: EditorTask,
     allowed_staging_dir: Path | None = None,
+    repair_note: str = "",
 ) -> SituationEditorPacket:
     if not frame_manifest_path.is_file():
         raise MvpError(f"frame manifest does not exist: {frame_manifest_path}")
@@ -76,6 +78,7 @@ def build_situation_editor_packet(
         policy=policy,
         prior_context=prior_context,
         required_outputs=task.allowed_outputs,
+        repair_note=repair_note,
     )
 
 
@@ -87,6 +90,7 @@ def build_scoped_situation_editor_packet(
     *,
     task: EditorTask,
     allowed_staging_dir: Path | None = None,
+    repair_note: str = "",
 ) -> SituationEditorPacket:
     verified_scope = load_situation_scope(Path(scope.scope_path), verify_files=True)
     if verified_scope != scope or task.situation_id != scope.situation_id:
@@ -114,6 +118,8 @@ def build_scoped_situation_editor_packet(
         task.allowed_outputs,
         scope.accepted_index_sha256,
         scope.scope_path,
+        task_kind="SITUATION",
+        repair_note=repair_note,
     )
 
 
@@ -121,6 +127,11 @@ def render_situation_editor_prompt(packet: SituationEditorPacket) -> str:
     policy = packet.policy
     prior = packet.prior_context.last_outcome or "Không có ngữ cảnh trước đó."
     run_dir = Path(packet.allowed_staging_dir).parents[1]
+    repair = (
+        f"\nLỗi validator cần sửa trong vòng này: {packet.repair_note}\n"
+        if packet.repair_note
+        else ""
+    )
     return f"""Antigravity là biên tập viên duy nhất của nội dung tập phim.
 
 Bạn chỉ xử lý task `{packet.task_id}`, revision {packet.revision}, tình huống
@@ -136,11 +147,19 @@ chỉ là định danh bằng chứng cục bộ, không phải ID cần tra tro
 Phân loại tình huống thành MAIN_PLOT | SUPPORTING_PLOT và hành động thành
 MAIN_ACTION | SUPPORTING_ACTION | DECORATIVE. Không giữ hành động chỉ vì đẹp; chỉ giữ
 hình chứng minh thông tin, nguyên nhân, quyết định, bước ngoặt hoặc kết quả đáng kể.
+Nếu chọn SUPPORTING_PLOT thì `future_payoff` bắt buộc phải có nội dung cụ thể; nếu
+không có payoff về sau, hãy chọn MAIN_PLOT hoặc loại tình huống đó.
 
 Mỗi evidence range phải có `semantic_event_id`, `action_phase`, `story_purpose` và
 `shot_uses`. Mỗi shot trong range phải cùng đúng ba nhãn này. Nếu các shot lần lượt là
 tiếp cận, ra đòn và phản ứng thì phải tách range, dù tất cả đều thuộc cùng một trận đánh.
 Ưu tiên 4 giây cùng một tình huống/hành động/ý nghĩa hơn 10 giây lộn xộn.
+
+Ranh giới mỗi range phải bám theo dữ liệu shot. Với khoảng
+`source_start_ms`–`source_end_ms`, `shot_ids` phải liệt kê **mọi shot giao với khoảng
+đó**, theo đúng thứ tự nguồn; không được chỉ liệt kê shot chính. `frame_refs` và
+`shot_uses` cũng phải có đủ mọi shot giao với khoảng. Nếu không muốn lấy một shot,
+hãy dời điểm bắt đầu/kết thúc ra ngoài shot đó.
 
 Không dùng công thức số giây cố định. Sau mỗi khoảng lấy phải có khoảng nguồn bị bỏ
 thật sự ít nhất {policy.minimum_omitted_gap_ms} ms. Clip giữ tối thiểu
@@ -153,6 +172,8 @@ người chưa biết anime vẫn hiểu. Văn phong dân dã, tự nhiên, đư
 không bịa sự kiện, động cơ hoặc người nói.
 
 Xử lý xong và khóa một tình huống rồi engine mới được chuyển sang tình huống kế tiếp.
+
+{repair}
 
 Ngữ cảnh trước tập: {prior}
 

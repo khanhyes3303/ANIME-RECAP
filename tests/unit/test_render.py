@@ -57,6 +57,34 @@ def test_filter_graph_applies_adaptive_segment_playback_rate() -> None:
     assert "trim=duration=2.400,setpts=PTS-STARTPTS" in graph
 
 
+def test_adaptive_filter_graph_pads_frame_quantization_before_duration_trim() -> None:
+    edl = AdaptiveEdlDocument(
+        segments=(
+            AdaptiveEdlSegment(
+                "unit-001-segment-001",
+                "unit-001",
+                "situation-001",
+                "range-001",
+                1_000,
+                4_000,
+                0,
+                2_400,
+                1.0,
+                ("shot-001",),
+                ("event-001",),
+            ),
+        ),
+        total_duration_ms=2_400,
+    )
+
+    graph = build_filter_graph(edl, quality="proxy")
+
+    assert "tpad=stop_mode=clone:stop_duration=0.125" in graph
+    assert graph.index("tpad=stop_mode=clone") < graph.index(
+        "trim=duration=2.400"
+    )
+
+
 def test_ffmpeg_maps_only_rendered_video_and_tts_audio() -> None:
     command = build_render_command(
         Path("source.mp4"), Path("narration.wav"), _edl(), Path("out.mp4")
@@ -100,3 +128,26 @@ def test_probe_render_rejects_stream_drift_over_80_ms(tmp_path: Path) -> None:
 
     with pytest.raises(MvpError, match="80 ms"):
         probe_render(output, allow_short_fixture=True, runner=runner)
+
+
+def test_probe_render_accepts_adaptive_timeline_duration_without_fixed_bounds(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "review.mp4"
+    output.write_bytes(b"media")
+    payload = {
+        "streams": [
+            {"codec_type": "video", "duration": "808.3075"},
+            {"codec_type": "audio", "duration": "808.2870"},
+        ],
+        "format": {"duration": "808.3075"},
+    }
+
+    def runner(command: list[str], **_: object) -> SimpleNamespace:
+        assert command[0] == "ffprobe"
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    result = probe_render(output, duration_bounds_ms=None, runner=runner)
+
+    assert result.duration_ms == 808_308
+    assert result.drift_ms == 21

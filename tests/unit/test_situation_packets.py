@@ -64,6 +64,9 @@ def test_prompt_defines_local_situation_editor_contract(tmp_path: Path) -> None:
     assert "MAIN_ACTION | SUPPORTING_ACTION | DECORATIVE" in prompt
     assert "không giữ hành động chỉ vì đẹp" in normalized
     assert "sau mỗi khoảng lấy phải có khoảng nguồn bị bỏ" in normalized
+    assert "mọi shot giao với khoảng" in normalized
+    assert "source_start_ms" in normalized and "source_end_ms" in normalized
+    assert "supporting_plot" in normalized and "future_payoff" in normalized
     assert "situation_draft.json" in prompt
     assert "narration_draft.json" in prompt
     assert "xử lý xong và khóa một tình huống" in normalized

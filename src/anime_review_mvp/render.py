@@ -86,7 +86,8 @@ def build_filter_graph(
         if isinstance(edl, AdaptiveEdlDocument):
             duration = edl.total_duration_ms / 1_000
             filters.append(
-                f"[joined]trim=duration={duration:.3f},setpts=PTS-STARTPTS[timed]"
+                f"[joined]tpad=stop_mode=clone:stop_duration=0.125,"
+                f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[timed]"
             )
             filters.append("[timed]scale=-2:360[video]")
         else:
@@ -96,7 +97,8 @@ def build_filter_graph(
             duration = edl.total_duration_ms / 1_000
             filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[joined]")
             filters.append(
-                f"[joined]trim=duration={duration:.3f},setpts=PTS-STARTPTS[video]"
+                f"[joined]tpad=stop_mode=clone:stop_duration=0.125,"
+                f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[video]"
             )
         else:
             filters.append(f"{''.join(labels)}concat=n={len(labels)}:v=1:a=0[video]")
@@ -158,6 +160,7 @@ def probe_render(
     output: Path,
     *,
     allow_short_fixture: bool = False,
+    duration_bounds_ms: tuple[int, int] | None = (420_000, 720_000),
     max_av_drift_ms: int = 80,
     runner: Runner = subprocess.run,
 ) -> RenderResult:
@@ -194,10 +197,18 @@ def probe_render(
         raise MvpError("render duration must be positive")
     if max_av_drift_ms < 0:
         raise MvpError("maximum A/V drift must not be negative")
+    if duration_bounds_ms is not None:
+        minimum_duration_ms, maximum_duration_ms = duration_bounds_ms
+        if not 0 < minimum_duration_ms <= maximum_duration_ms:
+            raise MvpError("render duration bounds are invalid")
     drift_ms = abs(video_duration_ms - audio_duration_ms)
     if drift_ms > max_av_drift_ms:
         raise MvpError(f"render audio/video drift exceeds {max_av_drift_ms} ms")
-    if not allow_short_fixture and not 420_000 <= duration_ms <= 720_000:
+    if (
+        not allow_short_fixture
+        and duration_bounds_ms is not None
+        and not minimum_duration_ms <= duration_ms <= maximum_duration_ms
+    ):
         raise MvpError("production review duration must be between 7 and 12 minutes")
     return RenderResult(
         str(output.resolve()),
@@ -217,6 +228,7 @@ def render_review(
     output: Path,
     *,
     allow_short_fixture: bool = False,
+    duration_bounds_ms: tuple[int, int] | None = (420_000, 720_000),
     runner: Runner = subprocess.run,
     quality: str = "final",
 ) -> RenderResult:
@@ -224,4 +236,9 @@ def render_review(
         raise MvpError("render inputs must exist")
     output.parent.mkdir(parents=True, exist_ok=True)
     _run(build_render_command(source, narration_wav, edl, output, quality=quality), runner)
-    return probe_render(output, allow_short_fixture=allow_short_fixture, runner=runner)
+    return probe_render(
+        output,
+        allow_short_fixture=allow_short_fixture,
+        duration_bounds_ms=duration_bounds_ms,
+        runner=runner,
+    )

@@ -237,6 +237,57 @@ def test_parser_exposes_structure_handoff_commands() -> None:
     assert accept.command == "accept-situation-index"
 
 
+def test_timeline_failure_routes_current_situation_to_editor_repair(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+    run = _empty_run(tmp_path)
+    raw_state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    raw_state.update(
+        {
+            "stage": Stage.LAP_TIMELINE_TINH_HUONG.value,
+            "current_situation_id": "situation-041",
+            "editorial_revision": 6,
+        }
+    )
+    (run / "run_state.json").write_text(
+        json.dumps(raw_state), encoding="utf-8"
+    )
+
+    monkeypatch.setattr(cli, "load_narration_plan", lambda _path: object())
+    monkeypatch.setattr(
+        cli,
+        "load_json",
+        lambda path, _type: SourceRef(
+            "episode.mp4", "a" * 64, 60_000, 320, 180, "1/1000", 1
+        )
+        if Path(path).name == "source_ref.json"
+        else object(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_semantic_timeline",
+        lambda *_args: (_ for _ in ()).throw(
+            MvpError("SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence")
+        ),
+    )
+    monkeypatch.setattr(cli, "content_fingerprint", lambda _paths: "b" * 64)
+    repair_notes: list[str] = []
+    monkeypatch.setattr(
+        cli,
+        "_editor_task_command",
+        lambda _run, *, repair_note="": repair_notes.append(repair_note) or 0,
+    )
+
+    assert cli._timeline_command(run, "situation-041") == 1
+    repaired = read_state(run)
+    assert repaired.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert repaired.current_situation_id == "situation-041"
+    assert repaired.editorial_revision == 7
+    assert repair_notes == [
+        "SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence"
+    ]
+
+
 def test_accepted_index_drives_a_scoped_editor_task(tmp_path: Path) -> None:
     run = _empty_run(tmp_path)
     old = read_state(run)
