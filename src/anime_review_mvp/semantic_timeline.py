@@ -5,7 +5,7 @@ from itertools import pairwise
 
 from .adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from .errors import MvpError
-from .models import AuditFinding
+from .models import AuditFinding, ShotDocument
 from .situation_validation import validate_keep_skip
 from .situations import CueTtsManifest, EditorialPolicy, NarrationPlan, cue_evidence_range
 from .tts import validate_cue_tts_ids
@@ -39,6 +39,14 @@ class SemanticTimeline:
             raise MvpError("semantic cue exceeds timeline duration")
 
 
+@dataclass(frozen=True, slots=True)
+class CueSourceWindow:
+    source_start_ms: int
+    source_end_ms: int
+    playback_rate: float
+    shot_ids: tuple[str, ...]
+
+
 def map_source_timestamp(edl: AdaptiveEdlDocument, source_ms: int) -> int:
     for index, segment in enumerate(edl.segments):
         is_last = index == len(edl.segments) - 1
@@ -57,36 +65,87 @@ def _candidate_rates(policy: EditorialPolicy) -> tuple[float, ...]:
     return tuple(sorted(rates, key=lambda value: (abs(value - 1.0), value)))
 
 
-def _unit_segments(
-    plan: NarrationPlan,
-    unit_index: int,
-    rate: float,
-    program_start_ms: int,
-) -> tuple[AdaptiveEdlSegment, ...]:
-    unit = plan.units[unit_index]
-    cursor = program_start_ms
-    result: list[AdaptiveEdlSegment] = []
-    for index, source_range in enumerate(unit.evidence_ranges, start=1):
-        duration = round((source_range.source_end_ms - source_range.source_start_ms) / rate)
-        if duration <= 0:
-            raise MvpError("semantic EDL rounding produced an empty segment")
-        result.append(
-            AdaptiveEdlSegment(
-                f"{unit.unit_id}-segment-{index:03d}",
-                unit.unit_id,
-                unit.situation_id,
-                source_range.range_id,
-                source_range.source_start_ms,
-                source_range.source_end_ms,
-                cursor,
-                cursor + duration,
-                rate,
-                source_range.shot_ids,
-                source_range.event_ids,
-            )
+def _source_windows(
+    evidence: object,
+    cue: object,
+    shots: ShotDocument | None,
+) -> tuple[tuple[int, int, tuple[str, ...]], ...]:
+    if shots is None:
+        return (
+            (
+                evidence.source_start_ms,
+                evidence.source_end_ms,
+                evidence.shot_ids,
+            ),
         )
-        cursor += duration
-    return tuple(result)
+    allowed = set(cue.shot_ids)
+    ordered = tuple(
+        shot
+        for shot in shots.shots
+        if shot.shot_id in allowed
+        and shot.shot_id in evidence.shot_ids
+        and shot.end_ms > evidence.source_start_ms
+        and shot.start_ms < evidence.source_end_ms
+    )
+    windows: list[tuple[int, int, tuple[str, ...]]] = []
+    for start_index in range(len(ordered)):
+        selected: list[object] = []
+        previous_end: int | None = None
+        for shot in ordered[start_index:]:
+            clipped_start = max(shot.start_ms, evidence.source_start_ms)
+            clipped_end = min(shot.end_ms, evidence.source_end_ms)
+            if previous_end is not None and clipped_start > previous_end + 1:
+                break
+            selected.append(shot)
+            previous_end = clipped_end
+            start_ms = max(selected[0].start_ms, evidence.source_start_ms)
+            end_ms = clipped_end
+            if start_ms <= cue.visual_anchor_source_ms < end_ms:
+                windows.append(
+                    (start_ms, end_ms, tuple(item.shot_id for item in selected))
+                )
+    return tuple(windows)
+
+
+def select_cue_source_window(
+    evidence: object,
+    cue: object,
+    shots: ShotDocument | None,
+    *,
+    voice_ms: int,
+    policy: EditorialPolicy,
+) -> CueSourceWindow:
+    candidates: list[tuple[int, float, int, CueSourceWindow]] = []
+    for source_start_ms, source_end_ms, shot_ids in _source_windows(evidence, cue, shots):
+        source_ms = source_end_ms - source_start_ms
+        anchor_offset_ms = cue.visual_anchor_source_ms - source_start_ms
+        for rate in _candidate_rates(policy):
+            program_ms = round(source_ms / rate)
+            spoken_start_ms = round(anchor_offset_ms / rate) + cue.visual_preroll_ms
+            spoken_end_ms = spoken_start_ms + voice_ms
+            trailing_ms = program_ms - spoken_end_ms - cue.visual_postroll_ms
+            if (
+                spoken_start_ms > 1_200
+                or trailing_ms < 0
+                or trailing_ms + cue.visual_postroll_ms > 1_200
+            ):
+                continue
+            candidates.append(
+                (
+                    trailing_ms,
+                    abs(rate - 1.0),
+                    program_ms,
+                    CueSourceWindow(source_start_ms, source_end_ms, rate, shot_ids),
+                )
+            )
+    if not candidates:
+        evidence_ms = evidence.source_end_ms - evidence.source_start_ms
+        raise MvpError(
+            "SEMANTIC_TIMELINE_DOES_NOT_FIT: CUE_TIMELINE_DOES_NOT_FIT "
+            f"cue_id={cue.cue_id} evidence_ms={evidence_ms} voice_ms={voice_ms} "
+            f"rate={policy.minimum_playback_rate:.2f}-{policy.maximum_playback_rate:.2f}"
+        )
+    return min(candidates, key=lambda item: item[:3])[3]
 
 
 def build_semantic_timeline(
@@ -94,6 +153,7 @@ def build_semantic_timeline(
     tts: CueTtsManifest,
     source_duration_ms: int,
     policy: EditorialPolicy,
+    shots: ShotDocument | None = None,
 ) -> tuple[AdaptiveEdlDocument, SemanticTimeline]:
     if plan.policy_version != "situation-v2" or tts.policy_version != "situation-v2":
         raise MvpError("semantic timeline requires situation-v2")
@@ -105,55 +165,56 @@ def build_semantic_timeline(
     program_cursor = 0
     previous_spoken_end = -80
 
-    for unit_index, unit in enumerate(plan.units):
-        selected_segments: tuple[AdaptiveEdlSegment, ...] | None = None
-        selected_timings: tuple[CueTiming, ...] | None = None
-        for rate in _candidate_rates(policy):
-            candidates = _unit_segments(plan, unit_index, rate, program_cursor)
-            unit_end = candidates[-1].program_end_ms
-            candidate_timings: list[CueTiming] = []
-            cue_previous_end = previous_spoken_end
-            valid = True
-            for cue in unit.cues:
-                evidence = cue_evidence_range(unit, cue)
-                try:
-                    anchor = map_source_timestamp(
-                        AdaptiveEdlDocument(candidates, unit_end),
-                        cue.visual_anchor_source_ms,
-                    )
-                except MvpError:
-                    valid = False
-                    break
-                spoken_start = max(
-                    anchor + cue.visual_preroll_ms,
-                    cue_previous_end + 80,
-                )
-                spoken_end = spoken_start + tts_by_id[cue.cue_id].duration_ms
-                evidence_segments = tuple(
-                    segment for segment in candidates if segment.range_id == evidence.range_id
-                )
-                if len(evidence_segments) != 1:
-                    valid = False
-                    break
-                evidence_end = evidence_segments[0].program_end_ms
-                gap_ms = spoken_start - cue_previous_end if cue_previous_end >= 0 else spoken_start
-                if spoken_end + cue.visual_postroll_ms > evidence_end or gap_ms > 1_200:
-                    valid = False
-                    break
-                candidate_timings.append(CueTiming(cue.cue_id, spoken_start, spoken_end, anchor))
-                cue_previous_end = spoken_end
-            if valid:
-                selected_segments = candidates
-                selected_timings = tuple(candidate_timings)
-                break
-        if selected_segments is None or selected_timings is None:
-            raise MvpError(
-                "SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence"
+    segment_index = 0
+    for unit in plan.units:
+        for cue in unit.cues:
+            evidence = cue_evidence_range(unit, cue)
+            voice_ms = tts_by_id[cue.cue_id].duration_ms
+            window = select_cue_source_window(
+                evidence,
+                cue,
+                shots,
+                voice_ms=voice_ms,
+                policy=policy,
             )
-        segments.extend(selected_segments)
-        timings.extend(selected_timings)
-        program_cursor = selected_segments[-1].program_end_ms
-        previous_spoken_end = selected_timings[-1].spoken_end_ms
+            segment_index += 1
+            program_ms = round(
+                (window.source_end_ms - window.source_start_ms) / window.playback_rate
+            )
+            segment_end = program_cursor + program_ms
+            anchor = program_cursor + round(
+                (cue.visual_anchor_source_ms - window.source_start_ms) / window.playback_rate
+            )
+            spoken_start = max(anchor + cue.visual_preroll_ms, previous_spoken_end + 80)
+            spoken_end = spoken_start + voice_ms
+            gap_ms = (
+                spoken_start - previous_spoken_end
+                if previous_spoken_end >= 0
+                else spoken_start
+            )
+            if spoken_end + cue.visual_postroll_ms > segment_end or gap_ms > 1_200:
+                raise MvpError(
+                    "SEMANTIC_TIMELINE_DOES_NOT_FIT: CUE_TIMELINE_DOES_NOT_FIT "
+                    f"cue_id={cue.cue_id} gap_ms={gap_ms} voice_ms={voice_ms}"
+                )
+            segments.append(
+                AdaptiveEdlSegment(
+                    f"{unit.unit_id}-segment-{segment_index:03d}",
+                    unit.unit_id,
+                    unit.situation_id,
+                    evidence.range_id,
+                    window.source_start_ms,
+                    window.source_end_ms,
+                    program_cursor,
+                    segment_end,
+                    window.playback_rate,
+                    window.shot_ids,
+                    evidence.event_ids,
+                )
+            )
+            timings.append(CueTiming(cue.cue_id, spoken_start, spoken_end, anchor))
+            program_cursor = segment_end
+            previous_spoken_end = spoken_end
 
     if not policy.target_minimum_ms <= program_cursor <= policy.target_maximum_ms:
         raise MvpError(

@@ -2867,9 +2867,16 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
     plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
     tts = load_json(run_dir / "cue_tts_manifest.json", CueTtsManifest)
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    shots = load_json(run_dir / "shots.json", ShotDocument)
     try:
         validate_episode_voice_budget(tts, EditorialPolicy())
-        edl, timeline = build_semantic_timeline(plan, tts, source.duration_ms, EditorialPolicy())
+        edl, timeline = build_semantic_timeline(
+            plan,
+            tts,
+            source.duration_ms,
+            EditorialPolicy(),
+            shots,
+        )
     except MvpError as exc:
         if str(exc).startswith(
             (

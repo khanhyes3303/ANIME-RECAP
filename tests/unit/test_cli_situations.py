@@ -282,21 +282,27 @@ def test_timeline_failure_routes_current_situation_to_editor_repair(
 
     monkeypatch.setattr(cli, "load_narration_plan", lambda _path: object())
     monkeypatch.setattr(cli, "validate_episode_voice_budget", lambda *_args: None)
+    measured_shots = object()
     monkeypatch.setattr(
         cli,
         "load_json",
         lambda path, _type: (
             SourceRef("episode.mp4", "a" * 64, 60_000, 320, 180, "1/1000", 1)
             if Path(path).name == "source_ref.json"
-            else object()
+            else measured_shots
         ),
     )
+
+    def fail_timeline(_plan, _tts, _duration, _policy, shots):
+        assert shots is measured_shots
+        raise MvpError(
+            "SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence"
+        )
+
     monkeypatch.setattr(
         cli,
         "build_semantic_timeline",
-        lambda *_args: (_ for _ in ()).throw(
-            MvpError("SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence")
-        ),
+        fail_timeline,
     )
     monkeypatch.setattr(cli, "content_fingerprint", lambda _paths: "b" * 64)
     repair_notes: list[str] = []

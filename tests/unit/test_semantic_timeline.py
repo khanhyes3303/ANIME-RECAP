@@ -7,10 +7,12 @@ from pathlib import Path
 import pytest
 
 from anime_review_mvp.errors import MvpError
+from anime_review_mvp.models import Shot, ShotDocument
 from anime_review_mvp.semantic_timeline import (
     CueTiming,
     build_semantic_timeline,
     map_source_timestamp,
+    select_cue_source_window,
     semantic_timing_findings,
 )
 from anime_review_mvp.situations import (
@@ -170,6 +172,95 @@ def test_new_timeline_places_voice_after_visual_preroll() -> None:
     assert semantic_timing_findings(timeline.cues) == ()
     assert edl.total_duration_ms == timeline.total_duration_ms
     assert map_source_timestamp(edl, 3_800) == timeline.cues[1].visual_anchor_program_ms
+
+
+def test_cue_window_uses_only_the_compact_approved_shot() -> None:
+    plan = _plan()
+    cue = replace(
+        plan.units[0].cues[0],
+        visual_anchor_source_ms=1_000,
+        shot_ids=("shot-001", "shot-extra"),
+    )
+    evidence = replace(
+        plan.units[0].evidence_ranges[0],
+        source_start_ms=1_000,
+        source_end_ms=7_000,
+        shot_ids=("shot-001", "shot-extra"),
+    )
+    shots = ShotDocument(
+        (
+            Shot("shot-001", 1_000, 4_000),
+            Shot("shot-extra", 4_000, 7_000),
+        )
+    )
+
+    window = select_cue_source_window(
+        evidence,
+        cue,
+        shots,
+        voice_ms=1_800,
+        policy=EditorialPolicy(target_minimum_ms=1_000, target_maximum_ms=60_000),
+    )
+
+    assert window.source_start_ms == 1_000
+    assert window.source_end_ms == 4_000
+    assert window.shot_ids == ("shot-001",)
+    assert window.playback_rate == pytest.approx(1.25)
+
+
+def test_each_cue_range_selects_its_own_playback_rate() -> None:
+    tts = replace(
+        _tts(),
+        cues=(
+            _tts().cues[0],
+            replace(_tts().cues[1], duration_ms=1_250),
+        ),
+    )
+
+    edl, _ = build_semantic_timeline(
+        _plan(),
+        tts,
+        source_duration_ms=6_000,
+        policy=EditorialPolicy(target_minimum_ms=1_000, target_maximum_ms=60_000),
+    )
+
+    assert edl.segments[0].playback_rate != edl.segments[1].playback_rate
+
+
+def test_277_seconds_voice_cannot_approve_764_seconds_evidence() -> None:
+    plan = _plan()
+    cue = replace(
+        plan.units[0].cues[0],
+        visual_anchor_source_ms=0,
+        shot_ids=("shot-long",),
+        frame_refs=("frame-long",),
+        transcript_refs=("transcript-long",),
+    )
+    evidence = replace(
+        plan.units[0].evidence_ranges[0],
+        source_start_ms=0,
+        source_end_ms=764_000,
+        shot_ids=("shot-long",),
+        frame_refs=("frame-long",),
+        transcript_refs=("transcript-long",),
+        shot_uses=(replace(plan.units[0].evidence_ranges[0].shot_uses[0], shot_id="shot-long"),),
+    )
+    unit = replace(plan.units[0], evidence_ranges=(evidence,), cues=(cue,))
+    long_plan = replace(plan, units=(unit,))
+    tts = replace(
+        _tts(),
+        cues=(replace(_tts().cues[0], duration_ms=277_000),),
+        cache_misses=1,
+    )
+
+    with pytest.raises(MvpError, match="CUE_TIMELINE_DOES_NOT_FIT"):
+        build_semantic_timeline(
+            long_plan,
+            tts,
+            source_duration_ms=800_000,
+            policy=EditorialPolicy(target_minimum_ms=1_000, target_maximum_ms=900_000),
+            shots=ShotDocument((Shot("shot-long", 0, 764_000),)),
+        )
 
 
 def test_semantic_timeline_rejects_surplus_instead_of_compacting_accepted_ranges() -> None:
