@@ -128,6 +128,23 @@ def validate_situation_index(
                 raise MvpError("situation frame reference is outside its range")
         if not entry.excluded:
             editable += 1
+    if index.situations[0].source_start_ms != 0:
+        raise MvpError("SITUATION_INDEX_SOURCE_GAP: first situation must begin at 0")
+    for previous, current in zip(index.situations, index.situations[1:], strict=False):
+        if previous.source_end_ms != current.source_start_ms:
+            raise MvpError(
+                "SITUATION_INDEX_SOURCE_GAP: situation ranges must be contiguous"
+            )
+    if index.situations[-1].source_end_ms != source.duration_ms:
+        raise MvpError(
+            "SITUATION_INDEX_SOURCE_GAP: final situation must end at source duration"
+        )
+    observed_shots = [shot_id for item in index.situations for shot_id in item.shot_ids]
+    expected_shots = [shot.shot_id for shot in shots.shots]
+    if sorted(observed_shots) != sorted(expected_shots) or len(observed_shots) != len(
+        set(observed_shots)
+    ):
+        raise MvpError("SITUATION_INDEX_SHOT_OWNERSHIP_INVALID")
     if editable == 0:
         raise MvpError("situation index requires at least one editable situation")
 

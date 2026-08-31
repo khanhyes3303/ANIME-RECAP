@@ -104,6 +104,27 @@ def test_valid_index_is_ordered_and_selects_next_unlocked_editable_entry() -> No
     ) is None
 
 
+def test_index_must_cover_source_without_gaps() -> None:
+    index = document(
+        entry("situation-001", 0, 5_000, shot_ids=("shot-001",)),
+        entry("situation-002", 5_500, 10_000, shot_ids=("shot-002",)),
+    )
+
+    with pytest.raises(MvpError, match="SITUATION_INDEX_SOURCE_GAP"):
+        validate_situation_index(index, SourceRef("episode.mp4", "a" * 64, 10_000, 1920, 1080, "1/1000", 1), TRANSCRIPT, SHOTS, FRAMES)
+
+
+def test_every_shot_belongs_to_exactly_one_situation() -> None:
+    shots = ShotDocument((Shot("shot-001", 0, 10_000),))
+    index = document(
+        entry("situation-001", 0, 5_000, shot_ids=("shot-001",)),
+        entry("situation-002", 5_000, 10_000, shot_ids=("shot-001",)),
+    )
+
+    with pytest.raises(MvpError, match="SITUATION_INDEX_SHOT_OWNERSHIP_INVALID"):
+        validate_situation_index(index, SourceRef("episode.mp4", "a" * 64, 10_000, 1920, 1080, "1/1000", 1), TRANSCRIPT, shots, FRAMES)
+
+
 @pytest.mark.parametrize(
     ("bad_index", "message"),
     (
@@ -134,19 +155,35 @@ def test_valid_index_is_ordered_and_selects_next_unlocked_editable_entry() -> No
             ),
             "frame",
         ),
-        (
-            document(
-                entry(
-                    "situation-001",
-                    0,
-                    5_000,
-                    shot_ids=("shot-001",),
-                    excluded=True,
-                    exclusion_reason="Opening",
-                )
+            (
+                document(
+                    entry(
+                        "situation-001",
+                        0,
+                        5_000,
+                        shot_ids=("shot-001",),
+                        excluded=True,
+                        exclusion_reason="Opening",
+                    ),
+                    entry(
+                        "situation-002",
+                        5_000,
+                        10_000,
+                        shot_ids=("shot-002",),
+                        excluded=True,
+                        exclusion_reason="Recap",
+                    ),
+                    entry(
+                        "situation-003",
+                        10_000,
+                        20_000,
+                        shot_ids=("shot-003",),
+                        excluded=True,
+                        exclusion_reason="Ending",
+                    ),
+                ),
+                "editable",
             ),
-            "editable",
-        ),
     ),
 )
 def test_invalid_index_fails_closed(

@@ -72,5 +72,7 @@ def test_structure_prompt_separates_boundaries_without_writing_narration(
     assert "không viết lời review" in prompt.casefold()
     assert "visual-only" in prompt.casefold()
     assert "transcript có thể rỗng" in prompt.casefold()
+    assert "range đầu tiên" in prompt.casefold()
+    assert "mỗi `shot_id`" in prompt.casefold()
     assert "narration_draft.json" not in prompt
     assert "Gemini Web" not in prompt
