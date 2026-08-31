@@ -143,6 +143,7 @@ from .workflow import (
     accept_structure_index,
     advance,
     begin_editor_task,
+    begin_verifier_task,
     begin_structure_task,
     fallback_to_legacy_observation,
     lock_editor_situation,
@@ -162,6 +163,12 @@ from .workflow import (
 )
 from .workspace import assert_inside_run, create_job, publish_candidate
 from .operator import OperatorDirective, plan_operator_step
+from .review_packets import (
+    build_situation_audit_packet,
+    render_situation_audit_prompt,
+    validate_situation_audit,
+)
+from .review_contracts import SituationAuditDocument
 
 
 def _elapsed_ms(started: float) -> int:
@@ -261,6 +268,13 @@ def _parser() -> argparse.ArgumentParser:
         "operator", help="Tiếp tục luồng Antigravity theo các thẻ goal/teamwork-preview"
     )
     operator.add_argument("--run", required=True, type=Path)
+    verifier_task = subparsers.add_parser("verifier-task")
+    verifier_task.add_argument("--run", required=True, type=Path)
+    verifier_task.add_argument("--kind", required=True, choices=("situation",))
+    accept_verifier = subparsers.add_parser("accept-verifier")
+    accept_verifier.add_argument("--run", required=True, type=Path)
+    accept_verifier.add_argument("--task", required=True)
+    accept_verifier.add_argument("--input", required=True, type=Path)
     return parser
 
 
@@ -371,6 +385,84 @@ def _operator_command(run_dir: Path) -> int:
         json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(run_dir / "operator_status.json")
+    return 0
+
+
+def _verifier_task_command(run_dir: Path, kind: str) -> int:
+    if kind != "situation":
+        raise MvpError("unsupported verifier task kind")
+    state, episode = _episode(run_dir)
+    if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG:
+        raise MvpError("verifier-task requires situation verifier wait stage")
+    if not state.current_situation_id or not state.editor_task_id:
+        raise MvpError("verifier-task requires active producer situation task")
+    producer = load_editor_task(run_dir / "editor_tasks" / f"{state.editor_task_id}.json")
+    scope = load_situation_scope(
+        run_dir / "situation_inputs" / state.current_situation_id / "scope.json",
+        verify_files=True,
+    )
+    plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
+    verifier = create_editor_task(
+        run_dir,
+        run_dir.name,
+        state.current_situation_id,
+        max(1, state.editorial_revision),
+        tuple(Path(path) for path in scope.input_paths),
+        task_kind="SITUATION_AUDIT",
+        allowed_outputs=("situation_audit_draft.json",),
+        expected_stage="ANTIGRAVITY_VERIFIER",
+    )
+    begin_verifier_task(run_dir, verifier.task_id, verifier.situation_id, verifier.revision)
+    packet = build_situation_audit_packet(scope, plan, producer, verifier)
+    dump_json(run_dir / "cong_viec_antigravity.json", packet)
+    (run_dir / "PROMPT_GUI_ANTIGRAVITY.txt").write_text(
+        render_situation_audit_prompt(packet), encoding="utf-8"
+    )
+    _write_next(
+        run_dir,
+        f"Verifier kiểm tra từng cue của {packet.situation_id}; chỉ ghi situation_audit_draft.json rồi chạy accept-verifier --run "
+        f'"{run_dir}" --task {verifier.task_id} --input "{run_dir / "editor_staging" / verifier.task_id}".',
+    )
+    print(run_dir / "cong_viec_antigravity.json")
+    return 0
+
+
+def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> int:
+    state, episode = _episode(run_dir)
+    task = load_editor_task(run_dir / "editor_tasks" / f"{task_id}.json")
+    if task.task_kind != "SITUATION_AUDIT" or state.verifier_task_id != task_id:
+        raise MvpError("verifier task does not match the active task")
+    audit_path = staging_dir / "situation_audit_draft.json"
+    audit = load_json(audit_path, SituationAuditDocument)
+    plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
+    scope = load_situation_scope(
+        run_dir / "situation_inputs" / task.situation_id / "scope.json", verify_files=True
+    )
+    if audit.situation_id != task.situation_id:
+        raise MvpError("VERIFIER_SITUATION_SCOPE_INVALID")
+    try:
+        validate_situation_audit(audit, plan)
+    except MvpError:
+        codes = tuple(dict.fromkeys(code for item in audit.cue_reviews for code in item.finding_codes)) or ("SITUATION_AUDIT_FAILED",)
+        advance(run_dir, Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG, Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG)
+        route_verifier_repair(run_dir, task.situation_id, codes, content_fingerprint((audit_path,)))
+        _write_next(run_dir, f"Verifier phát hiện lỗi ở {task.situation_id}; Antigravity sửa rồi chạy editor-task lại.")
+        return 1
+    # A successful verifier is independently recorded before the situation is locked.
+    ledger = run_dir / "verifier_ledger.jsonl"
+    from .jsonio import atomic_append_jsonl
+    from .editor_provenance import AcceptedVerifierRevision
+    accepted = AcceptedVerifierRevision(
+        task.task_id, task.run_id, task.task_kind, task.situation_id, task.revision,
+        "ANTIGRAVITY_VERIFIER", task.input_sha256, content_fingerprint((audit_path,))
+    )
+    atomic_append_jsonl(ledger, accepted)
+    advance(run_dir, Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG, Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG)
+    source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    index = load_situation_index(run_dir / "situation_index.json", source, load_json(run_dir / "transcript_english.json", TranscriptDocument), load_json(run_dir / "shots.json", ShotDocument), _frame_refs(run_dir))
+    following = next_editable_situation(index, (*state.locked_situation_ids, task.situation_id))
+    lock_editor_situation(run_dir, task.situation_id, next_situation_id="" if following is None else following.situation_id)
+    _write_next(run_dir, "Verifier đạt MATCH; tình huống đã khóa và operator có thể tiếp tục.")
     return 0
 
 
@@ -2014,31 +2106,12 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
                 ),
             )
             return 1
-        current = next(
-            item
-            for item in situations.situations
-            if item.situation_id == state.current_situation_id
-        )
-        source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
-        index = load_situation_index(
-            run_dir / "situation_index.json",
-            source,
-            load_json(run_dir / "transcript_english.json", TranscriptDocument),
-            load_json(run_dir / "shots.json", ShotDocument),
-            _frame_refs(run_dir),
-        )
-        following = next_editable_situation(
-            index, (*state.locked_situation_ids, current.situation_id)
-        )
-        lock_editor_situation(
+        advance(
             run_dir,
-            current.situation_id,
-            next_situation_id="" if following is None else following.situation_id,
+            Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
+            Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG,
         )
-        _write_next(
-            run_dir,
-            "Tình huống đã khóa; chạy editor-task cho tình huống kế hoặc audit --phase episode.",
-        )
+        _write_next(run_dir, "Timing đạt; chạy verifier-task --kind situation để kiểm tra từng cue.")
         return 0
     raise MvpError("situation audit stage is invalid")
 
@@ -2657,6 +2730,10 @@ def main(argv: list[str] | None = None) -> int:
             return _reject_proxy_command(args.run, args.note, tuple(args.situation))
         if args.command == "operator":
             return _operator_command(args.run)
+        if args.command == "verifier-task":
+            return _verifier_task_command(args.run, args.kind)
+        if args.command == "accept-verifier":
+            return _accept_verifier_command(args.run, args.task, args.input)
     except MvpError as exc:
         parser.error(str(exc))
     return 2
