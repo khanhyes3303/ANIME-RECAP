@@ -242,6 +242,10 @@ def test_prepare_writes_structure_task_without_inventing_situation(
     )
     assert task["task_kind"] == "STRUCTURE"
     assert task["allowed_outputs"] == ["situation_index_draft.json"]
+    prompt = (run / "PROMPT_GUI_ANTIGRAVITY.txt").read_text(encoding="utf-8")
+    assert f'accept-situation-index --run "{run.resolve()}"' in prompt
+    assert f'operator --run "{run.resolve()}"' in prompt
+    assert "Không phát `GOAL_COMPLETE`" in prompt
 
 
 def test_parser_exposes_structure_handoff_commands() -> None:
@@ -408,6 +412,10 @@ def test_accepted_index_drives_a_scoped_editor_task(tmp_path: Path) -> None:
     assert [item["shot_id"] for item in packet["shots"]["shots"]] == ["shot-002"]
     assert packet["frame_manifest_path"].endswith("frames.json")
     assert "frame_manifest.json" not in packet["frame_manifest_path"]
+    prompt = (run / "PROMPT_GUI_ANTIGRAVITY.txt").read_text(encoding="utf-8")
+    assert f'accept-antigravity --run "{run.resolve()}"' in prompt
+    assert f'operator --run "{run.resolve()}"' in prompt
+    assert "Không phát `GOAL_COMPLETE`" in prompt
 
 
 def _local_artifacts(tmp_path: Path) -> tuple[Path, Path]:

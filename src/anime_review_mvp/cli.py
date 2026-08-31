@@ -363,6 +363,24 @@ def _write_next(
     )
 
 
+def _autonomous_task_prompt(prompt: str, run_dir: Path, accept_command: str) -> str:
+    resolved_run = run_dir.resolve()
+    return (
+        prompt.rstrip() + "\n\nHỢP ĐỒNG TIẾP TỤC TỰ ĐỘNG (BẮT BUỘC)\n"
+        "Sau khi ghi đủ required_outputs, tự chạy nguyên lệnh sau; không chỉ báo cáo "
+        "đường dẫn:\n"
+        f"uv run python run_episode.py {accept_command}\n\n"
+        "Nếu accept thành công, bắt buộc tiếp tục chạy:\n"
+        f'uv run python run_episode.py operator --run "{resolved_run}"\n\n'
+        "Đọc lại next_action.json và cong_viec_antigravity.json sau mỗi lệnh rồi thực hiện "
+        "task kế tiếp. Không yêu cầu người dùng copy từng tình huống. Nếu accept thất bại, "
+        "sửa đúng task hiện tại theo lỗi engine rồi chạy accept lại.\n"
+        "Không phát `GOAL_COMPLETE` và không dừng sau STRUCTURE, SITUATION hoặc VERIFIER. "
+        "Chỉ được kết thúc khi run_state.json đạt `CHO_NGUOI_DUNG_DUYET_PROXY`, hoặc khi "
+        "thiếu công cụ thật sự và đã báo rõ công cụ cần cài.\n"
+    )
+
+
 def _operator_editable_ids(run_dir: Path) -> tuple[str, ...]:
     """Read editable situation IDs without imposing a fixed situation count."""
     path = run_dir / "situation_index.json"
@@ -529,15 +547,19 @@ def _verifier_task_command(run_dir: Path, kind: str) -> int:
     begin_verifier_task(run_dir, verifier.task_id, verifier.situation_id, verifier.revision)
     packet = build_situation_audit_packet(scope, plan, producer, verifier)
     dump_json(run_dir / "cong_viec_antigravity.json", packet)
+    staging = run_dir / "editor_staging" / verifier.task_id
+    accept_command = (
+        f'accept-verifier --run "{run_dir.resolve()}" --task {verifier.task_id} '
+        f'--input "{staging.resolve()}"'
+    )
     (run_dir / "PROMPT_GUI_ANTIGRAVITY.txt").write_text(
-        render_situation_audit_prompt(packet), encoding="utf-8"
+        _autonomous_task_prompt(render_situation_audit_prompt(packet), run_dir, accept_command),
+        encoding="utf-8",
     )
     _write_next(
         run_dir,
         f"Verifier kiểm tra từng cue của {packet.situation_id}; chỉ ghi "
-        "situation_audit_draft.json rồi chạy accept-verifier --run "
-        f'"{run_dir}" --task {verifier.task_id} --input '
-        f'"{run_dir / "editor_staging" / verifier.task_id}".',
+        f"situation_audit_draft.json rồi chạy {accept_command}.",
     )
     print(run_dir / "cong_viec_antigravity.json")
     return 0
@@ -582,15 +604,19 @@ def _proxy_verifier_task_command(run_dir: Path) -> int:
         f"verifier:{verifier.task_id}:{verifier.input_sha256}",
     )
     dump_json(run_dir / "cong_viec_antigravity.json", packet)
-    (run_dir / "PROMPT_GUI_ANTIGRAVITY.txt").write_text(
-        render_proxy_audit_prompt(packet), encoding="utf-8"
-    )
     staging = run_dir / "editor_staging" / verifier.task_id
+    accept_command = (
+        f'accept-verifier --run "{run_dir.resolve()}" --task {verifier.task_id} '
+        f'--input "{staging.resolve()}"'
+    )
+    (run_dir / "PROMPT_GUI_ANTIGRAVITY.txt").write_text(
+        _autonomous_task_prompt(render_proxy_audit_prompt(packet), run_dir, accept_command),
+        encoding="utf-8",
+    )
     _write_next(
         run_dir,
         "Verifier kiểm tra toàn bộ proxy theo từng cue và boundary START/END; chỉ ghi "
-        f'proxy_audit_draft.json rồi chạy accept-verifier --run "{run_dir}" --task '
-        f'{verifier.task_id} --input "{staging}".',
+        f"proxy_audit_draft.json rồi chạy {accept_command}.",
     )
     print(run_dir / "cong_viec_antigravity.json")
     return 0
@@ -2608,13 +2634,19 @@ def _structure_task_command(run_dir: Path) -> int:
     output = run_dir / "cong_viec_antigravity.json"
     dump_json(output, packet)
     prompt = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
-    prompt.write_text(render_structure_editor_prompt(packet), encoding="utf-8")
     staging = run_dir / "editor_staging" / task.task_id
+    accept_command = (
+        f'accept-situation-index --run "{run_dir.resolve()}" --task {task.task_id} '
+        f'--input "{staging.resolve()}"'
+    )
+    prompt.write_text(
+        _autonomous_task_prompt(render_structure_editor_prompt(packet), run_dir, accept_command),
+        encoding="utf-8",
+    )
     _write_next(
         run_dir,
         "Antigravity chỉ chia cấu trúc tập và ghi situation_index_draft.json vào "
-        f"editor_staging/{task.task_id}. Sau đó chạy: accept-situation-index --run "
-        f'"{run_dir}" --task {task.task_id} --input "{staging}".',
+        f"editor_staging/{task.task_id}. Sau đó chạy: {accept_command}.",
     )
     print(output)
     return 0
@@ -2705,13 +2737,19 @@ def _editor_task_command(run_dir: Path, *, repair_note: str = "") -> int:
     output = run_dir / "cong_viec_antigravity.json"
     dump_json(output, packet)
     prompt_output = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
-    prompt_output.write_text(render_situation_editor_prompt(packet), encoding="utf-8")
     staging_dir = run_dir / "editor_staging" / task.task_id
+    accept_command = (
+        f'accept-antigravity --run "{run_dir.resolve()}" --task {task.task_id} '
+        f'--input "{staging_dir.resolve()}"'
+    )
+    prompt_output.write_text(
+        _autonomous_task_prompt(render_situation_editor_prompt(packet), run_dir, accept_command),
+        encoding="utf-8",
+    )
     _write_next(
         run_dir,
         f"Antigravity xử lý {task.situation_id}; chỉ ghi hai draft vào "
-        f"editor_staging/{task.task_id}. Sau đó chạy: accept-antigravity --run "
-        f'"{run_dir}" --task {task.task_id} --input "{staging_dir}".',
+        f"editor_staging/{task.task_id}. Sau đó chạy: {accept_command}.",
     )
     print(output)
     return 0
