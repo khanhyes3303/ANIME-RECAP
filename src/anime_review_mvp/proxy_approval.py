@@ -81,10 +81,18 @@ def approve_proxy(
     ).is_file():
         accepted_proxy_verifiers = tuple(
             record for record in load_verifier_ledger(run_dir / "verifier_ledger.jsonl")
-            if record.task_kind == "PROXY_AUDIT" and record.actor == "ANTIGRAVITY_VERIFIER"
+            if record.task_kind == "PROXY_AUDIT"
+            and record.actor == "ANTIGRAVITY_VERIFIER"
+            and record.revision == state.editorial_revision
         )
         if not accepted_proxy_verifiers:
             raise MvpError("proxy approval requires accepted Antigravity proxy verifier audit")
+        accepted_audit = run_dir / "accepted_verification" / "proxy" / "proxy_audit.json"
+        current_audit_hash = (
+            sha256_file(accepted_audit) if accepted_audit.is_file() else ""
+        )
+        if current_audit_hash != accepted_proxy_verifiers[-1].audit_sha256:
+            raise MvpError("proxy approval verifier audit artifact is stale or missing")
     proxy_hash = sha256_file(proxy_path)
     editorial_hash = content_sha256(editorial_paths)
     approval = ProxyApproval(

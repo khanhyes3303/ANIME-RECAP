@@ -618,6 +618,15 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
                 "bị ảnh hưởng rồi chạy operator.",
             )
             return 1
+        accepted_audit = (
+            run_dir / "accepted_verification" / "proxy" / "proxy_audit.json"
+        )
+        accepted_audit.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(staging_dir / "proxy_audit_draft.json", accepted_audit)
+        except OSError as exc:
+            raise MvpError("VERIFIER_ACCEPTANCE_COPY_FAILED") from exc
+        audit_sha256 = sha256_file(accepted_audit)
         ledger = run_dir / "verifier_ledger.jsonl"
         from .editor_provenance import AcceptedVerifierRevision
         from .jsonio import atomic_append_jsonl
@@ -626,7 +635,7 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
             AcceptedVerifierRevision(
                 task.task_id, task.run_id, task.task_kind, task.situation_id,
                 task.revision, "ANTIGRAVITY_VERIFIER", task.input_sha256,
-                content_fingerprint((staging_dir / "proxy_audit_draft.json",)),
+                audit_sha256,
             ),
         )
         advance(run_dir, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY, Stage.KIEM_DINH_PHAN_BIEN_PROXY)

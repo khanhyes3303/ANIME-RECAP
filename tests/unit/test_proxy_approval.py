@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from anime_review_mvp.editor_provenance import AcceptedVerifierRevision
 from anime_review_mvp.errors import MvpError
+from anime_review_mvp.jsonio import atomic_append_jsonl
 from anime_review_mvp.proxy_approval import (
     approve_proxy,
     content_sha256,
@@ -52,3 +55,63 @@ def test_rejection_preserves_proxy_and_routes_note_to_antigravity(tmp_path: Path
     assert proxy.exists()
     assert rejected.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
     assert rejected.current_situation_id == "situation-004"
+
+
+def test_v2_approval_requires_current_proxy_verifier_artifact(tmp_path: Path) -> None:
+    run, proxy, artifacts = _prepared(tmp_path)
+    raw_state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    raw_state["editorial_revision"] = 1
+    (run / "run_state.json").write_text(json.dumps(raw_state), encoding="utf-8")
+    (run / "proxy_evidence").mkdir()
+    (run / "proxy_evidence" / "proxy_evidence_manifest.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    accepted_audit = run / "accepted_verification" / "proxy" / "proxy_audit.json"
+    accepted_audit.parent.mkdir(parents=True)
+    accepted_audit.write_text('{"verdict":"MATCH"}', encoding="utf-8")
+    atomic_append_jsonl(
+        run / "verifier_ledger.jsonl",
+        AcceptedVerifierRevision(
+            "proxy-audit-001",
+            run.name,
+            "PROXY_AUDIT",
+            "__episode__",
+            1,
+            "ANTIGRAVITY_VERIFIER",
+            "a" * 64,
+            sha256_file(accepted_audit),
+        ),
+    )
+
+    approval = approve_proxy(run, proxy, artifacts)
+    assert approval.proxy_sha256 == sha256_file(proxy)
+
+
+def test_v2_approval_rejects_stale_proxy_verifier_revision(tmp_path: Path) -> None:
+    run, proxy, artifacts = _prepared(tmp_path)
+    raw_state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    raw_state["editorial_revision"] = 2
+    (run / "run_state.json").write_text(json.dumps(raw_state), encoding="utf-8")
+    (run / "proxy_evidence").mkdir()
+    (run / "proxy_evidence" / "proxy_evidence_manifest.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    accepted_audit = run / "accepted_verification" / "proxy" / "proxy_audit.json"
+    accepted_audit.parent.mkdir(parents=True)
+    accepted_audit.write_text('{"verdict":"MATCH"}', encoding="utf-8")
+    atomic_append_jsonl(
+        run / "verifier_ledger.jsonl",
+        AcceptedVerifierRevision(
+            "proxy-audit-001",
+            run.name,
+            "PROXY_AUDIT",
+            "__episode__",
+            1,
+            "ANTIGRAVITY_VERIFIER",
+            "a" * 64,
+            sha256_file(accepted_audit),
+        ),
+    )
+
+    with pytest.raises(MvpError, match="accepted Antigravity proxy verifier"):
+        approve_proxy(run, proxy, artifacts)
