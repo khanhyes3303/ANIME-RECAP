@@ -370,6 +370,38 @@ def _run(command: list[str], runner: Runner) -> Any:
     return result
 
 
+def capture_frame(
+    video: Path,
+    timestamp_ms: int,
+    output: Path,
+    *,
+    runner: Runner = subprocess.run,
+    strict_jpeg: bool = False,
+) -> Path:
+    if timestamp_ms < 0:
+        raise MvpError("frame timestamp must not be negative")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-y",
+        "-v",
+        "error",
+        "-ss",
+        f"{timestamp_ms / 1_000:.3f}",
+        "-i",
+        str(video),
+        "-frames:v",
+        "1",
+    ]
+    if strict_jpeg:
+        command.extend(["-strict", "-2"])
+    command.append(str(output))
+    _run(command, runner)
+    if not output.is_file():
+        raise MvpError(f"FFmpeg did not create evidence frame: {output}")
+    return output
+
+
 def probe_source(video: Path, *, runner: Runner = subprocess.run) -> SourceRef:
     if not video.is_file():
         raise MvpError(f"source video does not exist: {video}")

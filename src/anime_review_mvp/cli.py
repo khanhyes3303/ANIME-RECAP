@@ -106,7 +106,11 @@ from .situation_scope import (
     materialize_situation_scope,
     validate_submission_scope,
 )
-from .situation_validation import validate_narration_plan, validate_situations
+from .situation_validation import (
+    validate_edl_exclusions,
+    validate_narration_plan,
+    validate_situations,
+)
 from .situations import (
     CueTtsManifest,
     EditorialPolicy,
@@ -160,9 +164,10 @@ from .workflow import (
     resume_beat_repair,
     resume_browser_review,
     route_editor_repair,
+    route_verifier_repair,
 )
 from .workspace import assert_inside_run, create_job, publish_candidate
-from .operator import OperatorDirective, plan_operator_step
+from .operator import plan_operator_step
 from .review_packets import (
     build_situation_audit_packet,
     render_situation_audit_prompt,
@@ -2517,9 +2522,19 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
     plan = load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
     tts = load_json(run_dir / "cue_tts_manifest.json", CueTtsManifest)
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
+    transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
+    shots = load_json(run_dir / "shots.json", ShotDocument)
+    index = load_situation_index(
+        run_dir / "situation_index.json",
+        source,
+        transcript,
+        shots,
+        _frame_refs(run_dir),
+    )
     edl, timeline = build_semantic_timeline(
         plan, tts, source.duration_ms, EditorialPolicy()
     )
+    validate_edl_exclusions(edl, index)
     dump_json(run_dir / "adaptive_edl.json", edl)
     dump_json(run_dir / "semantic_timeline.json", timeline)
     render_cue_audio_timeline(tts, timeline, run_dir / "aligned_narration.wav")

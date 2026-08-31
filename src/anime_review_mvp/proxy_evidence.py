@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+import subprocess
 
 from .adaptive_edl import AdaptiveEdlDocument
 from .errors import MvpError
-from .models import ShotDocument, TranscriptDocument
-from .semantic_timeline import SemanticTimeline, map_source_timestamp
+from .jsonio import dump_json
+from .media import capture_frame
+from .semantic_timeline import SemanticTimeline
 from .situation_index import SituationIndexDocument
+from .situation_validation import validate_edl_exclusions
 from .situations import NarrationPlan
+from .models import TranscriptDocument
+
+Runner = Callable[..., object]
+_FRAME_POSITIONS = ("START", "ANCHOR", "MIDDLE", "END")
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +24,14 @@ class ProxyEvidenceFrame:
     position: str
     timestamp_ms: int
     path: str
+
+    def __post_init__(self) -> None:
+        if self.position not in {"START", "ANCHOR", "MIDDLE", "END"}:
+            raise MvpError("proxy evidence frame position is invalid")
+        if self.timestamp_ms < 0:
+            raise MvpError("proxy evidence frame timestamp must not be negative")
+        if not self.path.strip():
+            raise MvpError("proxy evidence frame path must not be empty")
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +46,18 @@ class CueProxyEvidence:
     transcript_text: tuple[str, ...]
     shot_ids: tuple[str, ...]
 
+    def __post_init__(self) -> None:
+        if not self.cue_id.strip() or not self.situation_id.strip():
+            raise MvpError("proxy evidence cue metadata is invalid")
+        if self.source_interval_ms[0] < 0 or self.source_interval_ms[1] <= self.source_interval_ms[0]:
+            raise MvpError("proxy evidence source interval is invalid")
+        if self.program_interval_ms[0] < 0 or self.program_interval_ms[1] <= self.program_interval_ms[0]:
+            raise MvpError("proxy evidence program interval is invalid")
+        if len(self.source_frames) != 4 or len(self.program_frames) != 4:
+            raise MvpError("proxy evidence requires four source and program frames")
+        if not self.transcript_text and not self.shot_ids:
+            raise MvpError("proxy evidence requires transcript or shot evidence")
+
 
 @dataclass(frozen=True, slots=True)
 class BoundaryProxyEvidence:
@@ -39,83 +66,220 @@ class BoundaryProxyEvidence:
     adjacent_excluded_source_intervals_ms: tuple[tuple[int, int], ...]
     transcript_segment_indexes: tuple[int, ...]
 
+    def __post_init__(self) -> None:
+        if self.boundary not in {"START", "END"}:
+            raise MvpError("proxy evidence boundary is invalid")
+        if not self.program_frames:
+            raise MvpError("proxy boundary evidence requires frames")
+
 
 @dataclass(frozen=True, slots=True)
 class ProxyEvidenceManifest:
     cues: tuple[CueProxyEvidence, ...]
     boundaries: tuple[BoundaryProxyEvidence, ...]
 
+    def __post_init__(self) -> None:
+        if not self.cues:
+            raise MvpError("proxy evidence manifest requires cues")
+        if not self.boundaries:
+            raise MvpError("proxy evidence manifest requires boundary evidence")
 
-def _capture(runner: Callable[..., object], video: Path, timestamp: int, position: str, output: Path) -> ProxyEvidenceFrame:
-    result = runner(
-        ["ffmpeg", "-y", "-v", "error", "-ss", f"{timestamp / 1000:.3f}",
-         "-i", str(video), "-frames:v", "1", str(output)],
-        capture_output=True,
-        text=True,
-        check=False,
+
+def _overlaps(start_ms: int, end_ms: int, other_start_ms: int, other_end_ms: int) -> bool:
+    return max(start_ms, other_start_ms) < min(end_ms, other_end_ms)
+
+
+def _frame_bundle(
+    video: Path,
+    start_ms: int,
+    end_ms: int,
+    anchor_ms: int,
+    output_dir: Path,
+    *,
+    runner: Runner,
+    strict_jpeg: bool,
+) -> tuple[ProxyEvidenceFrame, ...]:
+    if start_ms < 0 or end_ms <= start_ms:
+        raise MvpError("proxy evidence interval is invalid")
+    midpoint = (start_ms + end_ms) // 2
+    timestamps = (
+        ("START", start_ms),
+        ("ANCHOR", anchor_ms),
+        ("MIDDLE", midpoint),
+        ("END", end_ms),
     )
-    if getattr(result, "returncode", 0) != 0:
-        raise MvpError("PROXY_EVIDENCE_FRAME_EXTRACTION_FAILED")
-    path = str(output)
-    return ProxyEvidenceFrame(position, timestamp, path)
+    frames: list[ProxyEvidenceFrame] = []
+    for position, timestamp_ms in timestamps:
+        frame = output_dir / f"{position.lower()}-{timestamp_ms:08d}.jpg"
+        capture_frame(
+            video,
+            timestamp_ms,
+            frame,
+            runner=runner,
+            strict_jpeg=strict_jpeg,
+        )
+        frames.append(ProxyEvidenceFrame(position, timestamp_ms, str(frame.resolve())))
+    return tuple(frames)
+
+
+def _cue_transcript_indexes(
+    transcript: TranscriptDocument, start_ms: int, end_ms: int
+) -> tuple[int, ...]:
+    return tuple(
+        index
+        for index, segment in enumerate(transcript.segments)
+        if _overlaps(start_ms, end_ms, segment.start_ms, segment.end_ms)
+    )
 
 
 def extract_cue_proxy_evidence(
-    source: Path,
-    proxy: Path,
+    source_video: Path,
+    proxy_video: Path,
     plan: NarrationPlan,
     timeline: SemanticTimeline,
     edl: AdaptiveEdlDocument,
-    index: object,
+    index: SituationIndexDocument,
     transcript: TranscriptDocument,
     output_dir: Path,
     *,
-    runner: Callable[..., object],
+    runner: Runner = subprocess.run,
 ) -> ProxyEvidenceManifest:
-    del source
+    validate_edl_exclusions(edl, index)
+    if not source_video.is_file():
+        raise MvpError(f"source video does not exist: {source_video}")
+    if not proxy_video.is_file():
+        raise MvpError(f"proxy video does not exist: {proxy_video}")
+    if not plan.units:
+        raise MvpError("proxy evidence requires narration units")
+    if len(timeline.cues) != len({cue.cue_id for cue in timeline.cues}):
+        raise MvpError("proxy evidence timeline cue IDs must be unique")
+
+    cue_timings = {cue.cue_id: cue for cue in timeline.cues}
+    units_by_situation = {unit.situation_id: unit for unit in plan.units}
+    if len(units_by_situation) != len(plan.units):
+        raise MvpError("proxy evidence unit situation IDs must be unique")
+    excluded = tuple(item for item in index.situations if item.excluded)
+    kept = tuple(item for item in index.situations if not item.excluded)
+    if not kept:
+        raise MvpError("proxy evidence requires at least one kept situation")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     cues: list[CueProxyEvidence] = []
-    for cue_timing, unit in zip(timeline.cues, plan.units, strict=False):
-        cue = next((item for item in unit.cues if item.cue_id == cue_timing.cue_id), None)
-        if cue is None:
-            continue
-        ranges = unit.evidence_ranges
-        source_start = min(item.source_start_ms for item in ranges)
-        source_end = max(item.source_end_ms for item in ranges)
-        program_start = min(item.program_start_ms for item in edl.segments if item.unit_id == unit.unit_id)
-        program_end = max(item.program_end_ms for item in edl.segments if item.unit_id == unit.unit_id)
-        source_points = (source_start, cue.visual_anchor_source_ms, (source_start + source_end) // 2, source_end - 1)
-        program_anchor = map_source_timestamp(edl, cue.visual_anchor_source_ms)
-        program_points = (program_start, program_anchor, (program_start + program_end) // 2, max(program_start, program_end - 1))
-        positions = ("START", "ANCHOR", "MIDDLE", "END")
-        source_frames = tuple(_capture(runner, proxy, ts, pos, output_dir / f"{cue.cue_id}-source-{pos.lower()}.jpg") for ts, pos in zip(source_points, positions, strict=True))
-        program_frames = tuple(_capture(runner, proxy, ts, pos, output_dir / f"{cue.cue_id}-program-{pos.lower()}.jpg") for ts, pos in zip(program_points, positions, strict=True))
-        indexes = tuple(i for i, segment in enumerate(transcript.segments) if segment.end_ms > source_start and segment.start_ms < source_end)
-        texts = tuple(transcript.segments[i].text for i in indexes)
-        cues.append(CueProxyEvidence(cue.cue_id, cue.situation_id, (source_start, source_end), (program_start, program_end), source_frames, program_frames, indexes, texts, cue.shot_ids))
-    if not cues:
-        raise MvpError("PROXY_EVIDENCE_CUE_COVERAGE_INVALID")
-    first = min(segment.program_start_ms for segment in edl.segments)
-    last = max(segment.program_end_ms for segment in edl.segments)
+    for unit in plan.units:
+        unit_segments = tuple(
+            segment for segment in edl.segments if segment.unit_id == unit.unit_id
+        )
+        if not unit_segments:
+            raise MvpError("proxy evidence is missing a unit EDL segment")
+        source_start_ms = min(r.source_start_ms for r in unit.evidence_ranges)
+        source_end_ms = max(r.source_end_ms for r in unit.evidence_ranges)
+        program_start_ms = unit_segments[0].program_start_ms
+        program_end_ms = unit_segments[-1].program_end_ms
+        shot_ids = tuple(
+            dict.fromkeys(
+                shot_id for evidence in unit.evidence_ranges for shot_id in evidence.shot_ids
+            )
+        )
+        transcript_indexes = _cue_transcript_indexes(transcript, source_start_ms, source_end_ms)
+        transcript_text = tuple(transcript.segments[index].text for index in transcript_indexes)
+        for cue in unit.cues:
+            timing = cue_timings.get(cue.cue_id)
+            if timing is None:
+                raise MvpError("proxy evidence timeline cue IDs do not match plan cues")
+            cue_output = output_dir / cue.cue_id
+            cues.append(
+                CueProxyEvidence(
+                    cue.cue_id,
+                    cue.situation_id,
+                    (source_start_ms, source_end_ms),
+                    (timing.spoken_start_ms, timing.spoken_end_ms),
+                    _frame_bundle(
+                        source_video,
+                        source_start_ms,
+                        source_end_ms,
+                        cue.visual_anchor_source_ms,
+                        cue_output / "source",
+                        runner=runner,
+                        strict_jpeg=False,
+                    ),
+                    _frame_bundle(
+                        proxy_video,
+                        program_start_ms,
+                        program_end_ms,
+                        timing.visual_anchor_program_ms,
+                        cue_output / "program",
+                        runner=runner,
+                        strict_jpeg=True,
+                    ),
+                    transcript_indexes,
+                    transcript_text,
+                    shot_ids,
+                )
+            )
+
+    start_kept = kept[0]
+    end_kept = kept[-1]
+    start_segments = tuple(
+        segment for segment in edl.segments if segment.situation_id == start_kept.situation_id
+    )
+    end_segments = tuple(
+        segment for segment in edl.segments if segment.situation_id == end_kept.situation_id
+    )
+    if not start_segments or not end_segments:
+        raise MvpError("proxy evidence boundary segments are missing")
+    start_program_start_ms = min(segment.program_start_ms for segment in start_segments)
+    start_program_end_ms = max(segment.program_end_ms for segment in start_segments)
+    end_program_start_ms = min(segment.program_start_ms for segment in end_segments)
+    end_program_end_ms = max(segment.program_end_ms for segment in end_segments)
+    start_excluded = tuple(
+        (item.source_start_ms, item.source_end_ms)
+        for item in excluded
+        if item.source_end_ms <= start_kept.source_start_ms
+    )
+    end_excluded = tuple(
+        (item.source_start_ms, item.source_end_ms)
+        for item in excluded
+        if item.source_start_ms >= end_kept.source_end_ms
+    )
+    boundary_output = output_dir / "boundaries"
     boundaries = (
         BoundaryProxyEvidence(
             "START",
-            (_capture(runner, proxy, first, "START", output_dir / "boundary-start.jpg"),),
-            tuple((item.source_start_ms, item.source_end_ms) for item in getattr(index, "situations", ()) if getattr(item, "excluded", False)),
-            (),
+            _frame_bundle(
+                proxy_video,
+                start_program_start_ms,
+                start_program_end_ms,
+                start_program_start_ms,
+                boundary_output / "start",
+                runner=runner,
+                strict_jpeg=True,
+            ),
+            start_excluded,
+            _cue_transcript_indexes(
+                transcript,
+                start_kept.source_start_ms,
+                start_kept.source_end_ms,
+            ),
         ),
         BoundaryProxyEvidence(
             "END",
-            (_capture(runner, proxy, max(first, last - 1), "END", output_dir / "boundary-end.jpg"),),
-            tuple((item.source_start_ms, item.source_end_ms) for item in getattr(index, "situations", ()) if getattr(item, "excluded", False)),
-            (),
+            _frame_bundle(
+                proxy_video,
+                end_program_start_ms,
+                end_program_end_ms,
+                end_program_end_ms,
+                boundary_output / "end",
+                runner=runner,
+                strict_jpeg=True,
+            ),
+            end_excluded,
+            _cue_transcript_indexes(
+                transcript,
+                end_kept.source_start_ms,
+                end_kept.source_end_ms,
+            ),
         ),
     )
-    return ProxyEvidenceManifest(tuple(cues), boundaries)
-
-
-def validate_edl_exclusions(edl: AdaptiveEdlDocument, index: SituationIndexDocument) -> None:
-    for segment in edl.segments:
-        for item in index.situations:
-            if item.excluded and max(segment.source_start_ms, item.source_start_ms) < min(segment.source_end_ms, item.source_end_ms):
-                raise MvpError("EDL_EXCLUDED_SOURCE_OVERLAP")
+    manifest = ProxyEvidenceManifest(tuple(cues), boundaries)
+    dump_json(output_dir / "proxy_evidence_manifest.json", manifest)
+    return manifest
