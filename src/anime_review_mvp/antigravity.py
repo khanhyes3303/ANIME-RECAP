@@ -82,7 +82,27 @@ def render_operator_prompt(run_dir: Path, template_path: Path) -> str:
     if placeholder not in template:
         raise MvpError("operator prompt template is missing the run-path placeholder")
     job_path = (run_dir / "cong_viec_antigravity.json").resolve()
-    return template.replace(placeholder, str(job_path)).replace("<run_dir>", str(run_dir.resolve()))
+    rendered = template.replace(placeholder, str(job_path)).replace(
+        "<run_dir>", str(run_dir.resolve())
+    )
+    missing_goal = "goal" not in rendered
+    missing_teamwork = "teamwork-preview" not in rendered
+    if missing_goal or missing_teamwork:
+        tagged_contract = (
+            "\n\nTAGGED AUTONOMOUS OPERATOR CONTRACT\n"
+            "Mục tiêu duy nhất: đưa run đến CHO_NGUOI_DUNG_DUYET_PROXY.\n"
+            "Không kết thúc sau STRUCTURE hoặc một SITUATION.\n"
+            "Sau mỗi lần accept thành công, chạy lại:\n"
+            'uv run python run_episode.py operator --run "<run_dir>"\n'
+            "Nếu thiếu thẻ bắt buộc, báo ANTIGRAVITY_CAPABILITY_MISSING và dừng.\n"
+            "Required attached capabilities: "
+            + ("goal" if missing_goal else "")
+            + (", " if missing_goal and missing_teamwork else "")
+            + ("teamwork-preview" if missing_teamwork else "")
+            + ".\n"
+        )
+        rendered += tagged_contract.replace("<run_dir>", str(run_dir.resolve()))
+    return rendered
 
 
 def _validate_operator_policy(policy_dir: Path) -> None:

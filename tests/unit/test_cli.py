@@ -107,6 +107,7 @@ def test_cli_exposes_editor_and_proxy_commands() -> None:
     assert parser.parse_args(
         ["migrate-run", "--run", "run", "--reason", "user-rejected"]
     ).command == "migrate-run"
+    assert parser.parse_args(["operator", "--run", "run"]).command == "operator"
     assert parser.parse_args(["editor-task", "--run", "run"]).command == "editor-task"
     assert parser.parse_args(["approve-proxy", "--run", "run"]).command == "approve-proxy"
     assert parser.parse_args(
@@ -171,3 +172,41 @@ def test_script_audit_hands_draft_to_codex_editor(tmp_path: Path) -> None:
 
     assert main(["audit", "--run", str(run), "--phase", "script"]) == 0
     assert read_state(run).stage is Stage.CODEX_BIEN_TAP
+
+
+def test_operator_command_prepares_structure_job_after_local_prepare(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = tmp_path / "run"
+    episode = tmp_path / "episode"
+    source = tmp_path / "episode.mp4"
+    episode.mkdir()
+    source.write_bytes(b"source")
+    new_state(run, stage=Stage.CHUAN_BI, episode_dir=episode, source_video=source)
+
+    def fake_prepare(path: Path) -> int:
+        assert path == run
+        new_state(
+            run,
+            stage=Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+            episode_dir=episode,
+            source_video=source,
+        )
+        cli._write_next(run, "Chuẩn bị xong; tạo job structure.")
+        return 0
+
+    def fake_structure_task(path: Path) -> int:
+        assert path == run
+        cli._write_next(run, "Antigravity xử lý structure.")
+        return 0
+
+    monkeypatch.setattr(cli, "_prepare", fake_prepare)
+    monkeypatch.setattr(cli, "_structure_task_command", fake_structure_task)
+
+    assert cli._operator_command(run) == 0
+
+    payload = json.loads((run / "operator_status.json").read_text(encoding="utf-8"))
+    assert payload["action"] == "PREPARE_STRUCTURE_JOB"
+    assert payload["stage"] == "CHO_ANTIGRAVITY_CHIA_TINH_HUONG"
+    assert payload["instruction"] == "Antigravity xử lý structure."

@@ -277,6 +277,25 @@ def test_operator_prompt_renderer_inserts_exact_job_path(tmp_path: Path) -> None
     assert "<ĐƯỜNG_DẪN_RUN>" not in rendered
 
 
+def test_operator_prompt_renderer_requires_goal_and_teamwork_preview_once(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "Tam_dang_xu_ly" / "run-001"
+    run.mkdir(parents=True)
+    template = tmp_path / "prompt.md"
+    template.write_text(
+        "Xử lý job: <ĐƯỜNG_DẪN_RUN>\\cong_viec_antigravity.json\nRun: <run_dir>\n",
+        encoding="utf-8",
+    )
+
+    rendered = antigravity_module.render_operator_prompt(run, template)
+
+    assert rendered.count("goal") == 1
+    assert rendered.count("teamwork-preview") == 1
+    assert "CHO_NGUOI_DUNG_DUYET_PROXY" in rendered
+    assert 'uv run python run_episode.py operator --run "' in rendered
+
+
 def test_policy_hash_covers_every_runtime_python_module(tmp_path: Path) -> None:
     runtime = tmp_path / "src" / "anime_review_mvp"
     runtime.mkdir(parents=True)

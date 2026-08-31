@@ -161,6 +161,7 @@ from .workflow import (
     route_editor_repair,
 )
 from .workspace import assert_inside_run, create_job, publish_candidate
+from .operator import OperatorDirective, plan_operator_step
 
 
 def _elapsed_ms(started: float) -> int:
@@ -256,6 +257,10 @@ def _parser() -> argparse.ArgumentParser:
     reject.add_argument("--run", required=True, type=Path)
     reject.add_argument("--note", required=True)
     reject.add_argument("--situation", required=True, action="append")
+    operator = subparsers.add_parser(
+        "operator", help="Tiếp tục luồng Antigravity theo các thẻ goal/teamwork-preview"
+    )
+    operator.add_argument("--run", required=True, type=Path)
     return parser
 
 
@@ -305,6 +310,68 @@ def _write_next(run_dir: Path, instruction: str, *, code: str | None = None) -> 
     (run_dir / "next_action.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def _operator_editable_ids(run_dir: Path) -> tuple[str, ...]:
+    """Read editable situation IDs without imposing a fixed situation count."""
+    path = run_dir / "situation_index.json"
+    if not path.is_file():
+        return ()
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    entries = payload.get("situations", payload) if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return ()
+    result: list[str] = []
+    for item in entries:
+        if not isinstance(item, dict) or item.get("excluded") is True:
+            continue
+        situation_id = item.get("situation_id") or item.get("id")
+        if isinstance(situation_id, str) and situation_id.strip():
+            result.append(situation_id.strip())
+    return tuple(result)
+
+
+def _operator_command(run_dir: Path) -> int:
+    """Execute local deterministic preparation until a human/Antigravity gate."""
+    state = read_state(run_dir)
+    if state.stage is Stage.CHUAN_BI:
+        _prepare(run_dir)
+        state = read_state(run_dir)
+    directive = plan_operator_step(
+        state, editable_ids=_operator_editable_ids(run_dir)
+    )
+    if directive.action == "PREPARE_STRUCTURE_JOB":
+        _structure_task_command(run_dir)
+        state = read_state(run_dir)
+    elif directive.action == "PREPARE_SITUATION_JOB":
+        # The accepted index already records the next situation.  The editor
+        # command performs all scope/hash checks before exposing a job.
+        _editor_task_command(run_dir)
+        state = read_state(run_dir)
+    try:
+        next_payload = json.loads(
+            (run_dir / "next_action.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        next_payload = {}
+    status = {
+        "action": directive.action,
+        "stage": state.stage.value,
+        "task_id": state.editor_task_id or state.verifier_task_id,
+        "instruction": next_payload.get("instruction", ""),
+    }
+    if directive.situation_id:
+        status["situation_id"] = directive.situation_id
+    if directive.stop_code:
+        status["stop_code"] = directive.stop_code
+    (run_dir / "operator_status.json").write_text(
+        json.dumps(status, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    print(run_dir / "operator_status.json")
+    return 0
 
 
 def _prepare(run_dir: Path) -> int:
@@ -2588,6 +2655,8 @@ def main(argv: list[str] | None = None) -> int:
             return _approve_proxy_command(args.run)
         if args.command == "reject-proxy":
             return _reject_proxy_command(args.run, args.note, tuple(args.situation))
+        if args.command == "operator":
+            return _operator_command(args.run)
     except MvpError as exc:
         parser.error(str(exc))
     return 2
