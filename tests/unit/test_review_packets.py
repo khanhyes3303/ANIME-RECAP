@@ -49,6 +49,9 @@ def _review(
     cue_id: str,
     verdict: str = "MATCH",
     situation_id: str = "situation-001",
+    *,
+    observed_visual: str = "Jiro xuất hiện cạnh con mèo bị thương trong rừng.",
+    narration_meaning: str = "Jiro phát hiện và cứu con mèo.",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         cue_id=cue_id,
@@ -63,6 +66,9 @@ def _review(
         transcript_refs=("evidence",),
         voice_before_visual=False,
         mixed_semantics=False,
+        observed_visual=observed_visual,
+        narration_meaning=narration_meaning,
+        note="Đã đối chiếu riêng cue này với tám frame bằng chứng.",
     )
 
 
@@ -140,3 +146,45 @@ def test_proxy_audit_rejects_insufficient_boundary_evidence() -> None:
     )
     result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
     assert "PROXY_BOUNDARY_EVIDENCE_INVALID" in result.finding_codes
+
+
+def test_proxy_audit_rejects_transcript_as_narration_meaning() -> None:
+    review = _review("cue-001", narration_meaning="evidence")
+    audit = SimpleNamespace(
+        cue_reviews=(review,),
+        boundary_reviews=(
+            SimpleNamespace(boundary="START", verdict="CLEAN"),
+            SimpleNamespace(boundary="END", verdict="CLEAN"),
+        ),
+    )
+
+    result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
+
+    assert "PROXY_AUDIT_NARRATION_MEANING_INVALID" in result.finding_codes
+
+
+def test_proxy_audit_rejects_repeated_visual_template() -> None:
+    audit = SimpleNamespace(
+        cue_reviews=(
+            _review(
+                "cue-001",
+                observed_visual="Hình ảnh video proxy đúng nội dung trong shot-001.",
+            ),
+            _review(
+                "cue-002",
+                observed_visual="Hình ảnh video proxy đúng nội dung trong shot-002.",
+            ),
+        ),
+        boundary_reviews=(
+            SimpleNamespace(boundary="START", verdict="CLEAN"),
+            SimpleNamespace(boundary="END", verdict="CLEAN"),
+        ),
+    )
+
+    result = validate_proxy_audit(
+        audit,
+        _plan("cue-001", "cue-002"),
+        _evidence("cue-001", "cue-002"),
+    )
+
+    assert "PROXY_AUDIT_BOILERPLATE_INVALID" in result.finding_codes

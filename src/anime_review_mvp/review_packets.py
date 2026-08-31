@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,6 +55,13 @@ class ProxyAuditValidation:
     @property
     def passed(self) -> bool:
         return not self.finding_codes
+
+
+def semantic_review_signature(text: str) -> str:
+    normalized = re.sub(r"\bshot(?:[-_\s]*\d+)?\b", "shot", text.casefold())
+    normalized = re.sub(r"\d+", "", normalized)
+    normalized = re.sub(r"[^\w\s]", " ", normalized, flags=re.UNICODE)
+    return " ".join(normalized.split())
 
 
 def build_situation_audit_packet(
@@ -241,6 +249,37 @@ def validate_proxy_audit(
             getattr(item, "voice_before_visual", False) or getattr(item, "mixed_semantics", False)
         ):
             codes.append("PROXY_CUE_MATCH_CONTRADICTS_FLAGS")
+        transcript_meaning = semantic_review_signature(" ".join(cue_evidence.transcript_text))
+        narration_meaning = semantic_review_signature(
+            getattr(item, "narration_meaning", "")
+        )
+        if item.verdict == "MATCH" and (
+            not narration_meaning or narration_meaning == transcript_meaning
+        ):
+            codes.append("PROXY_AUDIT_NARRATION_MEANING_INVALID")
+    visual_signatures = tuple(
+        semantic_review_signature(getattr(item, "observed_visual", ""))
+        for item in reviews
+        if item.verdict == "MATCH"
+    )
+    generic_visuals = {
+        semantic_review_signature(
+            "Hình ảnh video proxy thể hiện chính xác nội dung câu chuyện trong shot"
+        ),
+        semantic_review_signature("Hình ảnh video proxy đúng nội dung trong shot"),
+    }
+    generic_notes = {
+        semantic_review_signature("Hình ảnh proxy, âm thanh và lời bình đồng bộ tuyệt đối"),
+    }
+    if any(not signature or signature in generic_visuals for signature in visual_signatures):
+        codes.append("PROXY_AUDIT_BOILERPLATE_INVALID")
+    if len(visual_signatures) != len(set(visual_signatures)):
+        codes.append("PROXY_AUDIT_BOILERPLATE_INVALID")
+    if any(
+        semantic_review_signature(getattr(item, "note", "")) in generic_notes
+        for item in reviews
+    ):
+        codes.append("PROXY_AUDIT_BOILERPLATE_INVALID")
     return ProxyAuditValidation(
         tuple(
             dict.fromkeys(
