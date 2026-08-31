@@ -91,22 +91,57 @@ def test_migrate_to_structure_archives_old_revision_outputs(
     assert not stale_run.exists()
     assert not old_task.exists()
     assert not policy.exists()
-    assert (
-        archive / "episode" / "Ke_hoach_canh" / "editorial_policy.json"
-    ).is_file()
+    assert (archive / "episode" / "Ke_hoach_canh" / "editorial_policy.json").is_file()
     assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
+
+
+def test_evidence_locked_rebuild_archives_editorial_chain_but_keeps_observations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _empty_run(tmp_path)
+    initial = read_state(run)
+    episode = Path(initial.episode_dir)
+    new_state(
+        run,
+        stage=Stage.CHO_NGUOI_DUNG_DUYET_PROXY,
+        episode_dir=episode,
+        source_video=Path(initial.source_video),
+    )
+    for name in ("transcript_english.json", "shots.json", "frame_manifest.json"):
+        (run / name).write_text('{"observation":true}\n', encoding="utf-8")
+    stale_run = run / "accepted_editorial" / "situation-001" / "draft.json"
+    stale_run.parent.mkdir(parents=True)
+    stale_run.write_text('{"stale":true}\n', encoding="utf-8")
+    stale_proxy = run / "proxy" / "review_proxy.mp4"
+    stale_proxy.parent.mkdir(parents=True)
+    stale_proxy.write_bytes(b"stale proxy")
+    stale_episode = episode / "Kich_ban" / "narration_plan.json"
+    stale_episode.write_text('{"stale":true}\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_structure_task_command", lambda _run: 0)
+
+    assert cli._migrate_run(run, "evidence-locked-rebuild") == 0
+
+    for name in ("transcript_english.json", "shots.json", "frame_manifest.json"):
+        assert (run / name).is_file()
+    archive = run / "revisions" / "evidence-locked-rebuild-revision-001"
+    assert (archive / "run" / "accepted_editorial" / "situation-001" / "draft.json").is_file()
+    assert (archive / "run" / "proxy" / "review_proxy.mp4").is_file()
+    assert (archive / "episode" / "Kich_ban" / "narration_plan.json").is_file()
+    assert not stale_run.exists()
+    assert not stale_proxy.exists()
+    assert not stale_episode.exists()
+    state = read_state(run)
+    assert state.stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
+    assert state.locked_situation_ids == ()
+    assert state.accepted_situation_index_sha256 == ""
 
 
 def test_prior_episode_artifacts_are_ignored_without_current_acceptance(
     tmp_path: Path,
 ) -> None:
     run, episode = _local_artifacts(tmp_path)
-    prior_situations = cli.load_situations(
-        episode / "Kich_ban" / "situations.json"
-    ).situations
-    prior_plan = cli.load_narration_plan(
-        episode / "Kich_ban" / "narration_plan.json"
-    )
+    prior_situations = cli.load_situations(episode / "Kich_ban" / "situations.json").situations
+    prior_plan = cli.load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
 
     situations, units, claims = cli._filter_current_revision_artifacts(
         prior_situations,
@@ -121,19 +156,13 @@ def test_prior_episode_artifacts_are_ignored_without_current_acceptance(
 
 
 def test_parser_exposes_local_situation_artifacts_and_audit() -> None:
-    situation = cli._parser().parse_args(
-        ["validate", "--run", "run", "--artifact", "situations"]
-    )
-    narration = cli._parser().parse_args(
-        ["validate", "--run", "run", "--artifact", "narration"]
-    )
+    situation = cli._parser().parse_args(["validate", "--run", "run", "--artifact", "situations"])
+    narration = cli._parser().parse_args(["validate", "--run", "run", "--artifact", "narration"])
     semantic = cli._parser().parse_args(
         ["validate", "--run", "run", "--artifact", "semantic-review"]
     )
     local_audit = cli._parser().parse_args(["audit", "--run", "run", "--phase", "local"])
-    tts = cli._parser().parse_args(
-        ["tts", "--run", "run", "--situation", "situation-003"]
-    )
+    tts = cli._parser().parse_args(["tts", "--run", "run", "--situation", "situation-003"])
 
     assert (situation.artifact, narration.artifact, semantic.artifact) == (
         "situations",
@@ -147,9 +176,7 @@ def test_parser_exposes_local_situation_artifacts_and_audit() -> None:
 def test_gemini_cannot_advance_or_repair_local_run(tmp_path: Path) -> None:
     run, _episode = _local_artifacts(tmp_path)
     before = read_state(run)
-    args = cli._parser().parse_args(
-        ["gemini-web", "run", "--run", str(run), "--phase", "script"]
-    )
+    args = cli._parser().parse_args(["gemini-web", "run", "--run", str(run), "--phase", "script"])
 
     with pytest.raises(MvpError, match="legacy"):
         cli._gemini_web(args)
@@ -211,9 +238,7 @@ def test_prepare_writes_structure_task_without_inventing_situation(
     assert "situation_id" not in packet
     assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
     task = json.loads(
-        (run / "editor_tasks" / "episode-structure-revision-001.json").read_text(
-            encoding="utf-8"
-        )
+        (run / "editor_tasks" / "episode-structure-revision-001.json").read_text(encoding="utf-8")
     )
     assert task["task_kind"] == "STRUCTURE"
     assert task["allowed_outputs"] == ["situation_index_draft.json"]
@@ -239,7 +264,7 @@ def test_parser_exposes_structure_handoff_commands() -> None:
 
 def test_timeline_failure_routes_current_situation_to_editor_repair(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+) -> None:
     run = _empty_run(tmp_path)
     raw_state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
     raw_state.update(
@@ -249,19 +274,18 @@ def test_timeline_failure_routes_current_situation_to_editor_repair(
             "editorial_revision": 6,
         }
     )
-    (run / "run_state.json").write_text(
-        json.dumps(raw_state), encoding="utf-8"
-    )
+    (run / "run_state.json").write_text(json.dumps(raw_state), encoding="utf-8")
 
     monkeypatch.setattr(cli, "load_narration_plan", lambda _path: object())
+    monkeypatch.setattr(cli, "validate_episode_voice_budget", lambda *_args: None)
     monkeypatch.setattr(
         cli,
         "load_json",
-        lambda path, _type: SourceRef(
-            "episode.mp4", "a" * 64, 60_000, 320, 180, "1/1000", 1
-        )
-        if Path(path).name == "source_ref.json"
-        else object(),
+        lambda path, _type: (
+            SourceRef("episode.mp4", "a" * 64, 60_000, 320, 180, "1/1000", 1)
+            if Path(path).name == "source_ref.json"
+            else object()
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -317,12 +341,8 @@ def test_accepted_index_drives_a_scoped_editor_task(tmp_path: Path) -> None:
     )
     dump_json(run / "transcript_english.json", transcript)
     dump_json(run / "shots.json", shots)
-    frame_refs = [
-        str((tmp_path / "frames" / f"shot-00{i}.jpg").resolve()) for i in range(1, 4)
-    ]
-    (run / "frame_manifest.json").write_text(
-        json.dumps({"frames": frame_refs}), encoding="utf-8"
-    )
+    frame_refs = [str((tmp_path / "frames" / f"shot-00{i}.jpg").resolve()) for i in range(1, 4)]
+    (run / "frame_manifest.json").write_text(json.dumps({"frames": frame_refs}), encoding="utf-8")
     assert cli._structure_task_command(run) == 0
     task_id = "episode-structure-revision-001"
     staging = run / "editor_staging" / task_id
@@ -384,9 +404,7 @@ def test_accepted_index_drives_a_scoped_editor_task(tmp_path: Path) -> None:
 
     packet = json.loads((run / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
     assert packet["situation_id"] == "situation-002"
-    assert [item["text"] for item in packet["transcript"]["segments"]] == [
-        "Jiro meets the enemy"
-    ]
+    assert [item["text"] for item in packet["transcript"]["segments"]] == ["Jiro meets the enemy"]
     assert [item["shot_id"] for item in packet["shots"]["shots"]] == ["shot-002"]
     assert packet["frame_manifest_path"].endswith("frames.json")
     assert "frame_manifest.json" not in packet["frame_manifest_path"]
@@ -414,11 +432,7 @@ def _local_artifacts(tmp_path: Path) -> tuple[Path, Path]:
                     1.0,
                 ),
             ),
-            (
-                SourceRegionAnnotation(
-                    "region-001", 0, 1_000, "OPENING", "EXCLUDE", "Opening"
-                ),
-            ),
+            (SourceRegionAnnotation("region-001", 0, 1_000, "OPENING", "EXCLUDE", "Opening"),),
             True,
         ),
     )
@@ -603,6 +617,7 @@ def test_local_render_uses_adaptive_edl_for_proxy_and_final(
         source_video=Path(state.source_video),
     )
     qualities: list[str] = []
+    duration_bounds: list[tuple[int, int] | None] = []
 
     def render(
         _source: Path,
@@ -611,11 +626,13 @@ def test_local_render_uses_adaptive_edl_for_proxy_and_final(
         output: Path,
         *,
         quality: str,
+        duration_bounds_ms: tuple[int, int] | None = (420_000, 720_000),
         **_kwargs: object,
     ) -> RenderResult:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(b"render")
         qualities.append(quality)
+        duration_bounds.append(duration_bounds_ms)
         return RenderResult(str(output), 2_400, 2_400, 2_400, 0, 1, 1)
 
     def anchors(_video: Path, _edl: object, output: Path, **_kwargs: object) -> None:
@@ -650,6 +667,7 @@ def test_local_render_uses_adaptive_edl_for_proxy_and_final(
     assert cli._render(run, "final") == 0
     assert read_state(run).stage is Stage.KIEM_DINH_ENGINE
     assert qualities == ["proxy", "final"]
+    assert duration_bounds == [(420_000, 720_000), (420_000, 720_000)]
 
 
 def test_local_audit_and_engine_publish_without_gemini(tmp_path: Path) -> None:
@@ -657,11 +675,7 @@ def test_local_audit_and_engine_publish_without_gemini(tmp_path: Path) -> None:
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     plan = cli.load_narration_plan(episode / "Kich_ban" / "narration_plan.json")
     tts = SituationTtsManifest(
-        (
-            SituationTts(
-                "unit-001", "unit-001.mp3", "unit-001.wav", 2_400, "b" * 64
-            ),
-        ),
+        (SituationTts("unit-001", "unit-001.mp3", "unit-001.wav", 2_400, "b" * 64),),
         "narration.wav",
         "fake",
         "voice-001",
@@ -741,9 +755,7 @@ def test_local_audit_and_engine_publish_without_gemini(tmp_path: Path) -> None:
     final = run / "final_candidate.mp4"
     final.write_bytes(b"final")
     dump_json(run / "final_render_result.json", render)
-    dump_json(
-        run / "local_evidence" / "program_final" / "anchors.json", program_anchors
-    )
+    dump_json(run / "local_evidence" / "program_final" / "anchors.json", program_anchors)
     new_state(
         run,
         stage=Stage.KIEM_DINH_ENGINE,

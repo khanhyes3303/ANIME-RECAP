@@ -140,33 +140,68 @@ def test_tts_rejects_unlocked_unit(tmp_path: Path) -> None:
 
 
 def _v2_plan() -> NarrationPlan:
-    semantic_range = replace(
+    first_range = replace(
         _unit(1, "unused").evidence_ranges[0],
         semantic_event_id="event-001",
         action_phase="SETUP",
         story_purpose="Jiro về nhà.",
         shot_uses=(SemanticShotUse("shot-001", "event-001", "SETUP", "Jiro về nhà."),),
     )
+    second_range = EvidenceRange(
+        "range-002",
+        "situation-001",
+        3_500,
+        4_500,
+        ("shot-002",),
+        ("event-002",),
+        ("transcript-002",),
+        ("frame-002",),
+        "Ông nội đứng chờ.",
+        "event-002",
+        "SETUP",
+        "Ông nội đứng chờ.",
+        (SemanticShotUse("shot-002", "event-002", "SETUP", "Ông nội đứng chờ."),),
+    )
     cues = (
         NarrationCue(
-            "cue-001", "situation-001", "Jiro vừa về nhà.", ("claim-001",),
-            2_000, "SETUP", ("transcript-001",), ("frame-001",), ("shot-001",),
-            ("Jiro",), ("Jiro",), (), (),
+            "cue-001",
+            "situation-001",
+            "Jiro vừa về nhà.",
+            ("claim-001",),
+            2_000,
+            "SETUP",
+            ("transcript-001",),
+            ("frame-001",),
+            ("shot-001",),
+            ("Jiro",),
+            ("Jiro",),
+            (),
+            (),
         ),
         NarrationCue(
-            "cue-002", "situation-001", "Ông nội đã đứng chờ.", ("claim-002",),
-            3_000, "CHARACTER_INTRO", ("transcript-002",), ("frame-002",),
-            ("shot-001",), ("Ông nội",), ("Ông nội",), (), (),
+            "cue-002",
+            "situation-001",
+            "Ông nội đã đứng chờ.",
+            ("claim-002",),
+            3_600,
+            "CHARACTER_INTRO",
+            ("transcript-002",),
+            ("frame-002",),
+            ("shot-002",),
+            ("Ông nội",),
+            ("Ông nội",),
+            (),
+            (),
         ),
     )
     unit = replace(
         _unit(1, "Jiro vừa về nhà. Ông nội đã đứng chờ."),
-        evidence_ranges=(semantic_range,),
+        evidence_ranges=(first_range, second_range),
         cues=cues,
     )
     claims = (
         NarrationClaim("claim-001", "Jiro về nhà.", ("event-001",)),
-        NarrationClaim("claim-002", "Ông nội đứng chờ.", ("event-001",)),
+        NarrationClaim("claim-002", "Ông nội đứng chờ.", ("event-002",)),
     )
     return NarrationPlan("LOCAL_EDITOR", "situation-v2", (unit,), claims)
 
@@ -175,8 +210,12 @@ def test_v2_tts_synthesizes_each_cue_without_concatenating_narration(
     tmp_path: Path,
 ) -> None:
     manifest = synthesize_narration_cues(
-        _v2_plan(), tmp_path / "tts", tmp_path / "cache",
-        source_sha256="a" * 64, provider=CountingProvider(), converter=_converter,
+        _v2_plan(),
+        tmp_path / "tts",
+        tmp_path / "cache",
+        source_sha256="a" * 64,
+        provider=CountingProvider(),
+        converter=_converter,
     )
     assert [cue.cue_id for cue in manifest.cues] == ["cue-001", "cue-002"]
     assert [cue.duration_ms for cue in manifest.cues] == [100, 100]
@@ -185,12 +224,20 @@ def test_v2_tts_synthesizes_each_cue_without_concatenating_narration(
 
 def test_cue_tts_manifest_order_must_match_plan(tmp_path: Path) -> None:
     manifest = synthesize_narration_cues(
-        _v2_plan(), tmp_path / "tts", tmp_path / "cache",
-        source_sha256="b" * 64, provider=CountingProvider(), converter=_converter,
+        _v2_plan(),
+        tmp_path / "tts",
+        tmp_path / "cache",
+        source_sha256="b" * 64,
+        provider=CountingProvider(),
+        converter=_converter,
     )
     reversed_manifest = CueTtsManifest(
-        tuple(reversed(manifest.cues)), manifest.provider, manifest.voice_id,
-        manifest.policy_version, manifest.cache_hits, manifest.cache_misses,
+        tuple(reversed(manifest.cues)),
+        manifest.provider,
+        manifest.voice_id,
+        manifest.policy_version,
+        manifest.cache_hits,
+        manifest.cache_misses,
     )
     with pytest.raises(MvpError, match="cue IDs must exactly match"):
         validate_cue_tts_ids(_v2_plan(), reversed_manifest)

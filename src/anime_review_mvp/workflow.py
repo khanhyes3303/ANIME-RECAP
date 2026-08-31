@@ -297,9 +297,7 @@ def read_state(run_dir: Path) -> RunState:
             approved_proxy_sha256=raw.get("approved_proxy_sha256", ""),
             approved_artifact_sha256=raw.get("approved_artifact_sha256", ""),
             proxy_rejection_note=raw.get("proxy_rejection_note", ""),
-            accepted_situation_index_sha256=raw.get(
-                "accepted_situation_index_sha256", ""
-            ),
+            accepted_situation_index_sha256=raw.get("accepted_situation_index_sha256", ""),
             last_verifier_fingerprint=raw.get("last_verifier_fingerprint", ""),
             last_verifier_codes=tuple(raw.get("last_verifier_codes", ())),
             verifier_stall_count=raw.get("verifier_stall_count", 0),
@@ -434,9 +432,7 @@ def lock_editor_situation(
     state = replace(
         state,
         stage=(
-            Stage.CHO_ANTIGRAVITY_TINH_HUONG
-            if following
-            else Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP
+            Stage.CHO_ANTIGRAVITY_TINH_HUONG if following else Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP
         ),
         locked_situation_ids=(*state.locked_situation_ids, normalized),
         current_situation_id=following,
@@ -484,9 +480,7 @@ def begin_structure_task(run_dir: Path, task_id: str, revision: int) -> RunState
     return state
 
 
-def accept_structure_index(
-    run_dir: Path, index_sha256: str, first_situation_id: str
-) -> RunState:
+def accept_structure_index(run_dir: Path, index_sha256: str, first_situation_id: str) -> RunState:
     state = read_state(run_dir)
     if state.stage is not Stage.KIEM_DINH_CHI_MUC_TINH_HUONG:
         raise MvpError("situation index can only be accepted at its validation stage")
@@ -577,9 +571,7 @@ def route_editor_repair(
     return state
 
 
-def begin_verifier_task(
-    run_dir: Path, task_id: str, situation_id: str, revision: int
-) -> RunState:
+def begin_verifier_task(run_dir: Path, task_id: str, situation_id: str, revision: int) -> RunState:
     state = read_state(run_dir)
     if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_TINH_HUONG:
         raise MvpError("verifier task can only begin at its wait stage")
@@ -590,6 +582,33 @@ def begin_verifier_task(
         verifier_task_id=task_id.strip(),
         current_situation_id=situation_id.strip(),
         editorial_revision=revision,
+    )
+    _write_state(state)
+    return state
+
+
+def reset_for_evidence_locked_rebuild(run_dir: Path) -> RunState:
+    """Discard editorial state while preserving source-observation artifacts."""
+    state = read_state(run_dir)
+    state = replace(
+        state,
+        stage=Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
+        repair_history=(),
+        stage_metrics=(),
+        locked_situation_ids=(),
+        current_situation_id="",
+        last_local_repair_fingerprint="",
+        last_local_repair_codes=(),
+        editor_task_id="",
+        verifier_task_id="",
+        editorial_revision=1,
+        approved_proxy_sha256="",
+        approved_artifact_sha256="",
+        proxy_rejection_note="evidence-locked-rebuild",
+        accepted_situation_index_sha256="",
+        last_verifier_fingerprint="",
+        last_verifier_codes=(),
+        verifier_stall_count=0,
     )
     _write_state(state)
     return state
@@ -640,10 +659,7 @@ def route_verifier_repair(
         *state.repair_history,
         RepairRecord("ANTIGRAVITY", codes, "VERIFIER", (normalized,)),
     )
-    if (
-        state.last_verifier_fingerprint == fingerprint
-        and state.last_verifier_codes == codes
-    ):
+    if state.last_verifier_fingerprint == fingerprint and state.last_verifier_codes == codes:
         stalled = state.verifier_stall_count + 1
         if stalled >= 2:
             state = replace(
@@ -725,29 +741,33 @@ def route_proxy_verifier_repair(
                     "HUMAN",
                 ),
             ),
-            verifier_task_id="", last_verifier_fingerprint=fingerprint,
-            last_verifier_codes=codes, verifier_stall_count=stalled,
+            verifier_task_id="",
+            last_verifier_fingerprint=fingerprint,
+            last_verifier_codes=codes,
+            verifier_stall_count=stalled,
         )
     else:
         state = replace(
             state,
             stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
-            repair_history=history, current_situation_id=normalized[0],
+            repair_history=history,
+            current_situation_id=normalized[0],
             locked_situation_ids=tuple(
                 item for item in state.locked_situation_ids if item not in normalized
             ),
-            last_verifier_fingerprint=fingerprint, last_verifier_codes=codes,
-            verifier_stall_count=stalled, verifier_task_id="",
+            last_verifier_fingerprint=fingerprint,
+            last_verifier_codes=codes,
+            verifier_stall_count=stalled,
+            verifier_task_id="",
             editorial_revision=max(1, state.editorial_revision + 1),
-            approved_proxy_sha256="", approved_artifact_sha256="",
+            approved_proxy_sha256="",
+            approved_artifact_sha256="",
         )
     _write_state(state)
     return state
 
 
-def approve_proxy_state(
-    run_dir: Path, proxy_sha256: str, artifact_sha256: str
-) -> RunState:
+def approve_proxy_state(run_dir: Path, proxy_sha256: str, artifact_sha256: str) -> RunState:
     state = advance(
         run_dir,
         Stage.CHO_NGUOI_DUNG_DUYET_PROXY,
@@ -764,9 +784,7 @@ def approve_proxy_state(
     return state
 
 
-def reject_proxy_state(
-    run_dir: Path, note: str, situation_ids: tuple[str, ...]
-) -> RunState:
+def reject_proxy_state(run_dir: Path, note: str, situation_ids: tuple[str, ...]) -> RunState:
     state = read_state(run_dir)
     if state.stage is not Stage.CHO_NGUOI_DUNG_DUYET_PROXY:
         raise MvpError("proxy can only be rejected while awaiting user approval")

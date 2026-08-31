@@ -103,9 +103,7 @@ class SituationDocument:
                     raise MvpError("CAUSAL_CHAIN_INCOMPLETE: cause_or_goal or audience_summary")
 
 
-_ACTION_PHASES = {
-    "SETUP", "CAUSE", "APPROACH", "ACTION", "OUTCOME", "REACTION", "BRIDGE"
-}
+_ACTION_PHASES = {"SETUP", "CAUSE", "APPROACH", "ACTION", "OUTCOME", "REACTION", "BRIDGE"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,9 +135,7 @@ class EvidenceRange:
     semantic_event_id: str = field(default="", metadata={"json_optional": True})
     action_phase: str = field(default="", metadata={"json_optional": True})
     story_purpose: str = field(default="", metadata={"json_optional": True})
-    shot_uses: tuple[SemanticShotUse, ...] = field(
-        default=(), metadata={"json_optional": True}
-    )
+    shot_uses: tuple[SemanticShotUse, ...] = field(default=(), metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
         _non_empty(self.range_id, "evidence range_id")
@@ -192,7 +188,13 @@ class NarrationCue:
         if self.visual_anchor_source_ms < 0:
             raise MvpError("visual anchor timestamp must not be negative")
         if self.anchor_kind not in {
-            "SETUP", "CHARACTER_INTRO", "CAUSE", "ACTION", "REVEAL", "OUTCOME", "BRIDGE"
+            "SETUP",
+            "CHARACTER_INTRO",
+            "CAUSE",
+            "ACTION",
+            "REVEAL",
+            "OUTCOME",
+            "BRIDGE",
         }:
             raise MvpError("visual anchor kind is invalid")
         if not self.frame_refs or not self.shot_ids:
@@ -235,6 +237,23 @@ class NarrationUnit:
             raise MvpError("narration unit status is invalid")
 
 
+def cue_evidence_range(unit: NarrationUnit, cue: NarrationCue) -> EvidenceRange:
+    """Resolve the one accepted range that proves a cue's exact visual claim."""
+    candidates = tuple(
+        evidence
+        for evidence in unit.evidence_ranges
+        if evidence.source_start_ms <= cue.visual_anchor_source_ms < evidence.source_end_ms
+        and set(cue.shot_ids) <= set(evidence.shot_ids)
+        and set(cue.frame_refs) <= set(evidence.frame_refs)
+        and (not cue.transcript_refs or set(cue.transcript_refs) <= set(evidence.transcript_refs))
+    )
+    if len(candidates) != 1:
+        raise MvpError(
+            f"CUE_EVIDENCE_RANGE_INVALID: {cue.cue_id} resolves to {len(candidates)} ranges"
+        )
+    return candidates[0]
+
+
 @dataclass(frozen=True, slots=True)
 class NarrationPlan:
     owner: str
@@ -267,6 +286,7 @@ class NarrationPlan:
             for cue in unit.cues:
                 if any(claim_id not in known_claims for claim_id in cue.claim_ids):
                     raise MvpError("cue claim does not resolve exactly once")
+                cue_evidence_range(unit, cue)
             for evidence in unit.evidence_ranges:
                 self._validate_semantic_range(evidence)
 

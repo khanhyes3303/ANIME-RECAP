@@ -28,6 +28,7 @@ from .editor_provenance import (
     load_editor_task,
 )
 from .editorial import load_locked_spans
+from .editorial_budget import validate_episode_voice_budget
 from .edl import build_atomic_edl, build_edl_from_locked_spans
 from .errors import MvpError
 from .gemini_operator import (
@@ -96,6 +97,7 @@ from .models import (
 from .operator import plan_operator_step
 from .proxy_approval import approve_proxy, reject_proxy, require_approved_artifacts
 from .proxy_evidence import ProxyEvidenceManifest, extract_cue_proxy_evidence
+from .reference_profile import ReferenceStyleProfile, load_reference_profile
 from .render import RenderResult, normalize_narration_loudness, render_review
 from .review_contracts import LoudnessReport, ProxyAuditDocument, SituationAuditDocument
 from .review_packets import (
@@ -173,6 +175,7 @@ from .workflow import (
     record_local_repair,
     record_repair,
     record_stage_metric,
+    reset_for_evidence_locked_rebuild,
     resume_beat_repair,
     resume_browser_review,
     route_editor_repair,
@@ -252,7 +255,12 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument(
         "--reason",
         required=True,
-        choices=("user-rejected", "require-situation-index", "autonomous-operator"),
+        choices=(
+            "user-rejected",
+            "require-situation-index",
+            "autonomous-operator",
+            "evidence-locked-rebuild",
+        ),
     )
     editor_task = subparsers.add_parser("editor-task")
     editor_task.add_argument("--run", required=True, type=Path)
@@ -321,6 +329,16 @@ def _episode(run_dir: Path) -> tuple[object, Path]:
     if not state.episode_dir:
         raise MvpError("run state has no episode directory")
     return state, Path(state.episode_dir)
+
+
+def _reference_style(run_dir: Path) -> ReferenceStyleProfile:
+    cached = run_dir / "reference_style_profile.json"
+    if cached.is_file():
+        return load_json(cached, ReferenceStyleProfile)
+    root = Path(__file__).resolve().parents[2]
+    profile = load_reference_profile(root / "Bo_nao_Antigravity" / "reference_review.json")
+    dump_json(cached, profile)
+    return profile
 
 
 def _write_next(
@@ -427,9 +445,7 @@ def _operator_command(run_dir: Path) -> int:
         if state.stage is Stage.CHUAN_BI:
             _prepare(run_dir)
             continue
-        directive = plan_operator_step(
-            state, editable_ids=_operator_editable_ids(run_dir)
-        )
+        directive = plan_operator_step(state, editable_ids=_operator_editable_ids(run_dir))
         if directive.action == "PREPARE_STRUCTURE_JOB":
             # A repair path may already have prepared the active task before
             # returning here.  Never create a duplicate task on resume.
@@ -452,13 +468,9 @@ def _operator_command(run_dir: Path) -> int:
     else:
         raise MvpError("operator exceeded deterministic stage limit")
     if directive is None:
-        directive = plan_operator_step(
-            state, editable_ids=_operator_editable_ids(run_dir)
-        )
+        directive = plan_operator_step(state, editable_ids=_operator_editable_ids(run_dir))
     try:
-        next_payload = json.loads(
-            (run_dir / "next_action.json").read_text(encoding="utf-8")
-        )
+        next_payload = json.loads((run_dir / "next_action.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         next_payload = {}
     status = {
@@ -618,9 +630,7 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
                 "bị ảnh hưởng rồi chạy operator.",
             )
             return 1
-        accepted_audit = (
-            run_dir / "accepted_verification" / "proxy" / "proxy_audit.json"
-        )
+        accepted_audit = run_dir / "accepted_verification" / "proxy" / "proxy_audit.json"
         accepted_audit.parent.mkdir(parents=True, exist_ok=True)
         try:
             shutil.copy2(staging_dir / "proxy_audit_draft.json", accepted_audit)
@@ -630,11 +640,17 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
         ledger = run_dir / "verifier_ledger.jsonl"
         from .editor_provenance import AcceptedVerifierRevision
         from .jsonio import atomic_append_jsonl
+
         atomic_append_jsonl(
             ledger,
             AcceptedVerifierRevision(
-                task.task_id, task.run_id, task.task_kind, task.situation_id,
-                task.revision, "ANTIGRAVITY_VERIFIER", task.input_sha256,
+                task.task_id,
+                task.run_id,
+                task.task_kind,
+                task.situation_id,
+                task.revision,
+                "ANTIGRAVITY_VERIFIER",
+                task.input_sha256,
                 audit_sha256,
             ),
         )
@@ -642,8 +658,7 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
         advance(run_dir, Stage.KIEM_DINH_PHAN_BIEN_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY)
         _write_next(
             run_dir,
-            "Proxy đã qua kiểm định độc lập từng cue và boundary; chờ người dùng "
-            "duyệt proxy.",
+            "Proxy đã qua kiểm định độc lập từng cue và boundary; chờ người dùng duyệt proxy.",
         )
         return 0
     if task.task_kind != "SITUATION_AUDIT":
@@ -660,9 +675,7 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
         validate_situation_audit(audit, plan)
     except MvpError:
         codes = tuple(
-            dict.fromkeys(
-                code for item in audit.cue_reviews for code in item.finding_codes
-            )
+            dict.fromkeys(code for item in audit.cue_reviews for code in item.finding_codes)
         ) or ("SITUATION_AUDIT_FAILED",)
         advance(
             run_dir,
@@ -680,9 +693,16 @@ def _accept_verifier_command(run_dir: Path, task_id: str, staging_dir: Path) -> 
     ledger = run_dir / "verifier_ledger.jsonl"
     from .editor_provenance import AcceptedVerifierRevision
     from .jsonio import atomic_append_jsonl
+
     accepted = AcceptedVerifierRevision(
-        task.task_id, task.run_id, task.task_kind, task.situation_id, task.revision,
-        "ANTIGRAVITY_VERIFIER", task.input_sha256, content_fingerprint((audit_path,))
+        task.task_id,
+        task.run_id,
+        task.task_kind,
+        task.situation_id,
+        task.revision,
+        "ANTIGRAVITY_VERIFIER",
+        task.input_sha256,
+        content_fingerprint((audit_path,)),
     )
     atomic_append_jsonl(ledger, accepted)
     advance(
@@ -714,6 +734,7 @@ def _prepare(run_dir: Path) -> int:
         raise MvpError("prepare requires CHUAN_BI stage")
     try:
         preflight_media_tools()
+        _reference_style(run_dir)
     except MvpError as exc:
         message = str(exc)
         tool_code = None
@@ -753,9 +774,7 @@ def _prepare(run_dir: Path) -> int:
     frame_manifest_path = run_dir / "frame_manifest.json"
     frame_manifest_path.write_text(
         json.dumps(
-            {
-                "frames": [str(path.resolve()) for path in sorted(frames_cache.glob("*.jpg"))]
-            },
+            {"frames": [str(path.resolve()) for path in sorted(frames_cache.glob("*.jpg"))]},
             ensure_ascii=False,
             indent=2,
         )
@@ -1187,7 +1206,6 @@ def _render(run_dir: Path, quality: str = "final") -> int:
             edl,
             output,
             quality="proxy",
-            duration_bounds_ms=None,
         )
         dump_json(run_dir / "proxy" / "render_result.json", result)
         extract_adaptive_program_anchors(
@@ -1207,11 +1225,7 @@ def _render(run_dir: Path, quality: str = "final") -> int:
             )
         print(output)
         return 0
-    if (
-        adaptive_path.is_file()
-        and quality == "final"
-        and state.stage is Stage.DUNG_VIDEO_CUOI
-    ):
+    if adaptive_path.is_file() and quality == "final" and state.stage is Stage.DUNG_VIDEO_CUOI:
         edl = load_json(adaptive_path, AdaptiveEdlDocument)
         narration_path = run_dir / "aligned_narration.wav"
         if state.editorial_revision >= 1:
@@ -1230,7 +1244,6 @@ def _render(run_dir: Path, quality: str = "final") -> int:
             edl,
             output,
             quality="final",
-            duration_bounds_ms=None,
         )
         dump_json(run_dir / "final_render_result.json", result)
         extract_adaptive_program_anchors(
@@ -1662,9 +1675,7 @@ def _accept_operator_review(
         if state.stage is not expected_stage:
             raise MvpError(f"Gemini Web {phase.casefold()} accept stage does not match")
         try:
-            review = operator_review or _load_verified_critic(
-                run_dir, phase.casefold(), storyboard
-            )
+            review = operator_review or _load_verified_critic(run_dir, phase.casefold(), storyboard)
             source_anchors = load_json(
                 run_dir / "atomic_evidence" / "source" / "anchors.json", FrameAnchorDocument
             )
@@ -1799,20 +1810,13 @@ def run_operator_phase(
                 upload_paths = ()
             prompt = prompt_path.read_text(encoding="utf-8")
             screenshot_path = (
-                run_dir
-                / "gemini_web"
-                / phase_upper.casefold()
-                / "screenshots"
-                / "session.png"
+                run_dir / "gemini_web" / phase_upper.casefold() / "screenshots" / "session.png"
             )
             checkpoint_path = (
                 run_dir
                 / "gemini_web"
                 / phase_upper.casefold()
-                / (
-                    f"browser_result_{browser_packet.packet_sha256}_"
-                    f"{sha256_file(prompt_path)}.json"
-                )
+                / (f"browser_result_{browser_packet.packet_sha256}_{sha256_file(prompt_path)}.json")
             )
             if (
                 not force_new_chat
@@ -1874,11 +1878,11 @@ def run_operator_phase(
             (run_dir / "gemini_web" / "session.json").write_text(
                 json.dumps(
                     {
-                    "run_id": run_dir.resolve().name,
-                    "conversation_url": result.observation.conversation_url,
-                    "phase": phase_upper,
-                    "turn_number": turn_number,
-                    "phase_turns": registry.load().phase_turns,
+                        "run_id": run_dir.resolve().name,
+                        "conversation_url": result.observation.conversation_url,
+                        "phase": phase_upper,
+                        "turn_number": turn_number,
+                        "phase_turns": registry.load().phase_turns,
                     },
                     ensure_ascii=False,
                     indent=2,
@@ -2095,10 +2099,7 @@ def _gemini_web_run(
     except GeminiBrowserError as exc:
         code = _BROWSER_HUMAN_CODES.get(exc.code, "GEMINI_WEB_OPERATOR_THAT_BAI")
         mark_human_required(run_dir, code)
-        show_command = (
-            "uv run python run_episode.py gemini-web show "
-            f'--run "{run_dir.resolve()}"'
-        )
+        show_command = f'uv run python run_episode.py gemini-web show --run "{run_dir.resolve()}"'
         _write_next(
             run_dir,
             f"Gemini Web dừng: {exc}. Giữ nguyên Chrome. Nếu cửa sổ không hiện, "
@@ -2247,9 +2248,7 @@ def _gemini_web(args: argparse.Namespace) -> int:
     if args.action not in {"enroll", "stop", "show"}:
         state = read_state(args.run)
         episode = Path(state.episode_dir) if state.episode_dir else None
-        if episode is not None and (
-            episode / "Kich_ban" / "narration_plan.json"
-        ).is_file():
+        if episode is not None and (episode / "Kich_ban" / "narration_plan.json").is_file():
             raise MvpError(
                 "gemini-web is optional for legacy runs only; local situation runs "
                 "use audit --phase local|engine"
@@ -2302,7 +2301,14 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
     )
     provenance = load_editor_ledger(run_dir / "editor_ledger.jsonl")
     report = build_v2_local_audit(
-        plan, situations, timeline, tts, edl, render, provenance, context,
+        plan,
+        situations,
+        timeline,
+        tts,
+        edl,
+        render,
+        provenance,
+        context,
         load_json(loudness_path, LoudnessReport),
     )
     dump_json(run_dir / "proxy" / "v2_audit.json", report)
@@ -2321,13 +2327,19 @@ def _audit_proxy_v2(run_dir: Path, episode: Path) -> int:
         return 1
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     index = load_situation_index(
-        run_dir / "situation_index.json", source,
+        run_dir / "situation_index.json",
+        source,
         load_json(run_dir / "transcript_english.json", TranscriptDocument),
-        load_json(run_dir / "shots.json", ShotDocument), _frame_refs(run_dir),
+        load_json(run_dir / "shots.json", ShotDocument),
+        _frame_refs(run_dir),
     )
     evidence = extract_cue_proxy_evidence(
-        Path(state.source_video), run_dir / "proxy" / "review_proxy.mp4",
-        plan, timeline, edl, index,
+        Path(state.source_video),
+        run_dir / "proxy" / "review_proxy.mp4",
+        plan,
+        timeline,
+        edl,
+        index,
         load_json(run_dir / "transcript_english.json", TranscriptDocument),
         run_dir / "proxy_evidence",
     )
@@ -2403,8 +2415,7 @@ def _audit_situation_v2(run_dir: Path, episode: Path) -> int:
                 return 1
             _write_next(
                 run_dir,
-                f"Cần người xử lý situation {state.current_situation_id}: "
-                f"{', '.join(codes)}",
+                f"Cần người xử lý situation {state.current_situation_id}: {', '.join(codes)}",
                 code="SITUATION_VALIDATION_REPAIR_STALLED",
             )
             return 1
@@ -2525,9 +2536,7 @@ def _resume(run_dir: Path, phase: str) -> int:
 
 def _editorial_approval_paths(run_dir: Path) -> tuple[Path, ...]:
     paths = [
-        path
-        for path in sorted((run_dir / "accepted_editorial").rglob("*.json"))
-        if path.is_file()
+        path for path in sorted((run_dir / "accepted_editorial").rglob("*.json")) if path.is_file()
     ]
     paths.extend(
         path
@@ -2550,9 +2559,7 @@ def _approve_proxy_command(run_dir: Path) -> int:
     return 0
 
 
-def _reject_proxy_command(
-    run_dir: Path, note: str, situation_ids: tuple[str, ...]
-) -> int:
+def _reject_proxy_command(run_dir: Path, note: str, situation_ids: tuple[str, ...]) -> int:
     reject_proxy(run_dir, note, situation_ids)
     _write_next(
         run_dir,
@@ -2569,8 +2576,10 @@ def _frame_refs(run_dir: Path) -> tuple[str, ...]:
         frames = raw["frames"]
     except (OSError, json.JSONDecodeError, KeyError, TypeError) as exc:
         raise MvpError(f"cannot load frame manifest: {path}") from exc
-    if not isinstance(frames, list) or not frames or not all(
-        isinstance(item, str) and item.strip() for item in frames
+    if (
+        not isinstance(frames, list)
+        or not frames
+        or not all(isinstance(item, str) and item.strip() for item in frames)
     ):
         raise MvpError("frame manifest requires non-empty frame paths")
     return tuple(frames)
@@ -2593,6 +2602,7 @@ def _structure_task_command(run_dir: Path) -> int:
         load_json(input_paths[1], ShotDocument),
         input_paths[2],
         task=task,
+        reference=_reference_style(run_dir),
     )
     begin_structure_task(run_dir, task.task_id, task.revision)
     output = run_dir / "cong_viec_antigravity.json"
@@ -2603,16 +2613,14 @@ def _structure_task_command(run_dir: Path) -> int:
     _write_next(
         run_dir,
         "Antigravity chỉ chia cấu trúc tập và ghi situation_index_draft.json vào "
-        f'editor_staging/{task.task_id}. Sau đó chạy: accept-situation-index --run '
+        f"editor_staging/{task.task_id}. Sau đó chạy: accept-situation-index --run "
         f'"{run_dir}" --task {task.task_id} --input "{staging}".',
     )
     print(output)
     return 0
 
 
-def _accept_situation_index_command(
-    run_dir: Path, task_id: str, staging_dir: Path
-) -> int:
+def _accept_situation_index_command(run_dir: Path, task_id: str, staging_dir: Path) -> int:
     state, episode = _episode(run_dir)
     if state.stage is not Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG:
         raise MvpError("accept-situation-index requires the structure wait stage")
@@ -2656,9 +2664,7 @@ def _editor_task_command(run_dir: Path, *, repair_note: str = "") -> int:
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
     shots = load_json(run_dir / "shots.json", ShotDocument)
-    index = load_situation_index(
-        index_path, source, transcript, shots, _frame_refs(run_dir)
-    )
+    index = load_situation_index(index_path, source, transcript, shots, _frame_refs(run_dir))
     entry = next_editable_situation(index, state.locked_situation_ids)
     if entry is None or entry.situation_id != state.current_situation_id:
         raise MvpError("active situation does not match the accepted index order")
@@ -2680,9 +2686,7 @@ def _editor_task_command(run_dir: Path, *, repair_note: str = "") -> int:
         max(1, state.editorial_revision),
         input_paths,
     )
-    begin_editor_task(
-        run_dir, task.task_id, task.situation_id, task.revision
-    )
+    begin_editor_task(run_dir, task.task_id, task.situation_id, task.revision)
     context_path = run_dir / "story_context.json"
     context = (
         load_json(context_path, StoryContext)
@@ -2696,6 +2700,7 @@ def _editor_task_command(run_dir: Path, *, repair_note: str = "") -> int:
         context,
         task=task,
         repair_note=repair_note,
+        reference=_reference_style(run_dir),
     )
     output = run_dir / "cong_viec_antigravity.json"
     dump_json(output, packet)
@@ -2712,9 +2717,7 @@ def _editor_task_command(run_dir: Path, *, repair_note: str = "") -> int:
     return 0
 
 
-def _accept_antigravity_command(
-    run_dir: Path, task_id: str, staging_dir: Path
-) -> int:
+def _accept_antigravity_command(run_dir: Path, task_id: str, staging_dir: Path) -> int:
     state, episode = _episode(run_dir)
     task = load_editor_task(run_dir / "editor_tasks" / f"{task_id}.json")
     scope_path = next(
@@ -2750,10 +2753,7 @@ def _accept_antigravity_command(
     if (
         len(situation_draft.situations) != 1
         or situation_draft.situations[0].situation_id != accepted.situation_id
-        or any(
-            unit.situation_id != accepted.situation_id
-            for unit in narration_draft.units
-        )
+        or any(unit.situation_id != accepted.situation_id for unit in narration_draft.units)
     ):
         raise MvpError("Antigravity submission must contain exactly the active situation")
     situations_path = episode / "Su_that" / "situations.json"
@@ -2768,17 +2768,12 @@ def _accept_antigravity_command(
         {item.situation_id for item in index.situations if not item.excluded},
         run_dir / "accepted_editorial",
     )
-    merged_situations = tuple(
-        item for item in prior_situations if item.situation_id != accepted.situation_id
-    ) + situation_draft.situations
-    merged_situations = tuple(
-        sorted(merged_situations, key=lambda item: item.source_start_ms)
+    merged_situations = (
+        tuple(item for item in prior_situations if item.situation_id != accepted.situation_id)
+        + situation_draft.situations
     )
-    kept_units = tuple(
-        unit
-        for unit in prior_units
-        if unit.situation_id != accepted.situation_id
-    )
+    merged_situations = tuple(sorted(merged_situations, key=lambda item: item.source_start_ms))
+    kept_units = tuple(unit for unit in prior_units if unit.situation_id != accepted.situation_id)
     merged_units = (*kept_units, *narration_draft.units)
     used_claim_ids = {
         claim_id for unit in merged_units for cue in unit.cues for claim_id in cue.claim_ids
@@ -2797,9 +2792,7 @@ def _accept_antigravity_command(
     )
     dump_json(
         plan_path,
-        NarrationPlan(
-            "LOCAL_EDITOR", "situation-v2", merged_units, tuple(claim_by_id.values())
-        ),
+        NarrationPlan("LOCAL_EDITOR", "situation-v2", merged_units, tuple(claim_by_id.values())),
     )
     accept_editor_revision(run_dir, task_id, accepted.revision)
     _write_next(
@@ -2807,10 +2800,7 @@ def _accept_antigravity_command(
         f"Draft {accepted.situation_id} đã nhận; chạy audit --phase situation.",
     )
     print(
-        run_dir
-        / "accepted_editorial"
-        / accepted.situation_id
-        / f"revision-{accepted.revision:03d}"
+        run_dir / "accepted_editorial" / accepted.situation_id / f"revision-{accepted.revision:03d}"
     )
     return 0
 
@@ -2824,11 +2814,16 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
     tts = load_json(run_dir / "cue_tts_manifest.json", CueTtsManifest)
     source = load_json(episode / "Dau_vao" / "source_ref.json", SourceRef)
     try:
-        edl, timeline = build_semantic_timeline(
-            plan, tts, source.duration_ms, EditorialPolicy()
-        )
+        validate_episode_voice_budget(tts, EditorialPolicy())
+        edl, timeline = build_semantic_timeline(plan, tts, source.duration_ms, EditorialPolicy())
     except MvpError as exc:
-        if str(exc).startswith("SEMANTIC_TIMELINE_DOES_NOT_FIT"):
+        if str(exc).startswith(
+            (
+                "SEMANTIC_TIMELINE_DOES_NOT_FIT",
+                "SEMANTIC_TIMELINE_DURATION_INVALID",
+                "EPISODE_VOICE_BUDGET_",
+            )
+        ):
             return _route_situation_validation_failure(run_dir, episode, state, exc)
         raise
     transcript = load_json(run_dir / "transcript_english.json", TranscriptDocument)
@@ -2864,9 +2859,7 @@ def _migrate_run(run_dir: Path, reason: str) -> int:
         return _operator_command(run_dir)
     if reason == "require-situation-index":
         prior_task_id = state.editor_task_id
-        archived_task_path = _archive_pre_index_revision(
-            run_dir, episode, prior_task_id
-        )
+        archived_task_path = _archive_pre_index_revision(run_dir, episode, prior_task_id)
         migrate_to_structure_index(run_dir)
         if prior_task_id:
             superseded = run_dir / "superseded_tasks" / f"{prior_task_id}.json"
@@ -2885,6 +2878,18 @@ def _migrate_run(run_dir: Path, reason: str) -> int:
                 encoding="utf-8",
             )
         return _structure_task_command(run_dir)
+    if reason == "evidence-locked-rebuild":
+        archive = _archive_evidence_locked_revision(run_dir, episode)
+        reset_for_evidence_locked_rebuild(run_dir)
+        _write_next(
+            run_dir,
+            "Antigravity phải chia lại toàn bộ tập từ bằng chứng nguồn đã giữ nguyên.",
+            code="EVIDENCE_LOCKED_REBUILD",
+        )
+        result = _structure_task_command(run_dir)
+        if result == 0:
+            print(archive)
+        return result
     if reason != "user-rejected":
         raise MvpError("unsupported migration reason")
     if state.stage is not Stage.HOAN_THANH:
@@ -2974,25 +2979,19 @@ def _filter_current_revision_artifacts(
     prior_plan: NarrationPlan | None,
     valid_situation_ids: set[str],
     accepted_root: Path,
-) -> tuple[
-    tuple[Situation, ...], tuple[NarrationUnit, ...], tuple[NarrationClaim, ...]
-]:
+) -> tuple[tuple[Situation, ...], tuple[NarrationUnit, ...], tuple[NarrationClaim, ...]]:
     accepted_ids = {
         situation_id
         for situation_id in valid_situation_ids
         if (accepted_root / situation_id).is_dir()
     }
-    situations = tuple(
-        item for item in prior_situations if item.situation_id in accepted_ids
-    )
+    situations = tuple(item for item in prior_situations if item.situation_id in accepted_ids)
     units = tuple(
         unit
         for unit in (() if prior_plan is None else prior_plan.units)
         if unit.situation_id in accepted_ids
     )
-    used_claim_ids = {
-        claim_id for unit in units for cue in unit.cues for claim_id in cue.claim_ids
-    }
+    used_claim_ids = {claim_id for unit in units for cue in unit.cues for claim_id in cue.claim_ids}
     claims = tuple(
         claim
         for claim in (() if prior_plan is None else prior_plan.claims)
@@ -3001,9 +3000,7 @@ def _filter_current_revision_artifacts(
     return situations, units, claims
 
 
-def _archive_pre_index_revision(
-    run_dir: Path, episode: Path, prior_task_id: str
-) -> Path | None:
+def _archive_pre_index_revision(run_dir: Path, episode: Path, prior_task_id: str) -> Path | None:
     """Move generated pre-index outputs aside so a new revision starts clean."""
     run_root = run_dir.resolve()
     episode_root = episode.resolve()
@@ -3053,11 +3050,73 @@ def _archive_pre_index_revision(
 
     archived_task = None
     if prior_task_id:
-        archived_task = move(
-            run_root / "editor_tasks" / f"{prior_task_id}.json", run_root, "task"
-        )
+        archived_task = move(run_root / "editor_tasks" / f"{prior_task_id}.json", run_root, "task")
         move(run_root / "editor_staging" / prior_task_id, run_root, "task_staging")
     return archived_task
+
+
+def _archive_evidence_locked_revision(run_dir: Path, episode: Path) -> Path:
+    """Archive every editorial derivative without touching source observations."""
+    run_root = run_dir.resolve()
+    episode_root = episode.resolve()
+    revisions = run_root / "revisions"
+    revision = 1
+    while (revisions / f"evidence-locked-rebuild-revision-{revision:03d}").exists():
+        revision += 1
+    archive = revisions / f"evidence-locked-rebuild-revision-{revision:03d}"
+
+    def move(source: Path, base: Path, bucket: str) -> None:
+        if not source.exists():
+            return
+        resolved = source.resolve()
+        base_resolved = base.resolve()
+        if not resolved.is_relative_to(base_resolved):
+            raise MvpError(f"refusing to archive path outside expected root: {resolved}")
+        destination = archive / bucket / resolved.relative_to(base_resolved)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(resolved), str(destination))
+
+    for directory_name in ("Su_that", "Kich_ban", "TTS", "Thanh_pham", "Bao_cao"):
+        directory = episode_root / directory_name
+        if directory.is_dir():
+            for child in tuple(directory.iterdir()):
+                move(child, episode_root, "episode")
+    plan_dir = episode_root / "Ke_hoach_canh"
+    if plan_dir.is_dir():
+        for child in tuple(plan_dir.iterdir()):
+            move(child, episode_root, "episode")
+
+    generated_run_artifacts = (
+        "accepted_editorial",
+        "accepted_structure",
+        "accepted_verification",
+        "cue_tts",
+        "editor_staging",
+        "editor_tasks",
+        "local_evidence",
+        "proxy",
+        "proxy_evidence",
+        "situation_inputs",
+        "structure_staging",
+        "structure_tasks",
+        "verifier_staging",
+        "verifier_tasks",
+        "adaptive_edl.json",
+        "aligned_narration.wav",
+        "cue_tts_manifest.json",
+        "editor_ledger.jsonl",
+        "episode_coherence_audit.json",
+        "final_candidate.mp4",
+        "final_render_result.json",
+        "loudness_report.json",
+        "normalized_narration.wav",
+        "semantic_timeline.json",
+        "situation_index.json",
+        "verifier_ledger.jsonl",
+    )
+    for name in generated_run_artifacts:
+        move(run_root / name, run_root, "run")
+    return archive
 
 
 def main(argv: list[str] | None = None) -> int:

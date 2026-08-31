@@ -7,6 +7,7 @@ from .editor_provenance import EditorTask
 from .errors import MvpError
 from .jsonio import load_json
 from .models import ShotDocument, SourceRef, TranscriptDocument
+from .reference_profile import ReferenceStyleProfile
 from .situation_scope import SituationScope, load_situation_scope
 from .situations import EditorialPolicy, StoryContext
 
@@ -33,6 +34,10 @@ class SituationEditorPacket:
     scope_path: str = field(default="", metadata={"json_optional": True})
     task_kind: str = "SITUATION"
     repair_note: str = field(default="", metadata={"json_optional": True})
+    reference: ReferenceStyleProfile = field(
+        default=ReferenceStyleProfile("", "", 0, 0, 0),
+        metadata={"json_optional": True},
+    )
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or not self.situation_id.strip() or self.revision < 1:
@@ -58,6 +63,7 @@ def build_situation_editor_packet(
     task: EditorTask,
     allowed_staging_dir: Path | None = None,
     repair_note: str = "",
+    reference: ReferenceStyleProfile | None = None,
 ) -> SituationEditorPacket:
     if not frame_manifest_path.is_file():
         raise MvpError(f"frame manifest does not exist: {frame_manifest_path}")
@@ -68,8 +74,9 @@ def build_situation_editor_packet(
         revision=task.revision,
         input_sha256=task.input_sha256,
         allowed_staging_dir=str(
-            (allowed_staging_dir or frame_manifest_path.parent / "editor_staging" / task.task_id)
-            .resolve()
+            (
+                allowed_staging_dir or frame_manifest_path.parent / "editor_staging" / task.task_id
+            ).resolve()
         ),
         source=source,
         transcript=transcript,
@@ -79,6 +86,7 @@ def build_situation_editor_packet(
         prior_context=prior_context,
         required_outputs=task.allowed_outputs,
         repair_note=repair_note,
+        reference=reference or ReferenceStyleProfile("", "", 0, 0, 0),
     )
 
 
@@ -91,6 +99,7 @@ def build_scoped_situation_editor_packet(
     task: EditorTask,
     allowed_staging_dir: Path | None = None,
     repair_note: str = "",
+    reference: ReferenceStyleProfile | None = None,
 ) -> SituationEditorPacket:
     verified_scope = load_situation_scope(Path(scope.scope_path), verify_files=True)
     if verified_scope != scope or task.situation_id != scope.situation_id:
@@ -120,6 +129,7 @@ def build_scoped_situation_editor_packet(
         scope.scope_path,
         task_kind="SITUATION",
         repair_note=repair_note,
+        reference=reference or ReferenceStyleProfile("", "", 0, 0, 0),
     )
 
 
@@ -132,8 +142,19 @@ def render_situation_editor_prompt(packet: SituationEditorPacket) -> str:
         if packet.repair_note
         else ""
     )
+    reference = (
+        "Trước khi biên tập, bắt buộc xem trực tiếp video mẫu "
+        f"`{packet.reference.video_path}` (SHA-256 `{packet.reference.sha256}`). Học "
+        "nhịp kể liên tục và cách đổi hình theo ý đang kể; không sao chép nội dung. "
+        f"Khoảng nghỉ tự nhiên {packet.reference.normal_pause_min_ms}–"
+        f"{packet.reference.normal_pause_max_ms} ms, tuyệt đối không quá "
+        f"{packet.reference.hard_pause_max_ms} ms.\n\n"
+        if packet.reference.video_path
+        else ""
+    )
     return f"""Antigravity là biên tập viên duy nhất của nội dung tập phim.
 
+{reference}
 Bạn chỉ xử lý task `{packet.task_id}`, revision {packet.revision}, tình huống
 `{packet.situation_id}`. Không xử lý tình huống khác trong lượt này. Input SHA-256 đã khóa:
 `{packet.input_sha256}`.
@@ -167,9 +188,18 @@ thật sự ít nhất {policy.minimum_omitted_gap_ms} ms. Clip giữ tối thi�
 {policy.maximum_playback_rate:.2f}x, và không dùng hình trước {policy.forbidden_before_ms} ms.
 
 Mỗi câu kể phải có `visual_anchor_source_ms`, transcript refs, frame refs và shot IDs.
+Mỗi cue chỉ được khóa vào đúng một evidence range chứa anchor, toàn bộ frame/shot và
+transcript refs của cue. Không dùng chung phạm vi toàn tình huống để chứng minh hai câu
+kể về hai hành động khác nhau. Voice của cue phải nằm trọn trong range đó.
 Hình phải xuất hiện trước câu kể theo preroll. Viết đủ nguyên nhân–diễn biến–kết quả để
 người chưa biết anime vẫn hiểu. Văn phong dân dã, tự nhiên, được thô tục khi hợp ngữ cảnh;
 không bịa sự kiện, động cơ hoặc người nói.
+
+Toàn tập sau khi ghép bắt buộc nằm trong {policy.target_minimum_ms}–
+{policy.target_maximum_ms} ms. Viết đủ thông tin cốt truyện để voice toàn tập đạt ngân
+sách này; không kéo dài bằng cảnh thừa, im lặng hoặc lặp ý. Các cue phải nối liên tục,
+khoảng nghỉ không quá 1200 ms. Nếu tổng TTS chưa thể đạt 7 phút, engine sẽ trả tình
+huống về cho Antigravity viết lại; engine không tự kéo, nén hay viết thay.
 
 Xử lý xong và khóa một tình huống rồi engine mới được chuyển sang tình huống kế tiếp.
 

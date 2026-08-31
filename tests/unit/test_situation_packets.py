@@ -13,6 +13,7 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TranscriptSegment,
 )
+from anime_review_mvp.reference_profile import ReferenceStyleProfile
 from anime_review_mvp.situation_index import SituationIndexEntry
 from anime_review_mvp.situation_packets import (
     build_scoped_situation_editor_packet,
@@ -30,8 +31,13 @@ TRANSCRIPT = TranscriptDocument(
 SHOTS = ShotDocument((Shot("shot-001", 1_000, 3_000),))
 POLICY = EditorialPolicy(target_minimum_ms=1_000, target_maximum_ms=60_000)
 TASK = EditorTask(
-    "task-001", "run-001", "situation-004", 2, "ANTIGRAVITY_EDITORIAL",
-    ("transcript.json", "frames.json"), "a" * 64,
+    "task-001",
+    "run-001",
+    "situation-004",
+    2,
+    "ANTIGRAVITY_EDITORIAL",
+    ("transcript.json", "frames.json"),
+    "a" * 64,
     ("situation_draft.json", "narration_draft.json"),
 )
 
@@ -39,7 +45,12 @@ TASK = EditorTask(
 def test_packet_requires_frame_manifest_path() -> None:
     with pytest.raises(MvpError, match="frame manifest"):
         build_situation_editor_packet(
-            SOURCE, TRANSCRIPT, SHOTS, Path(""), POLICY, StoryContext((), (), (), ""),
+            SOURCE,
+            TRANSCRIPT,
+            SHOTS,
+            Path(""),
+            POLICY,
+            StoryContext((), (), (), ""),
             task=TASK,
         )
 
@@ -55,6 +66,9 @@ def test_prompt_defines_local_situation_editor_contract(tmp_path: Path) -> None:
         POLICY,
         StoryContext((), (), (), "Tập trước Jiro vừa gặp Rago."),
         task=TASK,
+        reference=ReferenceStyleProfile(
+            str((tmp_path / "reference.mp4").resolve()), "b" * 64, 350, 900, 1200
+        ),
     )
 
     prompt = render_situation_editor_prompt(packet)
@@ -70,6 +84,11 @@ def test_prompt_defines_local_situation_editor_contract(tmp_path: Path) -> None:
     assert "situation_draft.json" in prompt
     assert "narration_draft.json" in prompt
     assert "xử lý xong và khóa một tình huống" in normalized
+    assert "xem trực tiếp video mẫu" in normalized
+    assert str(packet.policy.target_minimum_ms) in normalized
+    assert str(packet.policy.target_maximum_ms) in normalized
+    assert "mỗi cue chỉ được khóa vào đúng một evidence range" in normalized
+    assert "1200 ms" in normalized
     assert "Gemini Web" not in prompt
 
 
@@ -78,7 +97,12 @@ def test_packet_preserves_prior_context_without_inventing_it(tmp_path: Path) -> 
     frame_manifest.write_text("{}", encoding="utf-8")
 
     packet = build_situation_editor_packet(
-        SOURCE, TRANSCRIPT, SHOTS, frame_manifest, POLICY, StoryContext((), (), (), ""),
+        SOURCE,
+        TRANSCRIPT,
+        SHOTS,
+        frame_manifest,
+        POLICY,
+        StoryContext((), (), (), ""),
         task=TASK,
     )
 
@@ -91,11 +115,18 @@ def test_packet_contains_exact_task_and_one_situation(tmp_path: Path) -> None:
     frame_manifest = tmp_path / "frames.json"
     frame_manifest.write_text("{}", encoding="utf-8")
     packet = build_situation_editor_packet(
-        SOURCE, TRANSCRIPT, SHOTS, frame_manifest, POLICY, StoryContext((), (), (), ""),
+        SOURCE,
+        TRANSCRIPT,
+        SHOTS,
+        frame_manifest,
+        POLICY,
+        StoryContext((), (), (), ""),
         task=TASK,
     )
     assert (packet.task_id, packet.situation_id, packet.revision) == (
-        "task-001", "situation-004", 2
+        "task-001",
+        "situation-004",
+        2,
     )
 
 
@@ -103,7 +134,12 @@ def test_prompt_forbids_codex_editor_and_direct_engine_writes(tmp_path: Path) ->
     frame_manifest = tmp_path / "frames.json"
     frame_manifest.write_text("{}", encoding="utf-8")
     packet = build_situation_editor_packet(
-        SOURCE, TRANSCRIPT, SHOTS, frame_manifest, POLICY, StoryContext((), (), (), ""),
+        SOURCE,
+        TRANSCRIPT,
+        SHOTS,
+        frame_manifest,
+        POLICY,
+        StoryContext((), (), (), ""),
         task=TASK,
     )
     prompt = render_situation_editor_prompt(packet)

@@ -7,7 +7,7 @@ from .adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from .errors import MvpError
 from .models import AuditFinding
 from .situation_validation import validate_keep_skip
-from .situations import CueTtsManifest, EditorialPolicy, NarrationCue, NarrationPlan
+from .situations import CueTtsManifest, EditorialPolicy, NarrationPlan, cue_evidence_range
 from .tts import validate_cue_tts_ids
 
 
@@ -89,97 +89,6 @@ def _unit_segments(
     return tuple(result)
 
 
-def _merged_intervals(
-    intervals: tuple[tuple[int, int], ...],
-) -> tuple[tuple[int, int], ...]:
-    merged: list[tuple[int, int]] = []
-    for start_ms, end_ms in sorted(intervals):
-        if merged and start_ms <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], end_ms))
-        else:
-            merged.append((start_ms, end_ms))
-    return tuple(merged)
-
-
-def _map_compacted_timestamp(
-    intervals: tuple[tuple[int, int], ...], old_ms: int, program_start_ms: int
-) -> int:
-    cursor = program_start_ms
-    for start_ms, end_ms in intervals:
-        if start_ms <= old_ms <= end_ms:
-            return cursor + old_ms - start_ms
-        cursor += end_ms - start_ms
-    raise MvpError(f"semantic timestamp is outside narrated footage: {old_ms}")
-
-
-def _compact_unit(
-    segments: tuple[AdaptiveEdlSegment, ...],
-    timings: tuple[CueTiming, ...],
-    plan_cues: tuple[NarrationCue, ...],
-    program_start_ms: int,
-) -> tuple[tuple[AdaptiveEdlSegment, ...], tuple[CueTiming, ...]]:
-    """Keep only footage needed by narration anchors, speech, and postroll."""
-    intervals = _merged_intervals(
-        tuple(
-            (
-                timing.visual_anchor_program_ms,
-                min(segments[-1].program_end_ms, timing.spoken_end_ms + cue.visual_postroll_ms),
-            )
-            for timing, cue in zip(timings, plan_cues, strict=True)
-        )
-    )
-    compacted: list[AdaptiveEdlSegment] = []
-    cursor = program_start_ms
-    piece_index = 0
-    for keep_start, keep_end in intervals:
-        for segment in segments:
-            overlap_start = max(keep_start, segment.program_start_ms)
-            overlap_end = min(keep_end, segment.program_end_ms)
-            if overlap_end <= overlap_start:
-                continue
-            source_start = segment.source_start_ms + round(
-                (overlap_start - segment.program_start_ms) * segment.playback_rate
-            )
-            source_end = segment.source_start_ms + round(
-                (overlap_end - segment.program_start_ms) * segment.playback_rate
-            )
-            source_start = min(
-                max(source_start, segment.source_start_ms),
-                segment.source_end_ms - 1,
-            )
-            source_end = min(max(source_end, source_start + 1), segment.source_end_ms)
-            duration = overlap_end - overlap_start
-            piece_index += 1
-            compacted.append(
-                AdaptiveEdlSegment(
-                    f"{segment.segment_id}-clip-{piece_index:03d}",
-                    segment.unit_id,
-                    segment.situation_id,
-                    segment.range_id,
-                    source_start,
-                    source_end,
-                    cursor,
-                    cursor + duration,
-                    segment.playback_rate,
-                    segment.shot_ids,
-                    segment.event_ids,
-                )
-            )
-            cursor += duration
-    if not compacted:
-        raise MvpError("semantic timeline compaction removed all footage")
-    compacted_timings = tuple(
-        CueTiming(
-            timing.cue_id,
-            _map_compacted_timestamp(intervals, timing.spoken_start_ms, program_start_ms),
-            _map_compacted_timestamp(intervals, timing.spoken_end_ms, program_start_ms),
-            _map_compacted_timestamp(intervals, timing.visual_anchor_program_ms, program_start_ms),
-        )
-        for timing in timings
-    )
-    return tuple(compacted), compacted_timings
-
-
 def build_semantic_timeline(
     plan: NarrationPlan,
     tts: CueTtsManifest,
@@ -206,6 +115,7 @@ def build_semantic_timeline(
             cue_previous_end = previous_spoken_end
             valid = True
             for cue in unit.cues:
+                evidence = cue_evidence_range(unit, cue)
                 try:
                     anchor = map_source_timestamp(
                         AdaptiveEdlDocument(candidates, unit_end),
@@ -219,7 +129,15 @@ def build_semantic_timeline(
                     cue_previous_end + 80,
                 )
                 spoken_end = spoken_start + tts_by_id[cue.cue_id].duration_ms
-                if spoken_end + cue.visual_postroll_ms > unit_end:
+                evidence_segments = tuple(
+                    segment for segment in candidates if segment.range_id == evidence.range_id
+                )
+                if len(evidence_segments) != 1:
+                    valid = False
+                    break
+                evidence_end = evidence_segments[0].program_end_ms
+                gap_ms = spoken_start - cue_previous_end if cue_previous_end >= 0 else spoken_start
+                if spoken_end + cue.visual_postroll_ms > evidence_end or gap_ms > 1_200:
                     valid = False
                     break
                 candidate_timings.append(CueTiming(cue.cue_id, spoken_start, spoken_end, anchor))
@@ -232,14 +150,18 @@ def build_semantic_timeline(
             raise MvpError(
                 "SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence"
             )
-        selected_segments, selected_timings = _compact_unit(
-            selected_segments, selected_timings, unit.cues, program_cursor
-        )
         segments.extend(selected_segments)
         timings.extend(selected_timings)
         program_cursor = selected_segments[-1].program_end_ms
         previous_spoken_end = selected_timings[-1].spoken_end_ms
 
+    if not policy.target_minimum_ms <= program_cursor <= policy.target_maximum_ms:
+        raise MvpError(
+            "SEMANTIC_TIMELINE_DURATION_INVALID: Antigravity must revise accepted "
+            "cue evidence to fit 7-12 minutes"
+        )
+    if timings and program_cursor - timings[-1].spoken_end_ms > 1_200:
+        raise MvpError("SEMANTIC_TIMELINE_DOES_NOT_FIT: trailing footage lacks narration")
     edl = AdaptiveEdlDocument(tuple(segments), program_cursor)
     return edl, SemanticTimeline(tuple(timings), program_cursor)
 
@@ -274,13 +196,13 @@ def semantic_timing_findings(
         )
     for current, following in pairwise(cues if total_duration_ms is not None else ()):
         gap_ms = following.spoken_start_ms - current.spoken_end_ms
-        if gap_ms > 2_500:
+        if gap_ms > 1_200:
             findings.append(
                 AuditFinding(
                     "ERROR",
                     "NARRATION_GAP_TOO_LONG",
                     following.cue_id,
-                    f"Narration gap is {gap_ms} ms; maximum is 2500 ms.",
+                    f"Narration gap is {gap_ms} ms; maximum is 1200 ms.",
                     (),
                 )
             )

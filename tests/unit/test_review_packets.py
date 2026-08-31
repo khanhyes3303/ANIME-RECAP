@@ -13,9 +13,9 @@ from anime_review_mvp.review_packets import (
 )
 
 
-def _frames() -> tuple[ProxyEvidenceFrame, ...]:
+def _frames(prefix: str = "") -> tuple[ProxyEvidenceFrame, ...]:
     return tuple(
-        ProxyEvidenceFrame(position, index * 100, f"{position.lower()}.jpg")
+        ProxyEvidenceFrame(position, index * 100, f"{prefix}{position.lower()}.jpg")
         for index, position in enumerate(("START", "ANCHOR", "MIDDLE", "END"), 1)
     )
 
@@ -27,8 +27,8 @@ def _evidence(*cue_ids: str) -> ProxyEvidenceManifest:
             "situation-001",
             (0, 1_000),
             (0, 1_000),
-            _frames(),
-            _frames(),
+            _frames("source-"),
+            _frames("program-"),
             (0,),
             ("evidence",),
             ("shot-001",),
@@ -55,6 +55,14 @@ def _review(
         situation_id=situation_id,
         verdict=verdict,
         finding_codes=(),
+        frame_refs=tuple(
+            f"{prefix}{position.lower()}.jpg"
+            for prefix in ("source-", "program-")
+            for position in ("START", "ANCHOR", "MIDDLE", "END")
+        ),
+        transcript_refs=("evidence",),
+        voice_before_visual=False,
+        mixed_semantics=False,
     )
 
 
@@ -90,9 +98,7 @@ def test_proxy_audit_rejects_intro_at_start_boundary() -> None:
             SimpleNamespace(boundary="END", verdict="CLEAN"),
         ),
     )
-    result = validate_proxy_audit(
-        audit, _plan("cue-001"), _evidence("cue-001")
-    )
+    result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
     assert "INTRO_OPENING_LEAK" in result.finding_codes
 
 
@@ -104,10 +110,24 @@ def test_proxy_audit_rejects_cue_scope_mismatch() -> None:
             SimpleNamespace(boundary="END", verdict="CLEAN"),
         ),
     )
-    result = validate_proxy_audit(
-        audit, _plan("cue-001"), _evidence("cue-001")
-    )
+    result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
     assert "PROXY_EVIDENCE_SCOPE_INVALID" in result.finding_codes
+
+
+def test_proxy_audit_rejects_match_without_all_eight_cue_frames() -> None:
+    review = _review("cue-001")
+    review.frame_refs = review.frame_refs[:-1]
+    audit = SimpleNamespace(
+        cue_reviews=(review,),
+        boundary_reviews=(
+            SimpleNamespace(boundary="START", verdict="CLEAN"),
+            SimpleNamespace(boundary="END", verdict="CLEAN"),
+        ),
+    )
+
+    result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
+
+    assert "PROXY_CUE_FRAME_COVERAGE_INVALID" in result.finding_codes
 
 
 def test_proxy_audit_rejects_insufficient_boundary_evidence() -> None:
@@ -118,7 +138,5 @@ def test_proxy_audit_rejects_insufficient_boundary_evidence() -> None:
             SimpleNamespace(boundary="END", verdict="CLEAN"),
         ),
     )
-    result = validate_proxy_audit(
-        audit, _plan("cue-001"), _evidence("cue-001")
-    )
+    result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
     assert "PROXY_BOUNDARY_EVIDENCE_INVALID" in result.finding_codes

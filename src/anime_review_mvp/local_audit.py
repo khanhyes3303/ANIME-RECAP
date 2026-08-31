@@ -198,6 +198,14 @@ def build_v2_local_audit(
     loudness: LoudnessReport | None = None,
 ) -> EngineAuditReport:
     findings = list(build_episode_coherence_audit(plan, situations, initial_context).findings)
+    policy = EditorialPolicy()
+    if not policy.target_minimum_ms <= render.duration_ms <= policy.target_maximum_ms:
+        findings.append(
+            _finding(
+                "PRODUCTION_DURATION_OUT_OF_RANGE",
+                "Production proxy must be between 7 and 12 minutes.",
+            )
+        )
     situation_ids = {item.situation_id for item in situations.situations}
     proven = {
         item.situation_id

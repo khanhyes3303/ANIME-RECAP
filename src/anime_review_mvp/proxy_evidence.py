@@ -13,7 +13,7 @@ from .models import TranscriptDocument
 from .semantic_timeline import SemanticTimeline
 from .situation_index import SituationIndexDocument
 from .situation_validation import validate_edl_exclusions
-from .situations import NarrationPlan
+from .situations import NarrationPlan, cue_evidence_range
 
 Runner = Callable[..., object]
 _FRAME_POSITIONS = ("START", "ANCHOR", "MIDDLE", "END")
@@ -131,13 +131,24 @@ def _frame_bundle(
 
 
 def _cue_transcript_indexes(
-    transcript: TranscriptDocument, start_ms: int, end_ms: int
+    transcript: TranscriptDocument,
+    start_ms: int,
+    end_ms: int,
+    transcript_refs: tuple[str, ...] = (),
 ) -> tuple[int, ...]:
-    return tuple(
+    overlapping = tuple(
         index
         for index, segment in enumerate(transcript.segments)
         if _overlaps(start_ms, end_ms, segment.start_ms, segment.end_ms)
     )
+    if not transcript_refs:
+        return overlapping
+    referenced = tuple(
+        index for index in overlapping if transcript.segments[index].text in set(transcript_refs)
+    )
+    if len(referenced) != len(set(transcript_refs)):
+        raise MvpError("proxy cue transcript references do not resolve exactly")
+    return referenced
 
 
 def extract_cue_proxy_evidence(
@@ -179,21 +190,25 @@ def extract_cue_proxy_evidence(
         )
         if not unit_segments:
             raise MvpError("proxy evidence is missing a unit EDL segment")
-        source_start_ms = min(r.source_start_ms for r in unit.evidence_ranges)
-        source_end_ms = max(r.source_end_ms for r in unit.evidence_ranges)
-        program_start_ms = unit_segments[0].program_start_ms
-        program_end_ms = unit_segments[-1].program_end_ms
-        shot_ids = tuple(
-            dict.fromkeys(
-                shot_id for evidence in unit.evidence_ranges for shot_id in evidence.shot_ids
-            )
-        )
-        transcript_indexes = _cue_transcript_indexes(transcript, source_start_ms, source_end_ms)
-        transcript_text = tuple(transcript.segments[index].text for index in transcript_indexes)
         for cue in unit.cues:
             timing = cue_timings.get(cue.cue_id)
             if timing is None:
                 raise MvpError("proxy evidence timeline cue IDs do not match plan cues")
+            evidence = cue_evidence_range(unit, cue)
+            range_segments = tuple(
+                segment for segment in unit_segments if segment.range_id == evidence.range_id
+            )
+            if len(range_segments) != 1:
+                raise MvpError("proxy evidence cue range does not map exactly once")
+            source_start_ms = evidence.source_start_ms
+            source_end_ms = evidence.source_end_ms
+            transcript_indexes = _cue_transcript_indexes(
+                transcript,
+                source_start_ms,
+                source_end_ms,
+                cue.transcript_refs,
+            )
+            transcript_text = tuple(transcript.segments[index].text for index in transcript_indexes)
             cue_output = output_dir / cue.cue_id
             cues.append(
                 CueProxyEvidence(
@@ -212,8 +227,8 @@ def extract_cue_proxy_evidence(
                     ),
                     _frame_bundle(
                         proxy_video,
-                        program_start_ms,
-                        program_end_ms,
+                        timing.spoken_start_ms,
+                        timing.spoken_end_ms,
                         timing.visual_anchor_program_ms,
                         cue_output / "program",
                         runner=runner,
@@ -221,7 +236,7 @@ def extract_cue_proxy_evidence(
                     ),
                     transcript_indexes,
                     transcript_text,
-                    shot_ids,
+                    evidence.shot_ids,
                 )
             )
 

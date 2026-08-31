@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .editor_provenance import EditorTask, create_editor_task
 from .errors import MvpError
 from .models import ShotDocument, SourceRef, TranscriptDocument
+from .reference_profile import ReferenceStyleProfile
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +22,10 @@ class StructureEditorPacket:
     frame_manifest_path: str
     required_outputs: tuple[str, ...] = ("situation_index_draft.json",)
     task_kind: str = "STRUCTURE"
+    reference: ReferenceStyleProfile = field(
+        default=ReferenceStyleProfile("", "", 0, 0, 0),
+        metadata={"json_optional": True},
+    )
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or self.revision < 1:
@@ -60,14 +65,13 @@ def build_structure_editor_packet(
     *,
     task: EditorTask,
     allowed_staging_dir: Path | None = None,
+    reference: ReferenceStyleProfile | None = None,
 ) -> StructureEditorPacket:
     if task.task_kind != "STRUCTURE":
         raise MvpError("structure packet requires a STRUCTURE task")
     if not frame_manifest_path.is_file():
         raise MvpError(f"frame manifest does not exist: {frame_manifest_path}")
-    staging = allowed_staging_dir or (
-        frame_manifest_path.parent / "editor_staging" / task.task_id
-    )
+    staging = allowed_staging_dir or (frame_manifest_path.parent / "editor_staging" / task.task_id)
     return StructureEditorPacket(
         task.task_id,
         task.run_id,
@@ -79,11 +83,22 @@ def build_structure_editor_packet(
         shots,
         str(frame_manifest_path.resolve()),
         task.allowed_outputs,
+        reference=reference or ReferenceStyleProfile("", "", 0, 0, 0),
     )
 
 
 def render_structure_editor_prompt(packet: StructureEditorPacket) -> str:
+    reference_instruction = (
+        "Trước khi chia tập, bắt buộc xem trực tiếp video mẫu "
+        f"`{packet.reference.video_path}` (SHA-256 `{packet.reference.sha256}`) để học "
+        "nhịp kể, cách chuyển tình huống và mật độ hình. Video mẫu chỉ là chuẩn phong "
+        "cách; không sao chép nội dung và không dùng thời lượng của video mẫu làm mục tiêu.\n\n"
+        if packet.reference.video_path
+        else ""
+    )
     return f"""Antigravity là biên tập viên duy nhất được chia cấu trúc tập phim.
+
+{reference_instruction}
 
 Task `{packet.task_id}` chỉ lập chỉ mục tình huống từ transcript, shots và frame
 manifest `{packet.frame_manifest_path}`. Không viết lời review, không chọn EDL, không

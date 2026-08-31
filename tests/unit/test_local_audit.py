@@ -216,33 +216,53 @@ def test_content_fingerprint_changes_with_artifact_content(tmp_path: Path) -> No
     assert content_fingerprint((first, second)) != before
 
 
-def _v2_bundle() -> tuple[
-    NarrationPlan, SituationDocument, CueTtsManifest, SemanticTimeline
-]:
+def _v2_bundle() -> tuple[NarrationPlan, SituationDocument, CueTtsManifest, SemanticTimeline]:
     base_plan = _plan()
     use = SemanticShotUse("shot-001", "event-001", "ACTION", "Jiro phản công.")
     evidence = replace(
-        base_plan.units[0].evidence_ranges[0], semantic_event_id="event-001",
-        action_phase="ACTION", story_purpose="Jiro phản công.", shot_uses=(use,),
+        base_plan.units[0].evidence_ranges[0],
+        semantic_event_id="event-001",
+        action_phase="ACTION",
+        story_purpose="Jiro phản công.",
+        shot_uses=(use,),
     )
     cue = NarrationCue(
-        "cue-001", "situation-001", "Jiro phản công.", ("claim-001",),
-        1_200, "ACTION", ("transcript-001",), ("source-frame-001",),
-        ("shot-001",), ("Jiro",), ("Jiro",), (), (), 300, 300,
+        "cue-001",
+        "situation-001",
+        "Jiro phản công.",
+        ("claim-001",),
+        1_200,
+        "ACTION",
+        ("transcript-001",),
+        ("source-frame-001",),
+        ("shot-001",),
+        ("Jiro",),
+        ("Jiro",),
+        (),
+        (),
+        300,
+        300,
     )
     unit = replace(base_plan.units[0], evidence_ranges=(evidence,), cues=(cue,))
     plan = NarrationPlan(
-        "LOCAL_EDITOR", "situation-v2", (unit,),
+        "LOCAL_EDITOR",
+        "situation-v2",
+        (unit,),
         (NarrationClaim("claim-001", "Jiro phản công.", ("event-001",)),),
     )
     situation = replace(
-        _situations().situations[0], cause_or_goal="Jiro phải tự vệ.",
+        _situations().situations[0],
+        cause_or_goal="Jiro phải tự vệ.",
         audience_summary="Jiro bị đánh rồi phản công.",
     )
     situations = SituationDocument("LOCAL_EDITOR", "situation-v2", (situation,))
     tts = CueTtsManifest(
         (CueTts("cue-001", "unit-001", "cue.wav", "cue.mp3", 500, "b" * 64),),
-        "fake", "voice", "situation-v2", 0, 1,
+        "fake",
+        "voice",
+        "situation-v2",
+        0,
+        1,
     )
     timeline = SemanticTimeline((CueTiming("cue-001", 1_500, 2_000, 1_200),), 2_000)
     return plan, situations, tts, timeline
@@ -251,8 +271,14 @@ def _v2_bundle() -> tuple[
 def _provenance() -> tuple[AcceptedEditorialRevision, ...]:
     return (
         AcceptedEditorialRevision(
-            "task-001", "run-001", "situation-001", 1, "ANTIGRAVITY",
-            "a" * 64, "b" * 64, "c" * 64,
+            "task-001",
+            "run-001",
+            "situation-001",
+            1,
+            "ANTIGRAVITY",
+            "a" * 64,
+            "b" * 64,
+            "c" * 64,
         ),
     )
 
@@ -269,20 +295,37 @@ def test_v2_local_audit_fails_when_voice_precedes_visual_anchor() -> None:
     plan, situations, tts, _timeline = _v2_bundle()
     ahead = SemanticTimeline((CueTiming("cue-001", 1_000, 1_500, 6_000),), 6_000)
     report = build_v2_local_audit(
-        plan, situations, ahead, tts, _edl(),
+        plan,
+        situations,
+        ahead,
+        tts,
+        _edl(),
         replace(_render(), duration_ms=6_000, video_duration_ms=6_000, audio_duration_ms=6_000),
-        _provenance(), StoryContext((), (), (), ""),
+        _provenance(),
+        StoryContext((), (), (), ""),
     )
     assert "VOICE_PRECEDES_VISUAL_ANCHOR" in {finding.code for finding in report.findings}
 
 
+def test_v2_local_audit_rejects_production_duration_under_seven_minutes() -> None:
+    plan, situations, tts, timeline = _v2_bundle()
+    report = build_v2_local_audit(
+        plan,
+        situations,
+        timeline,
+        tts,
+        _edl(),
+        _render(),
+        _provenance(),
+        StoryContext((), (), (), ""),
+    )
+
+    assert "PRODUCTION_DURATION_OUT_OF_RANGE" in {finding.code for finding in report.findings}
+
+
 def test_episode_audit_rejects_unintroduced_character() -> None:
     plan, situations, _tts_manifest, _timeline = _v2_bundle()
-    cue = replace(
-        plan.units[0].cues[0], introduces_characters=(), mentions_characters=("Rago",)
-    )
+    cue = replace(plan.units[0].cues[0], introduces_characters=(), mentions_characters=("Rago",))
     plan = replace(plan, units=(replace(plan.units[0], cues=(cue,)),))
     report = build_episode_coherence_audit(plan, situations, StoryContext((), (), (), ""))
-    assert "CHARACTER_USED_BEFORE_INTRODUCTION" in {
-        finding.code for finding in report.findings
-    }
+    assert "CHARACTER_USED_BEFORE_INTRODUCTION" in {finding.code for finding in report.findings}

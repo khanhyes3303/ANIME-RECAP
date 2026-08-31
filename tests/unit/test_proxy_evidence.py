@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,7 +126,7 @@ def _plan() -> NarrationPlan:
         2_000,
         ("shot-0002",),
         ("event-001",),
-        ("transcript-001",),
+        ("Jiro gặp Rago.",),
         ("frames/shot-0002.jpg",),
         "Jiro gặp Rago.",
         "event-001",
@@ -140,7 +141,7 @@ def _plan() -> NarrationPlan:
         ("claim-001",),
         1_100,
         "ACTION",
-        ("transcript-001",),
+        ("Jiro gặp Rago.",),
         ("frames/shot-0002.jpg",),
         ("shot-0002",),
         (),
@@ -222,3 +223,97 @@ def test_proxy_evidence_has_start_anchor_middle_end_for_every_cue(tmp_path: Path
     assert manifest.boundaries[-1].boundary == "END"
     assert manifest.boundaries[0].adjacent_excluded_source_intervals_ms
     assert manifest.boundaries[-1].adjacent_excluded_source_intervals_ms
+
+
+def test_proxy_evidence_uses_exact_cue_range_not_whole_situation(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    proxy = tmp_path / "proxy.mp4"
+    source.write_bytes(b"source")
+    proxy.write_bytes(b"proxy")
+    plan = _plan()
+    second_range = EvidenceRange(
+        "range-002",
+        "situation-001",
+        1_500,
+        2_000,
+        ("shot-0002",),
+        ("event-002",),
+        ("Rago cảnh báo Jiro.",),
+        ("frames/shot-0002-b.jpg",),
+        "Rago cảnh báo Jiro.",
+        "event-002",
+        "REACTION",
+        "Rago cảnh báo Jiro.",
+        (SemanticShotUse("shot-0002", "event-002", "REACTION", "Rago cảnh báo Jiro."),),
+    )
+    first_range = replace(plan.units[0].evidence_ranges[0], source_end_ms=1_500)
+    first_cue = replace(plan.units[0].cues[0], visual_anchor_source_ms=1_100)
+    second_cue = replace(
+        first_cue,
+        cue_id="cue-002",
+        text="Rago cảnh báo Jiro.",
+        claim_ids=("claim-002",),
+        visual_anchor_source_ms=1_700,
+        transcript_refs=("Rago cảnh báo Jiro.",),
+        frame_refs=("frames/shot-0002-b.jpg",),
+    )
+    unit = replace(
+        plan.units[0],
+        evidence_ranges=(first_range, second_range),
+        cues=(first_cue, second_cue),
+    )
+    plan = NarrationPlan(
+        "LOCAL_EDITOR",
+        "situation-v2",
+        (unit,),
+        (
+            plan.claims[0],
+            NarrationClaim("claim-002", "Rago cảnh báo Jiro.", ("event-002",)),
+        ),
+    )
+    timeline = SemanticTimeline(
+        (
+            CueTiming("cue-001", 100, 450, 100),
+            CueTiming("cue-002", 550, 900, 700),
+        ),
+        1_000,
+    )
+    edl = AdaptiveEdlDocument(
+        (
+            replace(
+                _edl().segments[0],
+                source_end_ms=1_500,
+                program_end_ms=500,
+            ),
+            AdaptiveEdlSegment(
+                "segment-002",
+                "unit-001",
+                "situation-001",
+                "range-002",
+                1_500,
+                2_000,
+                500,
+                1_000,
+                1.0,
+                ("shot-0002",),
+                ("event-002",),
+            ),
+        ),
+        1_000,
+    )
+    manifest = extract_cue_proxy_evidence(
+        source,
+        proxy,
+        plan,
+        timeline,
+        edl,
+        _index(),
+        _transcript(),
+        tmp_path / "evidence",
+        runner=FakeRunner(),
+    )
+
+    assert manifest.cues[0].source_interval_ms == (1_000, 1_500)
+    assert manifest.cues[1].source_interval_ms == (1_500, 2_000)
+    assert manifest.cues[0].transcript_text == ("Jiro gặp Rago.",)
+    assert manifest.cues[1].transcript_text == ("Rago cảnh báo Jiro.",)

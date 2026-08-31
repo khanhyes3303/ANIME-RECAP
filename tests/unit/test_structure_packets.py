@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from anime_review_mvp.editor_provenance import load_editor_task
@@ -10,6 +11,7 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TranscriptSegment,
 )
+from anime_review_mvp.reference_profile import ReferenceStyleProfile
 from anime_review_mvp.structure_packets import (
     build_structure_editor_packet,
     create_structure_task,
@@ -41,9 +43,7 @@ def test_structure_prompt_separates_boundaries_without_writing_narration(
     frames = tmp_path / "frames.json"
     frames.write_text('{"frames":["C:/frames/shot-001.jpg"]}', encoding="utf-8")
     source = SourceRef("episode.mp4", "a" * 64, 10_000, 1920, 1080, "1/1000", 1)
-    transcript = TranscriptDocument(
-        "en", (TranscriptSegment(1_000, 2_000, "Who are you?", ()),)
-    )
+    transcript = TranscriptDocument("en", (TranscriptSegment(1_000, 2_000, "Who are you?", ()),))
     shots = ShotDocument((Shot("shot-001", 0, 10_000),))
     inputs = tuple(
         path
@@ -57,9 +57,7 @@ def test_structure_prompt_separates_boundaries_without_writing_narration(
     inputs[1].write_text("{}", encoding="utf-8")
     task = create_structure_task(tmp_path / "run", "run-001", 1, inputs)
 
-    packet = build_structure_editor_packet(
-        source, transcript, shots, frames, task=task
-    )
+    packet = build_structure_editor_packet(source, transcript, shots, frames, task=task)
     prompt = render_structure_editor_prompt(packet)
 
     assert packet.task_kind == "STRUCTURE"
@@ -76,3 +74,35 @@ def test_structure_prompt_separates_boundaries_without_writing_narration(
     assert "mỗi `shot_id`" in prompt.casefold()
     assert "narration_draft.json" not in prompt
     assert "Gemini Web" not in prompt
+
+
+def test_structure_prompt_requires_antigravity_to_watch_reference_video(
+    tmp_path: Path,
+) -> None:
+    frames = tmp_path / "frames.json"
+    frames.write_text("{}", encoding="utf-8")
+    transcript_path = tmp_path / "transcript.json"
+    shots_path = tmp_path / "shots.json"
+    transcript_path.write_text("{}", encoding="utf-8")
+    shots_path.write_text("{}", encoding="utf-8")
+    task = create_structure_task(
+        tmp_path / "run", "run-001", 1, (transcript_path, shots_path, frames)
+    )
+    packet = build_structure_editor_packet(
+        SourceRef("episode.mp4", "a" * 64, 10_000, 1920, 1080, "1/1000", 1),
+        TranscriptDocument("en", ()),
+        ShotDocument((Shot("shot-001", 0, 10_000),)),
+        frames,
+        task=task,
+    )
+    packet = replace(
+        packet,
+        reference=ReferenceStyleProfile(
+            str((tmp_path / "reference.mp4").resolve()), "b" * 64, 350, 900, 1200
+        ),
+    )
+
+    prompt = render_structure_editor_prompt(packet)
+
+    assert packet.reference.video_path in prompt
+    assert "xem trực tiếp video mẫu" in prompt

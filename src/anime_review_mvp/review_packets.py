@@ -168,6 +168,10 @@ def render_proxy_audit_prompt(packet: ProxyAuditPacket) -> str:
         "và loudness report; không tự suy đoán khi thiếu bằng chứng.\n"
         "Ghi đúng một proxy_audit_draft.json, gồm đúng một verdict cho mỗi cue "
         "(MATCH, MISMATCH hoặc INSUFFICIENT_EVIDENCE) và đúng hai boundary START/END.\n"
+        "Với từng cue phải thật sự mở và đối chiếu đủ tám frame: bốn SOURCE và bốn "
+        "PROGRAM tại START, ANCHOR, MIDDLE, END; frame_refs trong verdict phải liệt kê "
+        "đúng toàn bộ tám đường dẫn của cue. transcript_refs phải khớp transcript/SRT "
+        "trong evidence. Thiếu một frame thì dùng INSUFFICIENT_EVIDENCE, không MATCH.\n"
         "Kiểm tra voice có đi trước hình, cue có trộn nhiều tình huống, và START/END "
         "có lọt intro/opening/ending/credits/preview hay không.\n"
         f"Producer context: {packet.producer_context_id}\n"
@@ -206,14 +210,11 @@ def validate_proxy_audit(
     ):
         codes.append("ENDING_CREDITS_LEAK")
     non_clean_boundaries = tuple(
-        item
-        for item in getattr(audit, "boundary_reviews", ())
-        if item.verdict != "CLEAN"
+        item for item in getattr(audit, "boundary_reviews", ()) if item.verdict != "CLEAN"
     )
     if non_clean_boundaries:
         codes.extend(
-            getattr(item, "finding_codes", ())
-            or ("PROXY_BOUNDARY_EVIDENCE_INVALID",)
+            getattr(item, "finding_codes", ()) or ("PROXY_BOUNDARY_EVIDENCE_INVALID",)
             for item in non_clean_boundaries
         )
     evidence_by_cue = {item.cue_id: item for item in evidence.cues}
@@ -225,12 +226,25 @@ def validate_proxy_audit(
         for item in reviews
     ):
         codes.append("PROXY_EVIDENCE_SCOPE_INVALID")
+    for item in reviews:
+        cue_evidence = evidence_by_cue.get(item.cue_id)
+        if cue_evidence is None:
+            continue
+        expected_frames = {
+            frame.path for frame in (*cue_evidence.source_frames, *cue_evidence.program_frames)
+        }
+        if set(getattr(item, "frame_refs", ())) != expected_frames:
+            codes.append("PROXY_CUE_FRAME_COVERAGE_INVALID")
+        if set(getattr(item, "transcript_refs", ())) != set(cue_evidence.transcript_text):
+            codes.append("PROXY_CUE_TRANSCRIPT_COVERAGE_INVALID")
+        if item.verdict == "MATCH" and (
+            getattr(item, "voice_before_visual", False) or getattr(item, "mixed_semantics", False)
+        ):
+            codes.append("PROXY_CUE_MATCH_CONTRADICTS_FLAGS")
     return ProxyAuditValidation(
         tuple(
             dict.fromkeys(
-                code
-                for item in codes
-                for code in (item if isinstance(item, tuple) else (item,))
+                code for item in codes for code in (item if isinstance(item, tuple) else (item,))
             )
         )
     )

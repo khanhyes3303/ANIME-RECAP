@@ -34,6 +34,19 @@ ghi trực tiếp TTS, timeline, EDL, audit, proxy, video cuối, PASS report ho
 MCP hoặc repo. Nếu thiếu công cụ, ghi rõ tên công cụ cần người dùng cài rồi dừng.
 Gemini Web không thuộc luồng mặc định và không được tự gọi.
 
+## Video mẫu và chuẩn toàn tập
+
+Mỗi job có `reference` chứa đường dẫn và SHA-256 của video mẫu. Antigravity phải xem
+trực tiếp video mẫu trước khi chia hoặc biên tập tập mới để học nhịp kể liên tục, cách
+đổi hình theo câu đang kể và mật độ cảnh. Video mẫu chỉ là chuẩn phong cách; không sao
+chép nội dung và không lấy thời lượng của video mẫu làm thời lượng tập mới.
+
+Proxy và video cuối của một tập phải dài 420.000–720.000 ms, ưu tiên 480.000–600.000
+ms. Khoảng nghỉ tự nhiên giữa các câu thường 350–900 ms và tuyệt đối không quá 1.200
+ms. Không kéo dài bằng cảnh thừa, im lặng, lặp ý hoặc hành động không có giá trị cốt
+truyện. Nếu tổng voice chưa thể đạt tối thiểu 7 phút, phải viết lại hoặc bổ sung thông
+tin cốt truyện có bằng chứng; engine không được tự viết, kéo hoặc nén thay.
+
 ## Task STRUCTURE
 
 Dùng transcript cùng frame/shot để xác định ranh giới tình huống, mục đích kể chuyện và
@@ -67,6 +80,12 @@ Lời không được đi trước hình: visual anchor của sự kiện phải
 lúc câu kể sự kiện bắt đầu. Giải thích nhân vật, bối cảnh, nguyên nhân và kết quả đủ để
 người chưa biết anime vẫn hiểu.
 
+Mỗi cue chỉ được chứng minh bởi đúng một evidence range chứa anchor và toàn bộ
+frame/shot/transcript refs của cue. Voice phải nằm trọn trong range đó. Không dùng phạm
+vi toàn tình huống cho nhiều cue nói về các hành động hoặc ý nghĩa khác nhau. Sau khi
+range được Antigravity chấp nhận, engine không được cắt nhỏ, nén hoặc ánh xạ lại range
+để che khoảng trống; nếu không vừa voice thì trả đúng tình huống cho Antigravity sửa.
+
 ## Xử lý tuần tự
 
 Xử lý tuần tự theo job hiện tại:
@@ -78,6 +97,11 @@ Xử lý tuần tự theo job hiện tại:
 5. Nộp đúng `required_outputs` bằng lệnh trong `next_action.json`.
 6. Validator local quyết định PASS; nếu lỗi, chỉ sửa đúng situation/cue/range được nêu.
 7. Chỉ khóa tình huống khi semantic audit đạt; sau đó mới làm tình huống kế tiếp.
+
+Trước khi xin người dùng duyệt proxy, verifier phải đối chiếu từng cue với transcript/
+SRT, bốn frame SOURCE và bốn frame PROGRAM tại START/ANCHOR/MIDDLE/END của chính cue;
+mọi cue đều phải MATCH. Đồng thời kiểm tra thời lượng 7–12 phút, khoảng nghỉ tối đa
+1.200 ms, âm lượng đo thật, độ đồng đều giữa cue và rò rỉ intro/opening/ending/credits.
 
 Không làm lại artifact đã được khóa nếu fingerprint và lỗi không thay đổi. Không tự ghi
 PASS và không tự duyệt proxy.
