@@ -1539,10 +1539,19 @@ def _audit_local(run_dir: Path, episode: Path, *, final: bool = False) -> int:
 
 
 def _prompt(run_dir: Path) -> int:
-    _, episode = _episode(run_dir)
+    state, episode = _episode(run_dir)
     root = episode.parents[3]
     job_path = run_dir / "cong_viec_antigravity.json"
-    if not job_path.is_file():
+    bootstrap = ""
+    if not job_path.is_file() and state.stage is Stage.CHUAN_BI:
+        bootstrap = (
+            "RUN MOI DANG O CHUAN_BI\n"
+            "Truoc tien chay dung mot lenh sau de tao job dau tien:\n"
+            f'uv run python run_episode.py operator --run "{run_dir.resolve()}"\n'
+            "Sau khi lenh ket thuc, doc next_action.json va "
+            "cong_viec_antigravity.json roi tiep tuc theo hop dong ben duoi.\n\n"
+        )
+    elif not job_path.is_file():
         raise MvpError("run has no cong_viec_antigravity.json; run prepare first")
     output = run_dir / "PROMPT_GUI_ANTIGRAVITY.txt"
     if output.is_file() and output.read_text(encoding="utf-8").strip():
@@ -1552,7 +1561,7 @@ def _prompt(run_dir: Path) -> int:
         run_dir,
         root / "Bo_nao_Antigravity" / "PROMPT_MOT_LAN_CHAY.md",
     )
-    output.write_text(rendered, encoding="utf-8")
+    output.write_text(bootstrap + rendered, encoding="utf-8")
     print(output.resolve())
     return 0
 

@@ -485,6 +485,28 @@ def test_prompt_command_writes_resolved_operator_prompt(tmp_path: Path) -> None:
     assert str(run.resolve()) in rendered
 
 
+def test_prompt_command_bootstraps_fresh_run_before_first_job(tmp_path: Path) -> None:
+    episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
+    episode.mkdir(parents=True)
+    source = tmp_path / "episode.mp4"
+    source.write_bytes(b"source")
+    run = tmp_path / "Tam_dang_xu_ly" / "fresh-run"
+    new_state(run, stage=Stage.CHUAN_BI, episode_dir=episode, source_video=source)
+    brain = tmp_path / "Bo_nao_Antigravity"
+    brain.mkdir()
+    (brain / "PROMPT_MOT_LAN_CHAY.md").write_text(
+        "Job: <ĐƯỜNG_DẪN_RUN>\\cong_viec_antigravity.json\n"
+        "Run: <run_dir>\n",
+        encoding="utf-8",
+    )
+
+    assert cli.main(["prompt", "--run", str(run)]) == 0
+
+    rendered = (run / "PROMPT_GUI_ANTIGRAVITY.txt").read_text(encoding="utf-8")
+    assert f'operator --run "{run.resolve()}"' in rendered
+    assert str((run / "cong_viec_antigravity.json").resolve()) in rendered
+
+
 def test_prompt_command_preserves_task_specific_prompt(tmp_path: Path) -> None:
     root = tmp_path
     run, _ = _prepared_storyboard_run(root)
