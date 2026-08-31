@@ -102,6 +102,17 @@ def test_proxy_verifier_cannot_override_failed_machine_audit(
     assert read_state(run).stage is Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY
 
 
+def test_next_action_exposes_simple_public_stage(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.TAO_TTS_TINH_HUONG)
+
+    cli._write_next(run, "Tạo voice rồi khớp cảnh.")
+
+    payload = json.loads((run / "next_action.json").read_text(encoding="utf-8"))
+    assert payload["stage"] == "TAO_TTS_TINH_HUONG"
+    assert payload["public_stage"] == "TAO_VOICE_VA_KHOP_CANH"
+
+
 def _prepared_storyboard_run(tmp_path: Path) -> tuple[Path, Path]:
     episode = tmp_path / "Kho_Anime" / "A" / "Mua_01" / "Tap_001"
     for name in (

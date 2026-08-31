@@ -97,6 +97,7 @@ from .models import (
 from .operator import plan_operator_step
 from .proxy_approval import approve_proxy, reject_proxy, require_approved_artifacts
 from .proxy_evidence import ProxyEvidenceManifest, extract_cue_proxy_evidence
+from .public_workflow import public_stage
 from .reference_profile import ReferenceStyleProfile, load_reference_profile
 from .render import RenderResult, normalize_narration_loudness, render_review
 from .review_contracts import LoudnessReport, ProxyAuditDocument, SituationAuditDocument
@@ -319,6 +320,7 @@ def _start(args: argparse.Namespace) -> int:
     )
     next_action = {
         "stage": state.stage.value,
+        "public_stage": public_stage(state.stage).value,
         "instruction": "Đọc Bo_nao_Antigravity/GEMINI.md rồi chạy bước prepare.",
         "run_dir": str(state.run_dir),
     }
@@ -366,6 +368,7 @@ def _write_next(
     state = read_state(run_dir)
     payload = {
         "stage": state.stage.value,
+        "public_stage": public_stage(state.stage).value,
         "instruction": instruction,
         "run_dir": str(state.run_dir),
     }
@@ -510,6 +513,7 @@ def _operator_command(run_dir: Path) -> int:
     status = {
         "action": directive.action,
         "stage": state.stage.value,
+        "public_stage": public_stage(state.stage).value,
         "task_id": state.editor_task_id or state.verifier_task_id,
         "instruction": next_payload.get("instruction", ""),
         # This flag makes the handoff explicit: Antigravity must complete the
