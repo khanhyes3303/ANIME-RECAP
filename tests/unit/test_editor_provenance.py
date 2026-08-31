@@ -6,12 +6,15 @@ from pathlib import Path
 import pytest
 
 from anime_review_mvp.editor_provenance import (
+    AcceptedVerifierRevision,
     accept_antigravity_submission,
     create_editor_task,
     load_editor_ledger,
     load_editor_task,
+    load_verifier_ledger,
     require_antigravity_provenance,
 )
+from anime_review_mvp.jsonio import atomic_append_jsonl
 from anime_review_mvp.errors import MvpError
 
 
@@ -67,6 +70,40 @@ def test_legacy_editor_task_without_kind_loads_as_situation(tmp_path: Path) -> N
     task = load_editor_task(task_path)
 
     assert task.task_kind == "SITUATION"
+
+
+def test_editor_task_accepts_verifier_task_kinds(tmp_path: Path) -> None:
+    task_path = tmp_path / "task.json"
+    task_path.write_text(
+        '{"task_id":"situation-001-audit-001","run_id":"run-001",'
+        '"situation_id":"situation-001","revision":1,'
+        '"expected_stage":"ANTIGRAVITY_VERIFIER","input_paths":["a.json"],'
+        '"input_sha256":"' + "a" * 64 + '",'
+        '"allowed_outputs":["situation_audit_draft.json"],'
+        '"task_kind":"SITUATION_AUDIT"}',
+        encoding="utf-8",
+    )
+
+    task = load_editor_task(task_path)
+
+    assert task.task_kind == "SITUATION_AUDIT"
+
+
+def test_load_verifier_ledger_round_trips_records(tmp_path: Path) -> None:
+    ledger_path = tmp_path / "verifier_ledger.jsonl"
+    record = AcceptedVerifierRevision(
+        task_id="situation-001-audit-001",
+        run_id="run-001",
+        task_kind="SITUATION_AUDIT",
+        situation_id="situation-001",
+        revision=1,
+        actor="ANTIGRAVITY_VERIFIER",
+        input_sha256="a" * 64,
+        audit_sha256="b" * 64,
+    )
+    atomic_append_jsonl(ledger_path, record)
+
+    assert load_verifier_ledger(ledger_path) == (record,)
 
 
 def test_accept_rejects_changed_editor_inputs(tmp_path: Path) -> None:

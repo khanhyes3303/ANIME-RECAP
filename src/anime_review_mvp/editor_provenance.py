@@ -11,6 +11,8 @@ from pathlib import Path
 from .errors import MvpError
 from .jsonio import atomic_append_jsonl, atomic_dump_json, load_json
 
+_EDITOR_TASK_KINDS = {"STRUCTURE", "SITUATION", "SITUATION_AUDIT", "PROXY_AUDIT"}
+
 
 @dataclass(frozen=True)
 class EditorTask:
@@ -25,7 +27,7 @@ class EditorTask:
     task_kind: str = field(default="SITUATION", metadata={"json_optional": True})
 
     def __post_init__(self) -> None:
-        if self.task_kind not in {"SITUATION", "STRUCTURE"}:
+        if self.task_kind not in _EDITOR_TASK_KINDS:
             raise MvpError("EDITOR_TASK_INVALID")
 
 
@@ -50,6 +52,22 @@ class AcceptedStructureRevision:
     input_sha256: str
     index_sha256: str
     accepted_path: str
+
+
+@dataclass(frozen=True)
+class AcceptedVerifierRevision:
+    task_id: str
+    run_id: str
+    task_kind: str
+    situation_id: str
+    revision: int
+    actor: str
+    input_sha256: str
+    audit_sha256: str
+
+    def __post_init__(self) -> None:
+        if self.task_kind not in {"SITUATION_AUDIT", "PROXY_AUDIT"}:
+            raise MvpError("VERIFIER_REVISION_INVALID")
 
 
 def _file_sha256(path: Path) -> str:
@@ -110,17 +128,25 @@ def load_editor_task(path: Path) -> EditorTask:
     return load_json(path, EditorTask)
 
 
-def load_editor_ledger(path: Path) -> tuple[AcceptedEditorialRevision, ...]:
+def _load_jsonl_ledger[T](path: Path, cls: type[T], error_code: str) -> tuple[T, ...]:
     if not path.exists():
         return ()
-    records: list[AcceptedEditorialRevision] = []
+    records: list[T] = []
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
             raw = json.loads(line)
-            records.append(AcceptedEditorialRevision(**raw))
+            records.append(cls(**raw))
     except (OSError, json.JSONDecodeError, TypeError) as exc:
-        raise MvpError(f"cannot load editor ledger: {path}") from exc
+        raise MvpError(f"cannot load {error_code}: {path}") from exc
     return tuple(records)
+
+
+def load_editor_ledger(path: Path) -> tuple[AcceptedEditorialRevision, ...]:
+    return _load_jsonl_ledger(path, AcceptedEditorialRevision, "editor ledger")
+
+
+def load_verifier_ledger(path: Path) -> tuple[AcceptedVerifierRevision, ...]:
+    return _load_jsonl_ledger(path, AcceptedVerifierRevision, "verifier ledger")
 
 
 def _atomic_copy(source: Path, destination: Path) -> None:
