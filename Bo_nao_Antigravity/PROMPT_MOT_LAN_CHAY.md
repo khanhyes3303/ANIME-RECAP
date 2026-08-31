@@ -18,3 +18,7 @@ Gemini Web và không đọc artifact revision cũ để suy đoán nhiệm vụ
 định PASS.
 
 Run hiện tại: `<run_dir>`
+
+Gắn thẻ `goal` và `teamwork-preview`. Mục tiêu là đưa run đến
+`CHO_NGUOI_DUNG_DUYET_PROXY`; không kết thúc sau một situation. Sau mỗi accept, chạy:
+`uv run python run_episode.py operator --run "<run_dir>"`.

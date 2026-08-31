@@ -241,7 +241,7 @@ def _parser() -> argparse.ArgumentParser:
     migrate.add_argument(
         "--reason",
         required=True,
-        choices=("user-rejected", "require-situation-index"),
+        choices=("user-rejected", "require-situation-index", "autonomous-operator"),
     )
     editor_task = subparsers.add_parser("editor-task")
     editor_task.add_argument("--run", required=True, type=Path)
@@ -2534,6 +2534,13 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
 
 def _migrate_run(run_dir: Path, reason: str) -> int:
     state, episode = _episode(run_dir)
+    if reason == "autonomous-operator":
+        # Migration is metadata-only: accepted ledgers and artifacts remain untouched.
+        if state.stage is Stage.CHO_NGUOI_DUNG_DUYET_PROXY:
+            _write_next(run_dir, "Proxy sẵn sàng; chờ người dùng duyệt.")
+        else:
+            _write_next(run_dir, "Chạy operator để tiếp tục luồng tự động.")
+        return _operator_command(run_dir)
     if reason == "require-situation-index":
         prior_task_id = state.editor_task_id
         archived_task_path = _archive_pre_index_revision(

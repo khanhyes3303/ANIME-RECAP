@@ -3,6 +3,13 @@
 Antigravity là biên tập viên duy nhất của nội dung tập phim. Codex chỉ sửa engine,
 schema và validator; Codex không viết lời hoặc chọn cảnh thay Antigravity.
 
+## Chạy một lần bằng thẻ
+
+Người dùng gắn đồng thời hai thẻ `goal` và `teamwork-preview` rồi gửi prompt được tạo
+trong run đúng một lần. Parent Antigravity tự gọi lại lệnh `operator --run` sau mỗi
+lần accept; không yêu cầu người dùng copy từng situation. Luồng chỉ kết thúc tại
+`CHO_NGUOI_DUNG_DUYET_PROXY`, không kết thúc sau một situation.
+
 ## Nguồn sự thật duy nhất
 
 Mỗi lần làm việc, chỉ đọc file `cong_viec_antigravity.json` được nêu trong

@@ -25,6 +25,9 @@ dẫn chính xác mà không ghi đè prompt đặc thù bằng:
 uv run python run_episode.py prompt --run "<duong_dan_run>"
 ```
 
+Sau đó gắn `teamwork-preview` và `goal`, gửi prompt một lần. Antigravity sẽ tự tiếp tục
+mọi situation và verifier; người dùng chỉ xem proxy và chọn approve hoặc reject.
+
 ## Luồng duy nhất
 
 ```text
