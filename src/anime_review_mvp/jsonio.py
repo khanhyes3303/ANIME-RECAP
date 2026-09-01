@@ -1,14 +1,82 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import types
 import uuid
-from dataclasses import asdict, fields, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from .errors import MvpError
+
+
+@dataclass(frozen=True, slots=True)
+class JsonPairManifest:
+    task_id: str
+    first_sha256: str
+    second_sha256: str
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def atomic_publish_json_pair(
+    first_path: Path,
+    first_value: Any,
+    second_path: Path,
+    second_value: Any,
+    manifest_path: Path,
+    *,
+    task_id: str,
+) -> JsonPairManifest:
+    """Publish two JSON artifacts and make the pair canonical via a final manifest."""
+    if not task_id.strip() or not is_dataclass(first_value) or not is_dataclass(second_value):
+        raise MvpError("JSON pair publication is invalid")
+    first_path.parent.mkdir(parents=True, exist_ok=True)
+    second_path.parent.mkdir(parents=True, exist_ok=True)
+    first_temp = first_path.with_name(f".{first_path.name}.{uuid.uuid4().hex}.tmp")
+    second_temp = second_path.with_name(f".{second_path.name}.{uuid.uuid4().hex}.tmp")
+    manifest_path.unlink(missing_ok=True)
+    try:
+        first_temp.write_text(
+            json.dumps(asdict(first_value), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        second_temp.write_text(
+            json.dumps(asdict(second_value), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        manifest = JsonPairManifest(task_id, _sha256(first_temp), _sha256(second_temp))
+        os.replace(first_temp, first_path)
+        os.replace(second_temp, second_path)
+        atomic_dump_json(manifest_path, manifest)
+        return manifest
+    except OSError as exc:
+        raise MvpError("cannot atomically publish JSON pair") from exc
+    finally:
+        first_temp.unlink(missing_ok=True)
+        second_temp.unlink(missing_ok=True)
+
+
+def require_json_pair_manifest(
+    first_path: Path,
+    second_path: Path,
+    manifest_path: Path,
+) -> JsonPairManifest:
+    manifest = load_json(manifest_path, JsonPairManifest)
+    try:
+        matches = (
+            _sha256(first_path) == manifest.first_sha256
+            and _sha256(second_path) == manifest.second_sha256
+        )
+    except OSError as exc:
+        raise MvpError("accepted JSON pair is incomplete") from exc
+    if not matches:
+        raise MvpError("accepted JSON pair hash mismatch")
+    return manifest
 
 
 def dump_json(path: Path, value: Any) -> None:

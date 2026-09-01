@@ -4,7 +4,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from anime_review_mvp.jsonio import atomic_append_jsonl, atomic_dump_json
+from anime_review_mvp.jsonio import (
+    atomic_append_jsonl,
+    atomic_dump_json,
+    atomic_publish_json_pair,
+    require_json_pair_manifest,
+)
 
 
 @dataclass(frozen=True)
@@ -35,3 +40,22 @@ def test_atomic_append_jsonl_preserves_order_and_writes_valid_records(tmp_path: 
         {"revision": 2},
     ]
     assert not tuple(tmp_path.glob("*.tmp"))
+
+
+def test_json_pair_is_canonical_only_after_both_hashes_are_committed(tmp_path: Path) -> None:
+    first = tmp_path / "situations.json"
+    second = tmp_path / "narration_plan.json"
+    manifest = tmp_path / "episode_review_acceptance.json"
+
+    atomic_publish_json_pair(
+        first,
+        Revision(1),
+        second,
+        Revision(2),
+        manifest,
+        task_id="episode-review-001",
+    )
+
+    accepted = require_json_pair_manifest(first, second, manifest)
+    assert accepted.task_id == "episode-review-001"
+    assert accepted.first_sha256 != accepted.second_sha256

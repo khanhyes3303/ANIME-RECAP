@@ -214,7 +214,7 @@ def test_operator_command_prepares_structure_job_after_local_prepare(
     assert payload["antigravity_work_required"] is True
 
 
-def test_operator_does_not_duplicate_an_already_prepared_situation_task(
+def test_operator_does_not_duplicate_an_already_prepared_episode_task(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -223,8 +223,8 @@ def test_operator_does_not_duplicate_an_already_prepared_situation_task(
     raw_state = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
     raw_state.update(
         {
-            "current_situation_id": "situation-001",
-            "editor_task_id": "situation-001-revision-002",
+            "current_situation_id": "__episode__",
+            "editor_task_id": "__episode__-revision-002",
         }
     )
     (run / "run_state.json").write_text(
@@ -243,8 +243,8 @@ def test_operator_does_not_duplicate_an_already_prepared_situation_task(
 
     assert cli._operator_command(run) == 0
     payload = json.loads((run / "operator_status.json").read_text(encoding="utf-8"))
-    assert payload["action"] == "PREPARE_SITUATION_JOB"
-    assert payload["task_id"] == "situation-001-revision-002"
+    assert payload["action"] == "PREPARE_EPISODE_REVIEW_JOB"
+    assert payload["task_id"] == "__episode__-revision-002"
 
 
 def test_operator_status_marks_user_gate_without_antigravity_work(

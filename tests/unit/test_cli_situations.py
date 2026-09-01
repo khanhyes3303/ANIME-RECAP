@@ -33,7 +33,7 @@ from anime_review_mvp.situations import (
     SituationTts,
     SituationTtsManifest,
 )
-from anime_review_mvp.workflow import Stage, new_state, read_state
+from anime_review_mvp.workflow import Stage, begin_editor_task, new_state, read_state
 
 
 def _empty_run(tmp_path: Path) -> Path:
@@ -69,7 +69,7 @@ def test_migrate_to_structure_archives_old_revision_outputs(
         episode_dir=episode,
         source_video=Path(state.source_video),
     )
-    cli.begin_editor_task(run, task_id, "situation-001", 2)
+    begin_editor_task(run, task_id, "situation-001", 2)
     old_task = run / "editor_tasks" / f"{task_id}.json"
     old_task.parent.mkdir(parents=True)
     old_task.write_text('{"old":true}\n', encoding="utf-8")
@@ -279,7 +279,7 @@ def test_parser_exposes_structure_handoff_commands() -> None:
     assert accept.command == "accept-situation-index"
 
 
-def test_timeline_failure_routes_current_situation_to_editor_repair(
+def test_timeline_failure_routes_complete_episode_to_editor_repair(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _empty_run(tmp_path)
@@ -287,7 +287,7 @@ def test_timeline_failure_routes_current_situation_to_editor_repair(
     raw_state.update(
         {
             "stage": Stage.LAP_TIMELINE_TINH_HUONG.value,
-            "current_situation_id": "situation-041",
+            "current_situation_id": "__episode__",
             "editorial_revision": 6,
         }
     )
@@ -295,6 +295,7 @@ def test_timeline_failure_routes_current_situation_to_editor_repair(
 
     monkeypatch.setattr(cli, "load_narration_plan", lambda _path: object())
     monkeypatch.setattr(cli, "validate_episode_voice_budget", lambda *_args: None)
+    monkeypatch.setattr(cli, "require_json_pair_manifest", lambda *_args: object())
     measured_shots = object()
     monkeypatch.setattr(
         cli,
@@ -339,14 +340,14 @@ def test_timeline_failure_routes_current_situation_to_editor_repair(
     assert cli._timeline_command(run, "situation-041") == 1
     repaired = read_state(run)
     assert repaired.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
-    assert repaired.current_situation_id == "situation-041"
+    assert repaired.current_situation_id == "__episode__"
     assert repaired.editorial_revision == 7
     assert repair_notes == [
         "SEMANTIC_TIMELINE_DOES_NOT_FIT: rewrite narration or select more evidence"
     ]
 
 
-def test_partial_timeline_skips_full_episode_voice_budget(
+def test_timeline_always_enforces_full_episode_voice_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     run = _empty_run(tmp_path)
@@ -354,7 +355,7 @@ def test_partial_timeline_skips_full_episode_voice_budget(
     raw_state.update(
         {
             "stage": Stage.LAP_TIMELINE_TINH_HUONG.value,
-            "current_situation_id": "situation-001",
+            "current_situation_id": "__episode__",
             "locked_situation_ids": [],
         }
     )
@@ -376,10 +377,11 @@ def test_partial_timeline_skips_full_episode_voice_budget(
     monkeypatch.setattr(cli, "load_situation_index", lambda *_args: index)
     monkeypatch.setattr(cli, "_frame_refs", lambda _run: ())
 
-    def forbidden_budget(*_args: object) -> None:
-        raise AssertionError("full episode budget ran before all situations were accepted")
-
-    monkeypatch.setattr(cli, "validate_episode_voice_budget", forbidden_budget)
+    budgets: list[object] = []
+    monkeypatch.setattr(
+        cli, "validate_episode_voice_budget", lambda *_args: budgets.append(object())
+    )
+    monkeypatch.setattr(cli, "require_json_pair_manifest", lambda *_args: object())
 
     observed: list[bool] = []
 
@@ -400,10 +402,11 @@ def test_partial_timeline_skips_full_episode_voice_budget(
     monkeypatch.setattr(cli, "_editor_task_command", lambda *_args, **_kwargs: 0)
 
     assert cli._timeline_command(run, "situation-001") == 1
-    assert observed == [False]
+    assert observed == [True]
+    assert len(budgets) == 1
 
 
-def test_accepted_index_drives_a_scoped_editor_task(tmp_path: Path) -> None:
+def test_accepted_index_drives_one_whole_episode_editor_task(tmp_path: Path) -> None:
     run = _empty_run(tmp_path)
     old = read_state(run)
     episode = Path(old.episode_dir)
@@ -494,11 +497,16 @@ def test_accepted_index_drives_a_scoped_editor_task(tmp_path: Path) -> None:
     assert cli._editor_task_command(run) == 0
 
     packet = json.loads((run / "cong_viec_antigravity.json").read_text(encoding="utf-8"))
-    assert packet["situation_id"] == "situation-002"
-    assert [item["text"] for item in packet["transcript"]["segments"]] == ["Jiro meets the enemy"]
-    assert [item["shot_id"] for item in packet["shots"]["shots"]] == ["shot-002"]
-    assert packet["frame_manifest_path"].endswith("frames.json")
-    assert "frame_manifest.json" not in packet["frame_manifest_path"]
+    assert packet["task_kind"] == "EPISODE_REVIEW"
+    assert packet["situation_id"] == "__episode__"
+    assert packet["situation_index_path"].endswith("situation_index.json")
+    assert packet["transcript_paths"][0].endswith("transcript_english.json")
+    assert packet["shot_manifest_path"].endswith("shots.json")
+    assert packet["frame_manifest_path"].endswith("frame_manifest.json")
+    assert packet["required_outputs"] == [
+        "situations_draft.json",
+        "narration_draft.json",
+    ]
     prompt = (run / "PROMPT_GUI_ANTIGRAVITY.txt").read_text(encoding="utf-8")
     assert f'accept-antigravity --run "{run.resolve()}"' in prompt
     assert f'operator --run "{run.resolve()}"' in prompt
