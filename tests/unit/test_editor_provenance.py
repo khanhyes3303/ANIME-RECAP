@@ -91,6 +91,58 @@ def test_editor_task_accepts_verifier_task_kinds(tmp_path: Path) -> None:
     assert task.task_kind == "SITUATION_AUDIT"
 
 
+def test_episode_review_task_uses_complete_episode_outputs(tmp_path: Path) -> None:
+    source = tmp_path / "situation_index.json"
+    source.write_text("{}", encoding="utf-8")
+
+    task = create_editor_task(
+        tmp_path / "run",
+        "run-001",
+        "__episode__",
+        1,
+        (source,),
+        task_kind="EPISODE_REVIEW",
+    )
+
+    assert task.task_kind == "EPISODE_REVIEW"
+    assert task.situation_id == "__episode__"
+    assert task.allowed_outputs == (
+        "situations_draft.json",
+        "narration_draft.json",
+    )
+
+
+def test_episode_review_acceptance_is_idempotent_after_reconnect(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    source = tmp_path / "situation_index.json"
+    source.write_text('{"situations":[]}', encoding="utf-8")
+    task = create_editor_task(
+        run,
+        "run-001",
+        "__episode__",
+        1,
+        (source,),
+        task_kind="EPISODE_REVIEW",
+    )
+    staging = run / "editor_staging" / task.task_id
+    staging.mkdir(parents=True)
+    (staging / "situations_draft.json").write_text(
+        '{"situations":[]}', encoding="utf-8"
+    )
+    (staging / "narration_draft.json").write_text(
+        '{"units":[]}', encoding="utf-8"
+    )
+
+    first = accept_antigravity_submission(run, task.task_id, staging)
+    second = accept_antigravity_submission(run, task.task_id, staging)
+
+    assert second == first
+    assert len(load_editor_ledger(run / "editor_ledger.jsonl")) == 1
+    accepted = run / "accepted_editorial" / "__episode__" / "revision-001"
+    assert (accepted / "situations_draft.json").is_file()
+    assert (accepted / "narration_draft.json").is_file()
+
+
 def test_load_verifier_ledger_round_trips_records(tmp_path: Path) -> None:
     ledger_path = tmp_path / "verifier_ledger.jsonl"
     record = AcceptedVerifierRevision(

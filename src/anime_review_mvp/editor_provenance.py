@@ -11,7 +11,17 @@ from pathlib import Path
 from .errors import MvpError
 from .jsonio import atomic_append_jsonl, atomic_dump_json, load_json
 
-_EDITOR_TASK_KINDS = {"STRUCTURE", "SITUATION", "SITUATION_AUDIT", "PROXY_AUDIT"}
+_EDITOR_TASK_KINDS = {
+    "STRUCTURE",
+    "SITUATION",
+    "EPISODE_REVIEW",
+    "SITUATION_AUDIT",
+    "PROXY_AUDIT",
+}
+_EDITOR_TASK_OUTPUTS = {
+    "SITUATION": ("situation_draft.json", "narration_draft.json"),
+    "EPISODE_REVIEW": ("situations_draft.json", "narration_draft.json"),
+}
 
 
 @dataclass(frozen=True)
@@ -102,15 +112,13 @@ def create_editor_task(
     *,
     task_kind: str = "SITUATION",
     task_id: str | None = None,
-    allowed_outputs: tuple[str, ...] = (
-        "situation_draft.json",
-        "narration_draft.json",
-    ),
+    allowed_outputs: tuple[str, ...] | None = None,
     expected_stage: str = "ANTIGRAVITY_EDITORIAL",
 ) -> EditorTask:
     from .antigravity import calculate_policy_sha256
 
-    if revision < 1 or not input_paths or not allowed_outputs:
+    resolved_outputs = allowed_outputs or _EDITOR_TASK_OUTPUTS.get(task_kind)
+    if revision < 1 or not input_paths or not resolved_outputs:
         raise MvpError("EDITOR_TASK_INVALID")
     resolved_inputs = tuple(path.resolve() for path in input_paths)
     task = EditorTask(
@@ -121,7 +129,7 @@ def create_editor_task(
         expected_stage=expected_stage,
         input_paths=tuple(str(path) for path in resolved_inputs),
         input_sha256=_input_sha256(resolved_inputs),
-        allowed_outputs=allowed_outputs,
+        allowed_outputs=resolved_outputs,
         task_kind=task_kind,
         policy_sha256=calculate_policy_sha256(Path(__file__).resolve().parents[2]),
     )
@@ -200,12 +208,14 @@ def accept_antigravity_submission(
 ) -> AcceptedEditorialRevision:
     task_path = run_dir / "editor_tasks" / f"{task_id}.json"
     task = load_editor_task(task_path)
-    if task.task_kind != "SITUATION":
+    if task.task_kind not in {"SITUATION", "EPISODE_REVIEW"}:
         raise MvpError("EDITOR_TASK_KIND_INVALID")
     ledger_path = run_dir / "editor_ledger.jsonl"
-    if any(
+    ledger = load_editor_ledger(ledger_path)
+    prior = next((record for record in ledger if record.task_id == task.task_id), None)
+    if prior is None and any(
         record.situation_id == task.situation_id and record.revision >= task.revision
-        for record in load_editor_ledger(ledger_path)
+        for record in ledger
     ):
         raise MvpError("EDITOR_REVISION_STALE")
     validate_task_inputs(task)
@@ -228,6 +238,22 @@ def accept_antigravity_submission(
         / task.situation_id
         / f"revision-{task.revision:03d}"
     )
+    situation_name = (
+        "situations_draft.json"
+        if task.task_kind == "EPISODE_REVIEW"
+        else "situation_draft.json"
+    )
+    situation_hash = _file_sha256(sources[situation_name])
+    narration_hash = _file_sha256(sources["narration_draft.json"])
+    if prior is not None:
+        if (
+            prior.input_sha256 != task.input_sha256
+            or prior.policy_sha256 != task.policy_sha256
+            or prior.situation_sha256 != situation_hash
+            or prior.narration_sha256 != narration_hash
+        ):
+            raise MvpError("EDITOR_REVISION_STALE")
+        return prior
     for name, source in sources.items():
         _atomic_copy(source, accepted_dir / name)
     accepted = AcceptedEditorialRevision(
@@ -237,8 +263,8 @@ def accept_antigravity_submission(
         revision=task.revision,
         actor="ANTIGRAVITY",
         input_sha256=task.input_sha256,
-        situation_sha256=_file_sha256(accepted_dir / "situation_draft.json"),
-        narration_sha256=_file_sha256(accepted_dir / "narration_draft.json"),
+        situation_sha256=situation_hash,
+        narration_sha256=narration_hash,
         policy_sha256=task.policy_sha256,
     )
     atomic_append_jsonl(ledger_path, accepted)
