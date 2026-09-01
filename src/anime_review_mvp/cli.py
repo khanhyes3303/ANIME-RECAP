@@ -3312,6 +3312,7 @@ def _archive_evidence_locked_revision(run_dir: Path, episode: Path) -> Path:
         "final_render_result.json",
         "loudness_report.json",
         "normalized_narration.wav",
+        "operator_status.json",
         "semantic_timeline.json",
         "situation_index.json",
         "verifier_ledger.jsonl",

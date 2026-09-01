@@ -116,6 +116,8 @@ def test_evidence_locked_rebuild_archives_editorial_chain_but_keeps_observations
     stale_proxy = run / "proxy" / "review_proxy.mp4"
     stale_proxy.parent.mkdir(parents=True)
     stale_proxy.write_bytes(b"stale proxy")
+    stale_operator_status = run / "operator_status.json"
+    stale_operator_status.write_text('{"stage":"OLD"}\n', encoding="utf-8")
     stale_episode = episode / "Kich_ban" / "narration_plan.json"
     stale_episode.write_text('{"stale":true}\n', encoding="utf-8")
     stale_tts_cache = episode / "_Cache" / "cue_tts" / "bad-key" / "audio.wav"
@@ -130,12 +132,14 @@ def test_evidence_locked_rebuild_archives_editorial_chain_but_keeps_observations
     archive = run / "revisions" / "evidence-locked-rebuild-revision-001"
     assert (archive / "run" / "accepted_editorial" / "situation-001" / "draft.json").is_file()
     assert (archive / "run" / "proxy" / "review_proxy.mp4").is_file()
+    assert (archive / "run" / "operator_status.json").is_file()
     assert (archive / "episode" / "Kich_ban" / "narration_plan.json").is_file()
     assert (
         archive / "episode" / "_Cache" / "cue_tts" / "bad-key" / "audio.wav"
     ).is_file()
     assert not stale_run.exists()
     assert not stale_proxy.exists()
+    assert not stale_operator_status.exists()
     assert not stale_episode.exists()
     assert not stale_tts_cache.exists()
     state = read_state(run)
