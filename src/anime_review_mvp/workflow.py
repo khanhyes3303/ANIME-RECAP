@@ -722,8 +722,13 @@ def reset_for_evidence_locked_rebuild(run_dir: Path) -> RunState:
 def reset_for_whole_episode_review(run_dir: Path) -> RunState:
     """Discard legacy per-situation progress while preserving an accepted index."""
     state = read_state(run_dir)
+    identity = capture_run_code_identity(Path(__file__).resolve().parents[2])
     state = replace(
         state,
+        repository_root=identity.repository_root,
+        code_commit=identity.git_commit,
+        contract_version=identity.contract_version,
+        policy_sha256=identity.policy_sha256,
         stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
         repair_history=(),
         stage_metrics=(),

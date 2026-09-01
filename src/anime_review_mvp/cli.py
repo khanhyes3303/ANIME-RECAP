@@ -3147,7 +3147,13 @@ def _timeline_command(run_dir: Path, situation_id: str | None) -> int:
 
 
 def _migrate_run(run_dir: Path, reason: str) -> int:
-    state, episode = _episode(run_dir)
+    if reason == "whole-episode-review":
+        state = read_state(run_dir)
+        if not state.episode_dir:
+            raise MvpError("run state has no episode directory")
+        episode = Path(state.episode_dir)
+    else:
+        state, episode = _episode(run_dir)
     if reason == "autonomous-operator":
         # Migration is metadata-only: accepted ledgers and artifacts remain untouched.
         if state.stage is Stage.CHO_NGUOI_DUNG_DUYET_PROXY:
@@ -3512,7 +3518,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
     try:
-        if args.command != "start" and hasattr(args, "run"):
+        identity_migration = (
+            args.command == "migrate-run" and args.reason == "whole-episode-review"
+        )
+        if args.command != "start" and hasattr(args, "run") and not identity_migration:
             _validate_run_command_identity(args.run)
         if args.command == "start":
             return _start(args)
