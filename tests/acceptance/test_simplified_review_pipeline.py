@@ -93,7 +93,7 @@ def test_simplified_pipeline_builds_real_timeline_and_validates_evidence_offline
     assert partial_edl.total_duration_ms == 210_000
     assert edl.total_duration_ms == 420_000
     assert all(segment.playback_rate == 1.0 for segment in edl.segments)
-    assert timeline.cues[1].spoken_start_ms - timeline.cues[0].spoken_end_ms <= 1_200
+    assert timeline.cues[1].spoken_start_ms - timeline.cues[0].spoken_end_ms <= 600
 
     cue_evidence = tuple(
         CueProxyEvidence(

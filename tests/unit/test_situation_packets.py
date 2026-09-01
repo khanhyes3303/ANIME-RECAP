@@ -84,7 +84,8 @@ def test_prompt_defines_local_situation_editor_contract(tmp_path: Path) -> None:
     assert str(packet.policy.target_minimum_ms) in normalized
     assert str(packet.policy.target_maximum_ms) in normalized
     assert "mỗi cue chỉ được khóa vào đúng một evidence range" in normalized
-    assert "1200 ms" in normalized
+    assert "600 ms" in normalized
+    assert "tối đa 55 từ" in normalized
     assert "Gemini Web" not in prompt
 
 

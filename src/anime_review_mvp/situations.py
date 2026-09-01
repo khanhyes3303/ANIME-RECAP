@@ -176,8 +176,8 @@ class NarrationCue:
     mentions_characters: tuple[str, ...]
     introduces_terms: tuple[str, ...]
     mentions_terms: tuple[str, ...]
-    visual_preroll_ms: int = 500
-    visual_postroll_ms: int = 300
+    visual_preroll_ms: int = 200
+    visual_postroll_ms: int = 100
 
     def __post_init__(self) -> None:
         _non_empty(self.cue_id, "cue_id")
@@ -199,7 +199,7 @@ class NarrationCue:
             raise MvpError("visual anchor kind is invalid")
         if not self.frame_refs or not self.shot_ids:
             raise MvpError("narration cue requires frame and shot evidence")
-        if not 300 <= self.visual_preroll_ms <= 1_200:
+        if not 100 <= self.visual_preroll_ms <= 1_200:
             raise MvpError("visual preroll is invalid")
         if not 0 <= self.visual_postroll_ms <= 1_200:
             raise MvpError("visual postroll is invalid")

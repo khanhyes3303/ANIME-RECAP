@@ -10,6 +10,8 @@ from .situation_validation import validate_keep_skip
 from .situations import CueTtsManifest, EditorialPolicy, NarrationPlan, cue_evidence_range
 from .tts import validate_cue_tts_ids
 
+MAX_NARRATION_GAP_MS = 600
+
 
 @dataclass(frozen=True, slots=True)
 class CueTiming:
@@ -123,9 +125,9 @@ def select_cue_source_window(
             spoken_end_ms = spoken_start_ms + voice_ms
             trailing_ms = program_ms - spoken_end_ms - cue.visual_postroll_ms
             if (
-                spoken_start_ms > 1_200
+                spoken_start_ms > MAX_NARRATION_GAP_MS
                 or trailing_ms < 0
-                or trailing_ms + cue.visual_postroll_ms > 1_200
+                or trailing_ms + cue.visual_postroll_ms > MAX_NARRATION_GAP_MS
             ):
                 continue
             candidates.append(
@@ -143,7 +145,9 @@ def select_cue_source_window(
             f"cue_id={cue.cue_id} evidence_ms={evidence_ms} voice_ms={voice_ms} "
             f"rate={policy.minimum_playback_rate:.2f}-{policy.maximum_playback_rate:.2f}"
         )
-    return min(candidates, key=lambda item: item[:3])[3]
+    # When narration is shorter than accepted footage, prefer the shortest valid
+    # visual window. This spends spare duration on playback speed instead of dead air.
+    return min(candidates, key=lambda item: (item[2], item[0], item[1]))[3]
 
 
 def build_semantic_timeline(
@@ -192,7 +196,10 @@ def build_semantic_timeline(
                 if previous_spoken_end >= 0
                 else spoken_start
             )
-            if spoken_end + cue.visual_postroll_ms > segment_end or gap_ms > 1_200:
+            if (
+                spoken_end + cue.visual_postroll_ms > segment_end
+                or gap_ms > MAX_NARRATION_GAP_MS
+            ):
                 raise MvpError(
                     "SEMANTIC_TIMELINE_DOES_NOT_FIT: CUE_TIMELINE_DOES_NOT_FIT "
                     f"cue_id={cue.cue_id} gap_ms={gap_ms} voice_ms={voice_ms}"
@@ -223,7 +230,7 @@ def build_semantic_timeline(
             "SEMANTIC_TIMELINE_DURATION_INVALID: Antigravity must revise accepted "
             "cue evidence to fit 7-12 minutes"
         )
-    if timings and program_cursor - timings[-1].spoken_end_ms > 1_200:
+    if timings and program_cursor - timings[-1].spoken_end_ms > MAX_NARRATION_GAP_MS:
         raise MvpError("SEMANTIC_TIMELINE_DOES_NOT_FIT: trailing footage lacks narration")
     edl = AdaptiveEdlDocument(tuple(segments), program_cursor)
     return edl, SemanticTimeline(tuple(timings), program_cursor)
@@ -247,7 +254,11 @@ def semantic_timing_findings(
                     (),
                 )
             )
-    if total_duration_ms is not None and cues and cues[0].spoken_start_ms > 1_200:
+    if (
+        total_duration_ms is not None
+        and cues
+        and cues[0].spoken_start_ms > MAX_NARRATION_GAP_MS
+    ):
         findings.append(
             AuditFinding(
                 "ERROR",
@@ -259,19 +270,20 @@ def semantic_timing_findings(
         )
     for current, following in pairwise(cues if total_duration_ms is not None else ()):
         gap_ms = following.spoken_start_ms - current.spoken_end_ms
-        if gap_ms > 1_200:
+        if gap_ms > MAX_NARRATION_GAP_MS:
             findings.append(
                 AuditFinding(
                     "ERROR",
                     "NARRATION_GAP_TOO_LONG",
                     following.cue_id,
-                    f"Narration gap is {gap_ms} ms; maximum is 1200 ms.",
+                    f"Narration gap is {gap_ms} ms; maximum is "
+                    f"{MAX_NARRATION_GAP_MS} ms.",
                     (),
                 )
             )
     if total_duration_ms is not None and cues:
         trailing_ms = total_duration_ms - cues[-1].spoken_end_ms
-        if trailing_ms > 1_200:
+        if trailing_ms > MAX_NARRATION_GAP_MS:
             findings.append(
                 AuditFinding(
                     "ERROR",

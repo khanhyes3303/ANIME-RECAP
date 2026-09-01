@@ -27,6 +27,33 @@ def _normalized_words(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
 
 
+def validate_narration_style(plan: NarrationPlan) -> None:
+    """Reject cue text that is too dense or relies on stock AI intensifiers."""
+    if plan.policy_version != "situation-v2":
+        return
+    intensifiers = ("vô cùng", "hoàn toàn", "ngay lập tức", "tột độ")
+    episode_counts: Counter[str] = Counter()
+    for unit in plan.units:
+        for cue in unit.cues:
+            word_count = len(_normalized_words(cue.text))
+            if word_count > 55:
+                raise MvpError(
+                    "NARRATION_CUE_TOO_LONG: "
+                    f"cue_id={cue.cue_id} words={word_count} maximum=55"
+                )
+            normalized = " ".join(_normalized_words(cue.text))
+            for phrase in intensifiers:
+                episode_counts[phrase] += normalized.count(phrase)
+    repeated = tuple(
+        f"{phrase}={count}" for phrase, count in episode_counts.items() if count > 2
+    )
+    if repeated:
+        raise MvpError(
+            "NARRATION_STYLE_REPETITIVE: reduce stock intensifiers: "
+            + ", ".join(repeated)
+        )
+
+
 def validate_cue_transcript_grounding(
     plan: NarrationPlan,
     transcript: TranscriptDocument,
@@ -258,6 +285,7 @@ def validate_narration_plan(
 ) -> None:
     if plan.policy_version != situations.policy_version:
         raise MvpError("narration and situation policy versions must match")
+    validate_narration_style(plan)
     situation_by_id = {item.situation_id: item for item in situations.situations}
     uses_scoped_v2_evidence = plan.policy_version == "situation-v2"
     known_events = set() if truth is None else {item.event_id for item in truth.events}

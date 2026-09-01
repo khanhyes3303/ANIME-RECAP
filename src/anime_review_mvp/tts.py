@@ -3,12 +3,14 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import math
 import os
 import re
 import shutil
 import subprocess
 import unicodedata
 import wave
+from array import array
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -111,6 +113,54 @@ def normalize_speech_text(text: str) -> str:
     if not normalized:
         raise MvpError("speech text must not be empty")
     return normalized
+
+
+def prepare_cue_speech_text(text: str) -> str:
+    """Keep readable script punctuation while avoiding a forced pause at cue end."""
+    normalized = normalize_speech_text(text)
+    without_terminal_pause = re.sub(r"[.!?…]+$", "", normalized).rstrip()
+    return without_terminal_pause or normalized
+
+
+def _trim_wav_edge_silence(
+    path: Path,
+    *,
+    threshold_dbfs: float = -40.0,
+    window_ms: int = 20,
+    padding_ms: int = 40,
+) -> None:
+    """Trim provider-added edge silence while retaining a small natural buffer."""
+    with wave.open(str(path), "rb") as source:
+        params = source.getparams()
+        frames = source.readframes(source.getnframes())
+    if params.sampwidth != 2 or not frames:
+        return
+    samples = array("h")
+    samples.frombytes(frames)
+    channels = params.nchannels
+    frame_count = len(samples) // channels
+    window_frames = max(1, round(params.framerate * window_ms / 1_000))
+    threshold = 32_767 * (10 ** (threshold_dbfs / 20))
+    active_windows: list[tuple[int, int]] = []
+    for start_frame in range(0, frame_count, window_frames):
+        end_frame = min(frame_count, start_frame + window_frames)
+        start_sample = start_frame * channels
+        end_sample = end_frame * channels
+        window = samples[start_sample:end_sample]
+        rms = math.sqrt(sum(sample * sample for sample in window) / max(1, len(window)))
+        if rms >= threshold:
+            active_windows.append((start_frame, end_frame))
+    if not active_windows:
+        return
+    padding_frames = round(params.framerate * padding_ms / 1_000)
+    keep_start = max(0, active_windows[0][0] - padding_frames)
+    keep_end = min(frame_count, active_windows[-1][1] + padding_frames)
+    if keep_start == 0 and keep_end == frame_count:
+        return
+    trimmed = samples[keep_start * channels : keep_end * channels]
+    with wave.open(str(path), "wb") as target:
+        target.setparams(params)
+        target.writeframes(trimmed.tobytes())
 
 
 def plan_chunks(text: str, *, character_ceiling: int = 150) -> tuple[str, ...]:
@@ -380,6 +430,7 @@ def _situation_tts_cache_key(
     profile: VoiceProfile,
     policy_version: str,
     source_sha256: str,
+    processing_version: str = "raw-v1",
 ) -> str:
     raw = "\0".join(
         (
@@ -388,6 +439,7 @@ def _situation_tts_cache_key(
             profile.voice_id,
             policy_version,
             source_sha256,
+            processing_version,
         )
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -512,8 +564,13 @@ def synthesize_narration_cues(
         if unit.status != "LOCKED":
             raise MvpError(f"cue TTS requires LOCKED unit: {unit.unit_id}")
         for cue in unit.cues:
+            speech_text = prepare_cue_speech_text(cue.text)
             cache_key = _situation_tts_cache_key(
-                cue.text, profile, plan.policy_version, source_sha256
+                speech_text,
+                profile,
+                plan.policy_version,
+                source_sha256,
+                "cue-tight-v1",
             )
             entry = cache_dir / cache_key
             cached_mp3 = entry / "audio.mp3"
@@ -526,7 +583,7 @@ def synthesize_narration_cues(
             else:
                 entry.mkdir(parents=True, exist_ok=True)
                 synthesis = engine.synthesize(
-                    plan_chunks(cue.text, character_ceiling=policy.character_ceiling),
+                    plan_chunks(speech_text, character_ceiling=policy.character_ceiling),
                     profile,
                     policy,
                 )
@@ -534,6 +591,7 @@ def synthesize_narration_cues(
                 temp_wav = entry / "audio.tmp.wav"
                 temp_mp3.write_bytes(b"".join(chunk.audio for chunk in synthesis.chunks))
                 converter(temp_mp3, temp_wav)
+                _trim_wav_edge_silence(temp_wav)
                 duration_ms = _wav_duration_ms(temp_wav)
                 os.replace(temp_mp3, cached_mp3)
                 os.replace(temp_wav, cached_wav)

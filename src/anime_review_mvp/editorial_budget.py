@@ -18,7 +18,7 @@ def validate_episode_voice_budget(
     policy: EditorialPolicy,
     *,
     minimum_inter_cue_pause_ms: int = 80,
-    maximum_inter_cue_pause_ms: int = 1_200,
+    maximum_inter_cue_pause_ms: int = 600,
 ) -> EpisodeVoiceBudget:
     """Reject narration that cannot fit the production duration window.
 

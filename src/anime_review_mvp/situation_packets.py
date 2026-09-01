@@ -173,12 +173,17 @@ transcript refs của cue. Không dùng chung phạm vi toàn tình huống đ�
 kể về hai hành động khác nhau. Voice của cue phải nằm trọn trong range đó.
 Hình phải xuất hiện trước câu kể theo preroll. Viết đủ nguyên nhân–diễn biến–kết quả để
 người chưa biết anime vẫn hiểu. Văn phong dân dã, tự nhiên, được thô tục khi hợp ngữ cảnh;
-không bịa sự kiện, động cơ hoặc người nói.
+không bịa sự kiện, động cơ hoặc người nói. Mỗi cue tối đa 55 từ; nếu dài hơn phải tách
+theo đúng hành động/cảnh và khóa mỗi cue mới vào bằng chứng riêng. Viết như người đang
+kể chuyện bằng miệng: câu gọn, chủ động, ít tính từ; tránh lặp các cụm máy móc như
+"vô cùng", "hoàn toàn", "ngay lập tức" và "tột độ".
 
 Toàn tập sau khi ghép bắt buộc nằm trong {policy.target_minimum_ms}–
 {policy.target_maximum_ms} ms. Viết đủ thông tin cốt truyện để voice toàn tập đạt ngân
-sách này; không kéo dài bằng cảnh thừa, im lặng hoặc lặp ý. Các cue phải nối liên tục,
-khoảng nghỉ không quá 1200 ms. Nếu tổng TTS chưa thể đạt 7 phút, engine sẽ trả tình
+sách này; không kéo dài bằng cảnh thừa, im lặng hoặc lặp ý. Các cue phải nối liên tục.
+Đặt `visual_preroll_ms` khoảng 100–300 ms và `visual_postroll_ms` khoảng 50–150 ms để
+khoảng nghỉ thông thường nằm trong 180–450 ms; tuyệt đối không quá 600 ms. Nếu tổng TTS
+chưa thể đạt 7 phút, engine sẽ trả tình
 huống về cho Antigravity viết lại; engine không tự kéo, nén hay viết thay.
 
 Xử lý xong và khóa một tình huống rồi engine mới được chuyển sang tình huống kế tiếp.

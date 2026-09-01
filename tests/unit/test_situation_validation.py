@@ -22,6 +22,7 @@ from anime_review_mvp.situation_validation import (
     validate_edl_exclusions,
     validate_keep_skip,
     validate_narration_plan,
+    validate_narration_style,
     validate_semantic_range,
     validate_situations,
 )
@@ -324,6 +325,53 @@ def test_v2_validation_uses_scoped_evidence_without_legacy_truth() -> None:
     validate_narration_plan(
         plan, document, None, SHOTS, POLICY, 20_000, require_bridges=False
     )
+
+
+def test_v2_style_rejects_cue_over_55_words() -> None:
+    source_range = replace(
+        _range("range-001", 1_000, 4_000, "shot-001"),
+        semantic_event_id="event-001",
+        action_phase="REACTION",
+        story_purpose="Jiro phản ứng.",
+        shot_uses=(SemanticShotUse("shot-001", "event-001", "REACTION", "Jiro phản ứng."),),
+    )
+    cue = NarrationCue(
+        "cue-001", "situation-001", " ".join(["chuyện"] * 56),
+        ("claim-001",), 1_500, "REVEAL", ("transcript-001",),
+        ("frame-range-001",), ("shot-001",), (), (), (), (),
+    )
+    plan = NarrationPlan(
+        "LOCAL_EDITOR", "situation-v2",
+        (replace(_plan(source_range).units[0], cues=(cue,)),),
+        (NarrationClaim("claim-001", "Có chuyện xảy ra.", ("event-001",)),),
+    )
+
+    with pytest.raises(MvpError, match="NARRATION_CUE_TOO_LONG"):
+        validate_narration_style(plan)
+
+
+def test_v2_style_rejects_repeated_ai_intensifier() -> None:
+    source_range = replace(
+        _range("range-001", 1_000, 4_000, "shot-001"),
+        semantic_event_id="event-001",
+        action_phase="REACTION",
+        story_purpose="Jiro phản ứng.",
+        shot_uses=(SemanticShotUse("shot-001", "event-001", "REACTION", "Jiro phản ứng."),),
+    )
+    cue = NarrationCue(
+        "cue-001", "situation-001",
+        "Jiro vô cùng tức giận, rồi vô cùng bất ngờ và cuối cùng vô cùng lo lắng.",
+        ("claim-001",), 1_500, "REVEAL", ("transcript-001",),
+        ("frame-range-001",), ("shot-001",), (), (), (), (),
+    )
+    plan = NarrationPlan(
+        "LOCAL_EDITOR", "situation-v2",
+        (replace(_plan(source_range).units[0], cues=(cue,)),),
+        (NarrationClaim("claim-001", "Jiro thay đổi cảm xúc.", ("event-001",)),),
+    )
+
+    with pytest.raises(MvpError, match="NARRATION_STYLE_REPETITIVE"):
+        validate_narration_style(plan)
 
 
 def test_v2_cue_cannot_drop_transcript_grounding_from_its_range() -> None:

@@ -82,8 +82,8 @@ def _plan() -> NarrationPlan:
             ("Jiro",),
             (),
             (),
-            300,
-            300,
+            200,
+            100,
         ),
         NarrationCue(
             "cue-outcome",
@@ -99,8 +99,8 @@ def _plan() -> NarrationPlan:
             (),
             (),
             (),
-            300,
-            300,
+            200,
+            100,
         ),
     )
     unit = NarrationUnit(
@@ -168,7 +168,7 @@ def test_new_timeline_places_voice_after_visual_preroll() -> None:
     )
     assert [segment.range_id for segment in edl.segments] == ["range-approach", "range-outcome"]
     assert [cue.cue_id for cue in timeline.cues] == ["cue-approach", "cue-outcome"]
-    assert all(cue.spoken_start_ms >= cue.visual_anchor_program_ms + 300 for cue in timeline.cues)
+    assert all(cue.spoken_start_ms >= cue.visual_anchor_program_ms + 200 for cue in timeline.cues)
     assert semantic_timing_findings(timeline.cues) == ()
     assert edl.total_duration_ms == timeline.total_duration_ms
     assert map_source_timestamp(edl, 3_800) == timeline.cues[1].visual_anchor_program_ms
@@ -218,7 +218,7 @@ def test_cue_window_uses_only_the_compact_approved_shot() -> None:
     assert window.source_start_ms == 1_000
     assert window.source_end_ms == 4_000
     assert window.shot_ids == ("shot-001",)
-    assert window.playback_rate == pytest.approx(1.0)
+    assert window.playback_rate == pytest.approx(1.3)
 
 
 def test_cue_window_rejects_evidence_that_cuts_through_a_shot() -> None:
@@ -333,7 +333,7 @@ def test_semantic_timeline_rejects_surplus_instead_of_compacting_accepted_ranges
 def test_semantic_timing_rejects_gap_above_reference_continuity_limit() -> None:
     cues = (
         CueTiming("cue-001", 100, 1_000, 0),
-        CueTiming("cue-002", 2_201, 3_000, 2_000),
+        CueTiming("cue-002", 1_601, 2_400, 1_400),
     )
 
     codes = {finding.code for finding in semantic_timing_findings(cues, 3_000)}

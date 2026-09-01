@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import wave
+from array import array
 from dataclasses import replace
 from pathlib import Path
 
@@ -28,12 +29,14 @@ from anime_review_mvp.tts import (
 class CountingProvider:
     def __init__(self) -> None:
         self.calls = 0
+        self.requests: list[tuple[str, ...]] = []
 
     def synthesize(
         self, chunks: tuple[str, ...], profile: object, policy: object
     ) -> ProviderSynthesisResult:
         del profile, policy
         self.calls += 1
+        self.requests.append(chunks)
         return ProviderSynthesisResult(
             tuple(ProviderChunkResult(chunk.encode("utf-8"), 1) for chunk in chunks),
             (("provider", "fake"), ("voice_id", "BV074_streaming")),
@@ -47,6 +50,18 @@ def _converter(source: Path, output: Path) -> None:
         target.setsampwidth(2)
         target.setframerate(24_000)
         target.writeframes(b"\0\0" * 2_400)
+
+
+def _converter_with_edge_silence(source: Path, output: Path) -> None:
+    assert source.read_bytes()
+    samples = array("h", [0] * 2_400)
+    samples.extend([8_000] * 4_800)
+    samples.extend([0] * 4_800)
+    with wave.open(str(output), "wb") as target:
+        target.setnchannels(1)
+        target.setsampwidth(2)
+        target.setframerate(24_000)
+        target.writeframes(samples.tobytes())
 
 
 def _unit(index: int, text: str) -> NarrationUnit:
@@ -220,6 +235,35 @@ def test_v2_tts_synthesizes_each_cue_without_concatenating_narration(
     assert [cue.cue_id for cue in manifest.cues] == ["cue-001", "cue-002"]
     assert [cue.duration_ms for cue in manifest.cues] == [100, 100]
     assert not (tmp_path / "tts" / "narration.wav").exists()
+
+
+def test_v2_tts_removes_terminal_punctuation_from_provider_text(tmp_path: Path) -> None:
+    provider = CountingProvider()
+
+    synthesize_narration_cues(
+        _v2_plan(),
+        tmp_path / "tts",
+        tmp_path / "cache",
+        source_sha256="c" * 64,
+        provider=provider,
+        converter=_converter,
+    )
+
+    assert provider.requests == [("Jiro vừa về nhà",), ("Ông nội đã đứng chờ",)]
+    assert _v2_plan().units[0].cues[0].text.endswith(".")
+
+
+def test_v2_tts_trims_provider_silence_at_both_wav_edges(tmp_path: Path) -> None:
+    manifest = synthesize_narration_cues(
+        _v2_plan(),
+        tmp_path / "tts",
+        tmp_path / "cache",
+        source_sha256="d" * 64,
+        provider=CountingProvider(),
+        converter=_converter_with_edge_silence,
+    )
+
+    assert all(270 <= cue.duration_ms <= 320 for cue in manifest.cues)
 
 
 def test_cue_tts_manifest_order_must_match_plan(tmp_path: Path) -> None:

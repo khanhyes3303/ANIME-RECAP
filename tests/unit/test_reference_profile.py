@@ -19,9 +19,9 @@ def test_reference_profile_requires_real_video_with_matching_hash(tmp_path: Path
             {
                 "video_path": str(video),
                 "sha256": "0" * 64,
-                "normal_pause_min_ms": 350,
-                "normal_pause_max_ms": 900,
-                "hard_pause_max_ms": 1200,
+                "normal_pause_min_ms": 180,
+                "normal_pause_max_ms": 450,
+                "hard_pause_max_ms": 600,
             }
         ),
         encoding="utf-8",
@@ -36,4 +36,4 @@ def test_reference_profile_requires_real_video_with_matching_hash(tmp_path: Path
 
     profile = load_reference_profile(config)
     assert profile.video_path == str(video.resolve())
-    assert profile.hard_pause_max_ms == 1_200
+    assert profile.hard_pause_max_ms == 600

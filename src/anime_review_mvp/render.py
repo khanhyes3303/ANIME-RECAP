@@ -161,9 +161,9 @@ def build_filter_graph(
                 f"[joined]tpad=stop_mode=clone:stop_duration=0.125,"
                 f"trim=duration={duration:.3f},setpts=PTS-STARTPTS[timed]"
             )
-            filters.append("[timed]scale=-2:360[video]")
+            filters.append("[timed]scale=-2:720[video]")
         else:
-            filters.append("[joined]scale=-2:360[video]")
+            filters.append("[joined]scale=-2:720[video]")
     elif quality == "final":
         if isinstance(edl, AdaptiveEdlDocument):
             duration = edl.total_duration_ms / 1_000
@@ -206,7 +206,7 @@ def build_render_command(
         "libx264",
     ]
     if quality == "proxy":
-        command.extend(("-preset", "ultrafast", "-crf", "30"))
+        command.extend(("-preset", "veryfast", "-crf", "24"))
     command.extend(
         [
             "-pix_fmt",

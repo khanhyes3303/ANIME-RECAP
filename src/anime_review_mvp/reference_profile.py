@@ -32,6 +32,6 @@ def load_reference_profile(config_path: Path) -> ReferenceStyleProfile:
     actual_hash = hashlib.sha256(video.read_bytes()).hexdigest()
     if actual_hash != expected_hash:
         raise MvpError("REFERENCE_VIDEO_HASH_MISMATCH")
-    if not 0 <= normal_min <= normal_max <= hard_max <= 1_200:
+    if not 0 <= normal_min <= normal_max <= hard_max <= 600:
         raise MvpError("REFERENCE_PAUSE_PROFILE_INVALID")
     return ReferenceStyleProfile(str(video), expected_hash, normal_min, normal_max, hard_max)

@@ -36,5 +36,5 @@ def test_voice_budget_accepts_continuous_episode_inside_production_window() -> N
     budget = validate_episode_voice_budget(_manifest(210_000, 211_000), EditorialPolicy())
 
     assert budget.minimum_program_duration_ms == 421_080
-    assert budget.maximum_program_duration_ms == 422_200
+    assert budget.maximum_program_duration_ms == 421_600
     assert budget.total_voice_duration_ms == 421_000

@@ -153,7 +153,7 @@ def test_loudness_report_uses_measured_normalized_output(tmp_path: Path) -> None
     assert report.normalized_audio_sha256 == hashlib.sha256(b"normalized").hexdigest()
 
 
-def test_proxy_render_uses_360p_fast_preset_without_changing_timeline() -> None:
+def test_proxy_render_uses_readable_720p_preset_without_changing_timeline() -> None:
     command = build_render_command(
         Path("source.mp4"),
         Path("narration.wav"),
@@ -163,8 +163,9 @@ def test_proxy_render_uses_360p_fast_preset_without_changing_timeline() -> None:
     )
 
     graph = command[command.index("-filter_complex") + 1]
-    assert "scale=-2:360" in graph
-    assert command[command.index("-preset") + 1] == "ultrafast"
+    assert "scale=-2:720" in graph
+    assert command[command.index("-preset") + 1] == "veryfast"
+    assert command[command.index("-crf") + 1] == "24"
     assert "trim=start=0.000:end=1.000" in graph
 
 
