@@ -1,7 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image, ImageDraw
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.proxy_evidence import (
@@ -114,6 +116,35 @@ def test_proxy_audit_rejects_intro_at_start_boundary() -> None:
     )
     result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
     assert "INTRO_OPENING_LEAK" in result.finding_codes
+
+
+def test_proxy_audit_rejects_publisher_bumper_even_when_verifier_says_match(
+    tmp_path: Path,
+) -> None:
+    bumper = tmp_path / "program-middle.jpg"
+    image = Image.new("RGB", (320, 180), "white")
+    ImageDraw.Draw(image).rectangle((55, 35, 265, 145), fill=(230, 0, 0))
+    image.save(bumper)
+    evidence = _evidence("cue-001")
+    cue = evidence.cues[0]
+    program_frames = list(cue.program_frames)
+    program_frames[2] = replace(program_frames[2], path=str(bumper.resolve()))
+    evidence = replace(evidence, cues=(replace(cue, program_frames=tuple(program_frames)),))
+    review = _review("cue-001")
+    review.frame_refs = tuple(
+        frame.path for frame in (*evidence.cues[0].source_frames, *program_frames)
+    )
+    audit = SimpleNamespace(
+        cue_reviews=(review,),
+        boundary_reviews=(
+            SimpleNamespace(boundary="START", verdict="CLEAN"),
+            SimpleNamespace(boundary="END", verdict="CLEAN"),
+        ),
+    )
+
+    result = validate_proxy_audit(audit, _plan("cue-001"), evidence)
+
+    assert "PROXY_EXCLUDED_VISUAL_CONTENT" in result.finding_codes
 
 
 def test_proxy_audit_rejects_cue_scope_mismatch() -> None:

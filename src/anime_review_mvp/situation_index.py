@@ -7,6 +7,7 @@ from pathlib import Path, PurePath
 from .errors import MvpError
 from .jsonio import load_json
 from .models import ShotDocument, SourceRef, TranscriptDocument
+from .visual_guard import looks_like_publisher_bumper
 
 _SITUATION_ID = re.compile(r"situation-\d{3,}")
 
@@ -134,6 +135,13 @@ def validate_situation_index(
                 shot.end_ms,
             ):
                 raise MvpError("situation frame reference is outside its range")
+            frame_path = Path(frame_ref)
+            if (
+                not entry.excluded
+                and frame_path.is_file()
+                and looks_like_publisher_bumper(frame_path)
+            ):
+                raise MvpError(f"SOURCE_FRAME_EXCLUDED_CONTENT: {frame_shot_id}")
         if not entry.excluded:
             editable += 1
     if index.situations[0].source_start_ms != 0:

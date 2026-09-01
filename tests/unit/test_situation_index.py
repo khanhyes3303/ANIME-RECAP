@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PIL import Image, ImageDraw
 
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.models import (
@@ -102,6 +103,32 @@ def test_valid_index_is_ordered_and_selects_next_unlocked_editable_entry() -> No
     assert next_editable_situation(
         index, ("situation-002", "situation-003")
     ) is None
+
+
+def test_editable_situation_rejects_publisher_bumper_frame(tmp_path: Path) -> None:
+    frame = tmp_path / "shot-001.jpg"
+    image = Image.new("RGB", (320, 180), "white")
+    ImageDraw.Draw(image).rectangle((55, 35, 265, 145), fill=(230, 0, 0))
+    image.save(frame)
+    frame_ref = str(frame.resolve())
+    index = document(
+        entry(
+            "situation-001",
+            0,
+            5_000,
+            shot_ids=("shot-001",),
+            frame_refs=(frame_ref,),
+        ),
+        entry(
+            "situation-002",
+            5_000,
+            20_000,
+            shot_ids=("shot-002", "shot-003"),
+        ),
+    )
+
+    with pytest.raises(MvpError, match="SOURCE_FRAME_EXCLUDED_CONTENT: shot-001"):
+        validate_situation_index(index, SOURCE, TRANSCRIPT, SHOTS, (frame_ref,))
 
 
 def test_index_must_cover_source_without_gaps() -> None:

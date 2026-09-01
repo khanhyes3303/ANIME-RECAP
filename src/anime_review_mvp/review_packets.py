@@ -10,6 +10,7 @@ from .proxy_evidence import ProxyEvidenceManifest
 from .review_contracts import SituationAuditDocument
 from .situation_scope import SituationScope
 from .situations import NarrationPlan
+from .visual_guard import looks_like_publisher_bumper
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +259,16 @@ def validate_proxy_audit(
     reviews = tuple(getattr(audit, "cue_reviews", ()))
     observed = tuple(item.cue_id for item in reviews)
     codes: list[str] = []
+    evidence_frames = (
+        frame
+        for cue in evidence.cues
+        for frame in (*cue.source_frames, *cue.program_frames)
+    )
+    if any(
+        (path := Path(frame.path)).is_file() and looks_like_publisher_bumper(path)
+        for frame in evidence_frames
+    ):
+        codes.append("PROXY_EXCLUDED_VISUAL_CONTENT")
     if observed != expected or len(set(observed)) != len(observed):
         codes.append("PROXY_AUDIT_CUE_COVERAGE_INVALID")
     if len(getattr(audit, "boundary_reviews", ())) != 2:
