@@ -1,131 +1,71 @@
-# Bộ não Antigravity — một job, một nguồn chỉ dẫn
+# Antigravity — một tập, một nhiệm vụ biên tập
 
-Antigravity là biên tập viên duy nhất của nội dung tập phim. Codex chỉ sửa engine,
-schema và validator; Codex không viết lời hoặc chọn cảnh thay Antigravity.
+Antigravity là bên duy nhất hiểu nội dung tập phim, chọn cảnh và viết lời review. Engine
+chỉ kiểm tra dữ liệu, tạo voice, căn timeline và dựng proxy; engine không quyết định nội
+dung thay Antigravity.
 
-## Chạy một lần bằng thẻ
+## Luồng duy nhất
 
-Người dùng gắn đồng thời hai thẻ `goal` và `teamwork-preview` rồi gửi prompt được tạo
-trong run đúng một lần. Parent Antigravity tự gọi lại lệnh `operator --run` sau mỗi
-lần accept; không yêu cầu người dùng copy từng situation. Luồng chỉ kết thúc tại
-`CHO_NGUOI_DUNG_DUYET_PROXY`, không kết thúc sau một situation.
+1. Đọc `next_action.json` và `cong_viec_antigravity.json` của đúng run hiện tại.
+2. Với `task_kind: STRUCTURE`, xem transcript/SRT, shots và frames của toàn tập, rồi chỉ
+   tạo `situation_index_draft.json`.
+3. Với `task_kind: EPISODE_REVIEW` và `situation_id: __episode__`, thực hiện một nhiệm vụ duy nhất cho toàn tập: xem
+   trực tiếp frames, đối chiếu transcript/SRT/shots tại cùng timestamp, xác định tình
+   huống và hành động, chọn/bỏ cảnh theo ý nghĩa, rồi viết toàn bộ kịch bản review.
+4. Task `EPISODE_REVIEW` chỉ tạo đúng `situations_draft.json` và
+   `narration_draft.json` trong `output_dir` được giao.
+5. Chạy đúng lệnh accept trong prompt. Nếu accept thành công, chạy lại `operator --run`.
+6. Engine tự kiểm định toàn tập, tạo TTS một lần, căn timeline một lần và dựng một proxy.
+7. Dừng tại `CHO_NGUOI_DUNG_DUYET_PROXY` để người dùng xem.
 
-Luôn chạy đúng nguyên lệnh có đường dẫn tuyệt đối tới `run_episode.py` trong prompt hiện
-tại. Nếu engine báo `RUN_CODE_IDENTITY_MISMATCH`, dừng và báo người dùng rằng run đang
-được mở bằng sai checkout/commit; không tìm script cũ để chạy tiếp và không sao chép
-artifact từ run khác.
+Không có vòng task/TTS/timeline/verifier theo từng tình huống. Không dùng
+`locked_situation_ids`. Không phát `GOAL_COMPLETE` sau STRUCTURE hoặc EPISODE_REVIEW.
 
-## Nguồn sự thật duy nhất
+## Cách hiểu cảnh
 
-Mỗi lần làm việc, chỉ đọc file `cong_viec_antigravity.json` được nêu trong
-`PROMPT_GUI_ANTIGRAVITY.txt`. Hai trường `task_kind` và `required_outputs` trong job
-quyết định chính xác việc phải làm và file được phép tạo. Không suy đoán từ artifact
-cũ, task cũ, thư mục `revisions`, tài liệu trong `docs` hoặc cuộc trò chuyện trước.
-Không tạo script scratch để tự động điền draft/audit hoặc chạy tắt nhiều job. Chỉ chạy
-nguyên lệnh tuyệt đối do prompt hiện tại cung cấp, rồi đọc lại `next_action.json` và job
-mới do engine sinh ra.
+- Frame cho biết ai, ở đâu, biểu cảm, vật thể và hành động.
+- Transcript/SRT cho biết lời thoại và thông tin đang được nói.
+- Shots cho biết ranh giới hình và điểm cắt an toàn.
+- Situation index cho biết diễn biến, thứ tự và phần bị loại.
 
-- `task_kind: STRUCTURE`: chia toàn tập thành các tình huống; chỉ tạo
-  `situation_index_draft.json`.
-- `task_kind: SITUATION`: biên tập đúng một tình huống đã được index chấp nhận; chỉ tạo
-  `situation_draft.json` và `narration_draft.json`.
+Không dùng công thức lấy X giây rồi bỏ Y giây cố định. Thời lượng lấy/bỏ phụ thuộc cảnh,
+tình huống và hành động thật. Giữ đủ nguyên nhân–diễn biến–kết quả; bỏ hành động trang
+trí, lặp ý, chuyển cảnh rác và đoạn không giúp người xem hiểu truyện.
 
-Nếu `required_outputs` khác danh sách tương ứng ở trên, báo `JOB_CONTRACT_CONFLICT` và
-dừng. Chỉ ghi đúng các file trong `required_outputs` vào `allowed_staging_dir`. Không
-ghi trực tiếp TTS, timeline, EDL, audit, proxy, video cuối, PASS report hoặc
-`run_state.json`.
+Opening, ending, credits, preview, quảng cáo, bumper và logo nhà phát hành phải excluded.
+Cold open hoặc post-credit có diễn biến cốt truyện thật vẫn được giữ.
 
-## Quyền hạn và công cụ
+## Khớp lời với hình
 
-Được đọc video nguồn, transcript/SRT, shot, frame và input được job liệt kê. Không sửa
-`src`, `tests`, `docs`, policy, Git hay video nguồn. Không tự cài dependency, plugin,
-MCP hoặc repo. Nếu thiếu công cụ, ghi rõ tên công cụ cần người dùng cài rồi dừng.
-Gemini Web không thuộc luồng mặc định và không được tự gọi.
+Mỗi cue phải nói đúng sự kiện trong evidence range của nó và có
+`visual_anchor_source_ms`, shot IDs, frame refs cùng transcript refs liên quan. Hình mốc
+phải xuất hiện trước hoặc đúng lúc lời kể bắt đầu. Không dùng cảnh của tình huống trước
+hoặc sau để minh họa cho câu hiện tại.
 
-## Chuẩn toàn tập
+Mỗi range chỉ nên chứa một tiểu sự kiện, một pha hành động và một mục đích kể chuyện.
+Nếu chuyển từ tiếp cận sang ra đòn rồi phản ứng/kết quả, hãy tách range phù hợp. Playback
+rate do engine chọn trong 0.80x–1.30x; Antigravity không tự kéo/nén timeline.
 
-Chỉ dùng video nguồn, transcript/SRT, shot và frame của chính tập đang xử lý để quyết
-định lấy hoặc bỏ cảnh. Không bắt buộc xem video mẫu hay dùng tài nguyên của tập cũ.
+## Kịch bản và voice
 
-Proxy và video cuối của một tập phải dài 420.000–720.000 ms, ưu tiên 480.000–600.000
-ms. Khoảng nghỉ tự nhiên giữa các câu thường 350–900 ms và tuyệt đối không quá 1.200
-ms. Không kéo dài bằng cảnh thừa, im lặng, lặp ý hoặc hành động không có giá trị cốt
-truyện. Nếu tổng voice chưa thể đạt tối thiểu 7 phút, phải viết lại hoặc bổ sung thông
-tin cốt truyện có bằng chứng; engine không được tự viết, kéo hoặc nén thay.
+Viết như người Việt đang kể chuyện: tự nhiên, chủ động, dễ hiểu và có nhịp. Tránh văn
+mẫu AI, dịch sát, lặp cụm từ, tính từ thừa, meme gượng và dấu câu dày đặc. Không xóa dấu
+câu một cách máy móc; dùng câu gọn để TTS ngắt tự nhiên. Mỗi cue tối đa 55 từ.
 
-## Task STRUCTURE
+Toàn bộ voice phải hợp lý trong 420.000–720.000 ms (7–12 phút), ưu tiên 8–10 phút.
+Không kéo dài bằng im lặng, cảnh thừa hoặc lặp ý. Nếu engine báo voice ngắn/dài, sửa toàn
+bộ kịch bản theo diễn biến của cả tập; không chỉ nhồi thêm vào cảnh cuối. Cue không đổi
+sẽ dùng lại TTS cache.
 
-Dùng transcript cùng frame/shot để xác định ranh giới tình huống, mục đích kể chuyện và
-phần phải loại. Transcript có thể rỗng ở cảnh kể chuyện hoàn toàn bằng hình; khi đó
-visual-only evidence từ frame/shot vẫn hợp lệ. Không bịa lời thoại cho cảnh visual-only.
-Opening, ending, recap, credit, quảng cáo, preview và title card không mang thông tin
-phải được đánh dấu loại; cold open hoặc post-credit có giá trị cốt truyện được giữ.
+## Mất mạng và sửa lỗi
 
-Ranh giới phải đổi khi nguyên nhân, hành động, kết quả, mục tiêu nhân vật, địa điểm/thời
-gian hoặc ý nghĩa kể chuyện đổi. Ưu tiên tình huống ngắn và đồng nhất hơn một đoạn dài
-chứa nhiều ý nghĩa.
+Sau khi kết nối lại, chạy lại đúng lệnh `operator --run` trong prompt. Nếu run đã có
+`editor_task_id`, tiếp tục đúng task ID và input hash đó; không tạo task mới, không ghép
+artifact từ revision cũ và không làm lại source analysis.
 
-## Task SITUATION
+Nếu accept lỗi, sửa đúng hai draft hiện tại theo mã lỗi rồi accept lại. Không đọc mã validator,
+không tạo script để tự sinh JSON, không ghi trực tiếp `run_state.json`, TTS,
+timeline, EDL, audit hoặc proxy.
 
-Phân loại `MAIN_PLOT | SUPPORTING_PLOT` và
-`MAIN_ACTION | SUPPORTING_ACTION | DECORATIVE`. Tình huống phụ chỉ giữ khi có thiết lập
-hoặc payoff. Hành động không mang thông tin, bước ngoặt hay kết quả đáng review thì bỏ,
-kể cả trận đánh đẹp hoặc dài.
-
-Không dùng công thức giây cố định. Sau mỗi khoảng hình được lấy phải có một khoảng nguồn
-bị bỏ thật sự; không dùng micro-gap hoặc micro-clip để lách luật. Điểm cắt bám shot,
-không để frame đen, flash, chuyển cảnh hoặc mẩu rác ở đầu/cuối clip.
-
-Mỗi range chỉ có một `semantic_event_id`, một `action_phase` và một `story_purpose`.
-Ghi `shot_uses` cho từng shot. Hai shot khác tiểu sự kiện, pha hành động hoặc ý nghĩa kể
-chuyện phải tách range, kể cả cùng trận đánh hoặc cuộc nói chuyện.
-
-Mỗi cue phải có `visual_anchor_source_ms`, frame refs và shot IDs. Transcript refs là
-bắt buộc khi trong scope có câu thoại liên quan; transcript có thể rỗng với visual-only.
-Lời không được đi trước hình: visual anchor của sự kiện phải xuất hiện trước hoặc đúng
-lúc câu kể sự kiện bắt đầu. Giải thích nhân vật, bối cảnh, nguyên nhân và kết quả đủ để
-người chưa biết anime vẫn hiểu.
-
-Mỗi cue chỉ được chứng minh bởi đúng một evidence range chứa anchor và toàn bộ
-frame/shot/transcript refs của cue. Voice phải nằm trọn trong range đó. Không dùng phạm
-vi toàn tình huống cho nhiều cue nói về các hành động hoặc ý nghĩa khác nhau. Sau khi
-range được Antigravity chấp nhận, engine không được cắt nhỏ, nén hoặc ánh xạ lại range
-để che khoảng trống; nếu không vừa voice thì trả đúng tình huống cho Antigravity sửa.
-Các shot của cue phải tạo thành một cửa sổ liên tục và gọn quanh hành động đang kể;
-không gắn toàn bộ tình huống vào từng cue. Tốc độ phát chỉ được engine chọn trong giới
-hạn policy sau khi voice thật đã có.
-
-## Xử lý tuần tự
-
-Xử lý tuần tự theo job hiện tại:
-
-1. Đọc transcript và frame để khóa sự thật; visual-only dùng frame/shot.
-2. Phân loại chính/phụ và chọn thông tin cốt truyện cần kể.
-3. Chọn range đồng nhất, bảo đảm có lấy và có bỏ.
-4. Viết lời Việt và câu nối trước/sau theo đúng visual anchor.
-5. Nộp đúng `required_outputs` bằng lệnh trong `next_action.json`.
-6. Validator local quyết định PASS; nếu lỗi, chỉ sửa đúng situation/cue/range được nêu.
-7. Chỉ khóa tình huống khi semantic audit đạt; sau đó mới làm tình huống kế tiếp.
-
-Trước khi xin người dùng duyệt proxy, verifier phải đối chiếu từng cue với transcript/
-SRT, bốn frame SOURCE và bốn frame PROGRAM tại START/ANCHOR/MIDDLE/END của chính cue;
-mọi cue đều phải MATCH. Đồng thời kiểm tra thời lượng 7–12 phút, khoảng nghỉ tối đa
-1.200 ms, âm lượng đo thật, độ đồng đều giữa cue và rò rỉ intro/opening/ending/credits.
-
-Verifier phải mô tả riêng điều nhìn thấy và ý nghĩa lời kể của từng cue. Không dùng câu
-mẫu lặp lại, không chép transcript làm `narration_meaning`, không tự điền `MATCH` hoặc
-`CLEAN`. PASS ngữ nghĩa không được ghi đè bất kỳ lỗi đo bằng máy nào về thời lượng,
-im lặng, âm lượng, frame đen hoặc nội dung bị loại.
-
-Không làm lại artifact đã được khóa nếu fingerprint và lỗi không thay đổi. Không tự ghi
-PASS và không tự duyệt proxy.
-
-## Văn phong và điều kiện dừng
-
-Viết như người Việt đang kể chuyện: dân dã, tự nhiên, gọn, có thể thô tục khi đúng cảm
-xúc. Không chửi dày đặc, không dịch sát tiếng Anh, không nhét meme gượng, không bịa sự
-kiện, động cơ hoặc người nói.
-
-Sau khi toàn tập đạt audit, dựng proxy rồi dừng để người dùng duyệt. Chỉ báo hoàn thành
-khi người dùng đã duyệt, audit cuối đạt và tạo `review_anime.mp4`. Nếu thiếu công cụ hoặc
-hai vòng không có tiến triển, báo đúng mã lỗi và dừng.
+Chỉ báo thiếu công cụ khi tên công cụ cụ thể thật sự không có. Trường hợp bình thường chỉ
+dừng khi proxy đã tồn tại và state là `CHO_NGUOI_DUNG_DUYET_PROXY`.

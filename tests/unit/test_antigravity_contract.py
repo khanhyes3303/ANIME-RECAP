@@ -312,7 +312,7 @@ def test_policy_hash_covers_every_runtime_python_module(tmp_path: Path) -> None:
     assert antigravity_module.calculate_policy_sha256(tmp_path) != before
 
 
-def test_antigravity_policy_requires_local_situation_workflow() -> None:
+def test_antigravity_policy_requires_one_whole_episode_workflow() -> None:
     policy = Path("Bo_nao_Antigravity/GEMINI.md").read_text(encoding="utf-8")
     prompt = Path("Bo_nao_Antigravity/PROMPT_MOT_LAN_CHAY.md").read_text(encoding="utf-8")
     combined = (policy + "\n" + prompt).casefold()
@@ -321,16 +321,16 @@ def test_antigravity_policy_requires_local_situation_workflow() -> None:
     assert "required_outputs" in combined
     assert "structure" in combined
     assert "situation_index_draft.json" in combined
-    assert "situation" in combined
-    assert "situation_draft.json" in combined
+    assert "episode_review" in combined
+    assert "__episode__" in combined
+    assert "situations_draft.json" in combined
     assert "narration_draft.json" in combined
-    assert "semantic_event_id" in combined
     assert "visual_anchor_source_ms" in combined
     assert "transcript" in combined
     assert "frame" in combined
     assert "visual-only" in combined
-    assert "transcript có thể rỗng" in combined
-    assert "xử lý tuần tự" in combined
-    assert "không tự cài" in combined
+    assert "một nhiệm vụ duy nhất cho toàn tập" in combined
+    assert "không có vòng task/tts/timeline/verifier theo từng tình huống" in combined
+    assert "locked_situation_ids" in combined
     assert "gemini-web run" not in combined
-    assert "validator local quyết định pass" in combined
+    assert "không đọc mã validator" in combined
