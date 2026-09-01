@@ -19,28 +19,17 @@ def _state(stage: Stage, locked: tuple[str, ...] = ()) -> RunState:
 
 
 @pytest.mark.parametrize("count", (1, 3, 47))
-def test_tagged_operator_selects_every_dynamic_situation_without_relay(count: int) -> None:
+def test_tagged_operator_creates_one_job_for_every_episode_size(count: int) -> None:
     editable = tuple(f"situation-{index:03d}" for index in range(1, count + 1))
-    locked: tuple[str, ...] = ()
-    selected: list[str] = []
+    directive = plan_operator_step(
+        _state(Stage.CHO_ANTIGRAVITY_TINH_HUONG), editable_ids=editable
+    )
 
-    while len(selected) < count:
-        directive = plan_operator_step(
-            _state(Stage.CHO_ANTIGRAVITY_TINH_HUONG, locked),
-            editable_ids=editable,
-        )
-        assert directive.action == "PREPARE_SITUATION_JOB"
-        assert directive.situation_id not in selected
-        selected.append(directive.situation_id)
-        locked = (*locked, directive.situation_id)
-
-    assert tuple(selected) == editable
-    assert plan_operator_step(
-        _state(Stage.CHO_ANTIGRAVITY_TINH_HUONG, locked), editable_ids=editable
-    ).action == "RUN_ENGINE_STAGE"
+    assert directive.action == "PREPARE_EPISODE_REVIEW_JOB"
+    assert directive.situation_id == "__episode__"
 
 
-def test_operator_is_resumable_from_locked_prefix() -> None:
+def test_operator_ignores_legacy_locked_prefix() -> None:
     editable = tuple(f"situation-{index:03d}" for index in range(1, 5))
     directive = plan_operator_step(
         _state(
@@ -49,8 +38,8 @@ def test_operator_is_resumable_from_locked_prefix() -> None:
         ),
         editable_ids=editable,
     )
-    assert directive.situation_id == "situation-003"
-    assert directive.action == "PREPARE_SITUATION_JOB"
+    assert directive.situation_id == "__episode__"
+    assert directive.action == "PREPARE_EPISODE_REVIEW_JOB"
 
 
 def test_operator_only_waits_for_user_at_proxy_gate() -> None:

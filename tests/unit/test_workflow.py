@@ -9,9 +9,11 @@ from anime_review_mvp.errors import MvpError
 from anime_review_mvp.workflow import (
     RunState,
     Stage,
+    accept_episode_review_revision,
     accept_structure_index,
     advance,
     begin_editor_task,
+    begin_episode_review_task,
     begin_structure_task,
     lock_editor_situation,
     lock_situation,
@@ -25,9 +27,47 @@ from anime_review_mvp.workflow import (
     record_stage_metric,
     resume_beat_repair,
     route_editor_repair,
+    route_episode_review_repair,
     route_proxy_verifier_repair,
     route_verifier_repair,
 )
+
+
+def test_whole_episode_editorial_state_path_skips_per_situation_verifiers(
+    tmp_path: Path,
+) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG)
+    issued = begin_episode_review_task(run, "__episode__-revision-001", 1)
+    assert issued.current_situation_id == "__episode__"
+    assert issued.locked_situation_ids == ()
+
+    accepted = accept_episode_review_revision(run, issued.editor_task_id, 1)
+    assert accepted.stage is Stage.KIEM_DINH_TINH_HUONG
+    for expected, target in (
+        (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
+        (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
+        (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP),
+        (Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY),
+        (Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY),
+        (Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY),
+    ):
+        advance(run, expected, target)
+    assert read_state(run).stage is Stage.CHO_NGUOI_DUNG_DUYET_PROXY
+
+
+def test_episode_repair_returns_complete_episode_without_locks(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    new_state(run, stage=Stage.KIEM_DINH_TINH_HUONG)
+
+    repaired = route_episode_review_repair(
+        run, ("EPISODE_SCRIPT_BUDGET_TOO_SHORT",), "a" * 64
+    )
+
+    assert repaired.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert repaired.current_situation_id == "__episode__"
+    assert repaired.locked_situation_ids == ()
+    assert repaired.editorial_revision == 1
 
 
 def test_state_machine_is_linear_and_fail_closed(tmp_path: Path) -> None:

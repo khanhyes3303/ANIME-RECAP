@@ -29,17 +29,17 @@ def test_operator_requests_structure_job_at_structure_wait_stage() -> None:
     assert directive.action == "PREPARE_STRUCTURE_JOB"
 
 
-def test_operator_requests_next_unlocked_situation_without_a_fixed_count() -> None:
+def test_operator_requests_one_episode_review_job_ignoring_legacy_locks() -> None:
     directive = plan_operator_step(
         _state(stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG, locked=("situation-001",)),
         editable_ids=("situation-001", "situation-002", "situation-003"),
     )
 
-    assert directive.action == "PREPARE_SITUATION_JOB"
-    assert directive.situation_id == "situation-002"
+    assert directive.action == "PREPARE_EPISODE_REVIEW_JOB"
+    assert directive.situation_id == "__episode__"
 
 
-def test_operator_runs_engine_stage_when_every_editable_situation_is_locked() -> None:
+def test_operator_does_not_treat_all_locked_situations_as_complete() -> None:
     directive = plan_operator_step(
         _state(
             stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
@@ -48,7 +48,8 @@ def test_operator_runs_engine_stage_when_every_editable_situation_is_locked() ->
         editable_ids=("situation-001", "situation-002"),
     )
 
-    assert directive.action == "RUN_ENGINE_STAGE"
+    assert directive.action == "PREPARE_EPISODE_REVIEW_JOB"
+    assert directive.situation_id == "__episode__"
 
 
 def test_operator_stops_only_at_user_proxy_gate() -> None:

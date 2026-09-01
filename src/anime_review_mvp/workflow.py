@@ -150,6 +150,7 @@ _V2_TRANSITIONS = {
     (Stage.CHO_ANTIGRAVITY_TINH_HUONG, Stage.KIEM_DINH_TINH_HUONG),
     (Stage.KIEM_DINH_TINH_HUONG, Stage.TAO_TTS_TINH_HUONG),
     (Stage.TAO_TTS_TINH_HUONG, Stage.LAP_TIMELINE_TINH_HUONG),
+    (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP),
     (Stage.LAP_TIMELINE_TINH_HUONG, Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG),
     (
         Stage.KIEM_DINH_NGU_NGHIA_TINH_HUONG,
@@ -162,6 +163,7 @@ _V2_TRANSITIONS = {
     (Stage.KIEM_DINH_PHAN_BIEN_TINH_HUONG, Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP),
     (Stage.KIEM_DINH_MACH_TRUYEN_TOAN_TAP, Stage.DUNG_PROXY),
     (Stage.DUNG_PROXY, Stage.KIEM_DINH_PROXY),
+    (Stage.KIEM_DINH_PROXY, Stage.CHO_NGUOI_DUNG_DUYET_PROXY),
     (Stage.KIEM_DINH_PROXY, Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY),
     (
         Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY,
@@ -528,6 +530,11 @@ def begin_editor_task(
     return state
 
 
+def begin_episode_review_task(run_dir: Path, task_id: str, revision: int) -> RunState:
+    """Begin the one canonical editorial task for the complete episode."""
+    return begin_editor_task(run_dir, task_id, "__episode__", revision)
+
+
 def begin_structure_task(run_dir: Path, task_id: str, revision: int) -> RunState:
     state = read_state(run_dir)
     if state.stage is not Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG:
@@ -593,6 +600,17 @@ def accept_editor_revision(
     return state
 
 
+def accept_episode_review_revision(
+    run_dir: Path,
+    task_id: str,
+    revision: int,
+) -> RunState:
+    state = read_state(run_dir)
+    if state.current_situation_id != "__episode__" or state.locked_situation_ids:
+        raise MvpError("episode review state contains legacy situation progress")
+    return accept_editor_revision(run_dir, task_id, revision)
+
+
 def route_editor_repair(
     run_dir: Path,
     situation_ids: tuple[str, ...],
@@ -631,6 +649,24 @@ def route_editor_repair(
             verifier_task_id="",
             editorial_revision=max(1, state.editorial_revision + 1),
         )
+    _write_state(state)
+    return state
+
+
+def route_episode_review_repair(
+    run_dir: Path,
+    codes: tuple[str, ...],
+    fingerprint: str,
+) -> RunState:
+    """Return a failed complete plan to one new episode revision."""
+    state = route_editor_repair(run_dir, ("__episode__",), codes, fingerprint)
+    state = replace(
+        state,
+        locked_situation_ids=(),
+        current_situation_id=(
+            "__episode__" if state.stage is not Stage.CAN_CON_NGUOI_XU_LY else ""
+        ),
+    )
     _write_state(state)
     return state
 

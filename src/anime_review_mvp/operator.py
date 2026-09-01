@@ -17,7 +17,11 @@ class OperatorDirective:
 def plan_operator_step(
     state: RunState, *, editable_ids: tuple[str, ...]
 ) -> OperatorDirective:
-    """Plan one safe step without assuming a fixed number of situations."""
+    """Plan one safe step for the canonical whole-episode workflow.
+
+    ``editable_ids`` remains in the signature for old callers and archived runs;
+    canonical editorial routing deliberately does not iterate over it.
+    """
     if state.stage is Stage.CHO_NGUOI_DUNG_DUYET_PROXY:
         return OperatorDirective("WAIT_FOR_USER_PROXY_APPROVAL")
     if state.stage is Stage.CAN_CON_NGUOI_XU_LY:
@@ -25,11 +29,5 @@ def plan_operator_step(
     if state.stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG:
         return OperatorDirective("PREPARE_STRUCTURE_JOB")
     if state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG:
-        next_id = next(
-            (item for item in editable_ids if item not in state.locked_situation_ids),
-            "",
-        )
-        if next_id:
-            return OperatorDirective("PREPARE_SITUATION_JOB", next_id)
-        return OperatorDirective("RUN_ENGINE_STAGE")
+        return OperatorDirective("PREPARE_EPISODE_REVIEW_JOB", "__episode__")
     return OperatorDirective("RUN_ENGINE_STAGE")
