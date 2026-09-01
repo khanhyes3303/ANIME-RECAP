@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,10 +13,11 @@ from anime_review_mvp.models import (
     TranscriptDocument,
     TranscriptSegment,
 )
-from anime_review_mvp.situation_index import SituationIndexEntry
+from anime_review_mvp.situation_index import SituationIndexDocument, SituationIndexEntry
 from anime_review_mvp.situation_scope import (
     load_situation_scope,
     materialize_situation_scope,
+    validate_episode_submission_scope,
     validate_submission_scope,
 )
 from anime_review_mvp.situations import (
@@ -230,3 +232,33 @@ def test_submission_scope_rejects_range_and_anchor_outside_boundary() -> None:
     situation, narration = _submission(5_000, 10_001)
     with pytest.raises(MvpError, match="visual anchor"):
         validate_submission_scope(ENTRY, situation, narration)
+
+
+def test_episode_submission_requires_every_editable_situation_in_source_order() -> None:
+    first_situations, first_narration = _submission(5_000, 6_000)
+    second_entry = replace(
+        ENTRY,
+        situation_id="situation-003",
+        source_start_ms=10_000,
+        source_end_ms=15_000,
+        shot_ids=("shot-004",),
+        frame_refs=(FRAMES[3],),
+    )
+    index = SituationIndexDocument(
+        "ANTIGRAVITY", "situation-index-v1", "a" * 64, (ENTRY, second_entry)
+    )
+
+    with pytest.raises(MvpError, match="EPISODE_SITUATION_COVERAGE_INVALID"):
+        validate_episode_submission_scope(index, first_situations, first_narration)
+
+
+def test_episode_submission_rejects_excluded_situation() -> None:
+    situations, narration = _submission(5_000, 6_000)
+    excluded = replace(ENTRY, excluded=True, exclusion_reason="opening")
+    index = SituationIndexDocument(
+        "ANTIGRAVITY", "situation-index-v1", "a" * 64, (excluded,)
+    )
+
+    with pytest.raises(MvpError, match="EPISODE_SITUATION_COVERAGE_INVALID"):
+        validate_episode_submission_scope(index, situations, narration)
+

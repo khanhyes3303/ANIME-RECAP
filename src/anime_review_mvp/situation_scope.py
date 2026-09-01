@@ -7,7 +7,7 @@ from pathlib import Path, PurePath
 from .errors import MvpError
 from .jsonio import atomic_dump_json, load_json
 from .models import Shot, ShotDocument, TranscriptDocument
-from .situation_index import SituationIndexEntry
+from .situation_index import SituationIndexDocument, SituationIndexEntry
 from .situations import NarrationPlan, SituationDocument
 
 
@@ -164,3 +164,46 @@ def validate_submission_scope(
                 raise MvpError("visual anchor is outside active situation")
             if not set(cue.shot_ids) <= allowed_shots or not set(cue.frame_refs) <= allowed_frames:
                 raise MvpError("cue evidence reference is outside active situation")
+
+
+def validate_episode_submission_scope(
+    index: SituationIndexDocument,
+    situations: SituationDocument,
+    narration: NarrationPlan,
+) -> None:
+    editable = tuple(entry for entry in index.situations if not entry.excluded)
+    expected_ids = tuple(entry.situation_id for entry in editable)
+    situation_ids = tuple(item.situation_id for item in situations.situations)
+    unit_ids = tuple(unit.situation_id for unit in narration.units)
+    if situation_ids != expected_ids or unit_ids != expected_ids:
+        raise MvpError("EPISODE_SITUATION_COVERAGE_INVALID")
+
+    for entry, situation, unit in zip(
+        editable, situations.situations, narration.units, strict=True
+    ):
+        if (
+            situation.source_start_ms != entry.source_start_ms
+            or situation.source_end_ms != entry.source_end_ms
+        ):
+            raise MvpError("EPISODE_SITUATION_BOUNDARY_INVALID")
+        allowed_shots = set(entry.shot_ids)
+        allowed_frames = set(entry.frame_refs)
+        for evidence in unit.evidence_ranges:
+            if (
+                evidence.situation_id != entry.situation_id
+                or evidence.source_start_ms < entry.source_start_ms
+                or evidence.source_end_ms > entry.source_end_ms
+                or not set(evidence.shot_ids) <= allowed_shots
+                or not set(evidence.frame_refs) <= allowed_frames
+            ):
+                raise MvpError("EPISODE_EVIDENCE_SCOPE_INVALID")
+        for cue in unit.cues:
+            if (
+                cue.situation_id != entry.situation_id
+                or not entry.source_start_ms
+                <= cue.visual_anchor_source_ms
+                < entry.source_end_ms
+                or not set(cue.shot_ids) <= allowed_shots
+                or not set(cue.frame_refs) <= allowed_frames
+            ):
+                raise MvpError("EPISODE_CUE_SCOPE_INVALID")

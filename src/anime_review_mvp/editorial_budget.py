@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .errors import MvpError
-from .situations import CueTtsManifest, EditorialPolicy
+from .situations import CueTtsManifest, EditorialPolicy, NarrationPlan
+
+_WORD_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,6 +14,33 @@ class EpisodeVoiceBudget:
     total_voice_duration_ms: int
     minimum_program_duration_ms: int
     maximum_program_duration_ms: int
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeWordBudget:
+    total_words: int
+    minimum_words: int = 1_050
+    maximum_words: int = 1_800
+
+
+def validate_episode_word_budget(plan: NarrationPlan) -> EpisodeWordBudget:
+    texts = tuple(
+        cue.text
+        for unit in plan.units
+        for cue in unit.cues
+    ) or tuple(unit.narration_text for unit in plan.units)
+    budget = EpisodeWordBudget(
+        total_words=sum(len(_WORD_TOKEN.findall(text)) for text in texts)
+    )
+    if budget.total_words < budget.minimum_words:
+        raise MvpError(
+            "EPISODE_SCRIPT_BUDGET_TOO_SHORT: expand the complete episode before TTS"
+        )
+    if budget.total_words > budget.maximum_words:
+        raise MvpError(
+            "EPISODE_SCRIPT_BUDGET_TOO_LONG: shorten the complete episode before TTS"
+        )
+    return budget
 
 
 def validate_episode_voice_budget(
