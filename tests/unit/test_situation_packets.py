@@ -15,8 +15,10 @@ from anime_review_mvp.models import (
 )
 from anime_review_mvp.situation_index import SituationIndexEntry
 from anime_review_mvp.situation_packets import (
+    build_episode_review_packet,
     build_scoped_situation_editor_packet,
     build_situation_editor_packet,
+    render_episode_review_prompt,
     render_situation_editor_prompt,
 )
 from anime_review_mvp.situation_scope import materialize_situation_scope
@@ -195,3 +197,60 @@ def test_scoped_packet_never_references_full_episode_manifest(tmp_path: Path) ->
     assert packet.frame_manifest_path.endswith("frames.json")
     assert "frame_manifest.json" not in packet.frame_manifest_path
     assert [segment.text for segment in packet.transcript.segments] == ["Leave him alone."]
+
+
+def test_episode_packet_and_prompt_define_one_complete_editorial_job(tmp_path: Path) -> None:
+    names = (
+        "situation_index.json",
+        "transcript.json",
+        "episode.srt",
+        "shots.json",
+        "frames.json",
+        "style.json",
+        "policy.json",
+    )
+    paths = tuple(tmp_path / name for name in names)
+    for path in paths:
+        path.write_text("{}", encoding="utf-8")
+    task = EditorTask(
+        "__episode__-revision-001",
+        "run-001",
+        "__episode__",
+        1,
+        "ANTIGRAVITY_EDITORIAL",
+        tuple(str(path.resolve()) for path in paths),
+        "a" * 64,
+        ("situations_draft.json", "narration_draft.json"),
+        "EPISODE_REVIEW",
+    )
+
+    packet = build_episode_review_packet(
+        task=task,
+        situation_index_path=paths[0],
+        transcript_paths=(paths[1], paths[2]),
+        shot_manifest_path=paths[3],
+        frame_manifest_path=paths[4],
+        style_profile_path=paths[5],
+        policy_path=paths[6],
+        output_dir=tmp_path / "run" / "editor_staging" / task.task_id,
+        measured_voice_ms=250_000,
+        repair_code="EPISODE_VOICE_BUDGET_TOO_SHORT",
+    )
+    prompt = render_episode_review_prompt(packet)
+    normalized = prompt.casefold()
+
+    assert packet.task_kind == "EPISODE_REVIEW"
+    assert packet.situation_id == "__episode__"
+    assert "một nhiệm vụ duy nhất cho toàn bộ tập phim" in normalized
+    assert "xem trực tiếp các frame" in normalized
+    assert "transcript, srt, shots và frames" in normalized
+    assert "đúng thứ tự thời gian nguồn" in normalized
+    assert "opening, ending, credits, preview, bumper" in normalized
+    assert "7–12 phút" in prompt
+    assert "situations_draft.json" in prompt
+    assert "narration_draft.json" in prompt
+    assert "không tạo script" in normalized
+    assert "không đọc mã validator" in normalized
+    assert "không phát `goal_complete`" in normalized
+    assert "accept-antigravity" in normalized
+    assert "250000 ms" in normalized

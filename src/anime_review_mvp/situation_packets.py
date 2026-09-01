@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from .editor_provenance import EditorTask
 from .errors import MvpError
@@ -45,6 +46,133 @@ class SituationEditorPacket:
             raise MvpError("situation scope hash and path must be supplied together")
         if self.task_kind != "SITUATION":
             raise MvpError("situation packet task kind is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class EpisodeReviewPacket:
+    task_id: str
+    run_id: str
+    task_kind: Literal["EPISODE_REVIEW"]
+    situation_id: Literal["__episode__"]
+    revision: int
+    input_sha256: str
+    situation_index_path: str
+    transcript_paths: tuple[str, ...]
+    shot_manifest_path: str
+    frame_manifest_path: str
+    style_profile_path: str
+    policy_path: str
+    output_dir: str
+    previous_situations_path: str = ""
+    previous_narration_path: str = ""
+    measured_voice_ms: int | None = None
+    repair_code: str = ""
+    required_outputs: tuple[str, str] = (
+        "situations_draft.json",
+        "narration_draft.json",
+    )
+
+
+def build_episode_review_packet(
+    *,
+    task: EditorTask,
+    situation_index_path: Path,
+    transcript_paths: tuple[Path, ...],
+    shot_manifest_path: Path,
+    frame_manifest_path: Path,
+    style_profile_path: Path,
+    policy_path: Path,
+    output_dir: Path,
+    previous_situations_path: Path | None = None,
+    previous_narration_path: Path | None = None,
+    measured_voice_ms: int | None = None,
+    repair_code: str = "",
+) -> EpisodeReviewPacket:
+    inputs = (
+        situation_index_path,
+        *transcript_paths,
+        shot_manifest_path,
+        frame_manifest_path,
+        style_profile_path,
+        policy_path,
+    )
+    if (
+        task.task_kind != "EPISODE_REVIEW"
+        or task.situation_id != "__episode__"
+        or task.allowed_outputs != ("situations_draft.json", "narration_draft.json")
+        or not transcript_paths
+        or any(not path.is_file() for path in inputs)
+    ):
+        raise MvpError("EPISODE_REVIEW_PACKET_INVALID")
+    return EpisodeReviewPacket(
+        task.task_id,
+        task.run_id,
+        "EPISODE_REVIEW",
+        "__episode__",
+        task.revision,
+        task.input_sha256,
+        str(situation_index_path.resolve()),
+        tuple(str(path.resolve()) for path in transcript_paths),
+        str(shot_manifest_path.resolve()),
+        str(frame_manifest_path.resolve()),
+        str(style_profile_path.resolve()),
+        str(policy_path.resolve()),
+        str(output_dir.resolve()),
+        str(previous_situations_path.resolve()) if previous_situations_path else "",
+        str(previous_narration_path.resolve()) if previous_narration_path else "",
+        measured_voice_ms,
+        repair_code,
+    )
+
+
+def render_episode_review_prompt(packet: EpisodeReviewPacket) -> str:
+    transcripts = "\n".join(f"- `{path}`" for path in packet.transcript_paths)
+    repair = ""
+    if packet.repair_code:
+        repair = (
+            f"\nBản trước bị từ chối với `{packet.repair_code}`; tổng voice đo được "
+            f"{packet.measured_voice_ms} ms. Sửa toàn bộ kế hoạch theo đúng diễn biến, "
+            "không kéo dài riêng cảnh cuối.\n"
+        )
+    run_dir = Path(packet.output_dir).parents[1]
+    accept_command = (
+        f'accept-antigravity --run "{run_dir.resolve()}" --task {packet.task_id} '
+        f'--staging "{Path(packet.output_dir).resolve()}"'
+    )
+    return f"""Antigravity là biên tập viên cho một nhiệm vụ duy nhất cho toàn bộ tập phim.
+
+Task `{packet.task_id}`, revision {packet.revision}, input SHA-256
+`{packet.input_sha256}`. Không chia thành task biên tập, TTS, timeline hay verifier theo
+từng tình huống. Hãy đọc `situation_index.json` tại `{packet.situation_index_path}` và giữ
+mọi tình huống được chọn theo đúng thứ tự thời gian nguồn.
+
+Nguồn transcript/SRT:
+{transcripts}
+Shots: `{packet.shot_manifest_path}`
+Frames: `{packet.frame_manifest_path}`
+Style: `{packet.style_profile_path}`
+Policy: `{packet.policy_path}`
+
+Bắt buộc xem trực tiếp các frame được tham chiếu. Đối chiếu transcript, SRT, shots và frames
+tại cùng vị trí để xác định cảnh, tình huống và hành động.
+Loại opening, ending, credits, preview, bumper, logo nhà phát hành và các mục excluded.
+Không dùng
+công thức lấy/bỏ số giây cố định; chọn hoặc bỏ theo ý nghĩa thật của cảnh.
+
+Viết lời review tự nhiên như người kể chuyện, đủ nguyên nhân–diễn biến–kết quả, không
+bịa và không lệch sang tình huống trước/sau. Lập đủ nội dung toàn tập để voice hợp lý nằm
+trong 7–12 phút; mỗi cue tối đa 55 từ và khóa vào đúng evidence/visual anchor của nó.
+
+Chỉ ghi đúng hai tệp vào `{packet.output_dir}`:
+- `situations_draft.json`: mọi tình huống editable, đúng một lần, đúng thứ tự.
+- `narration_draft.json`: mọi unit/claim/cue/evidence range tương ứng cùng thứ tự.
+
+Không tạo script để tự sinh JSON, không đọc mã validator để tối ưu điều kiện PASS, không
+ghi run_state/TTS/timeline/proxy và không phát `GOAL_COMPLETE`. Sau khi tự kiểm tra hai
+tệp, chỉ chạy lệnh chấp nhận sau:
+
+`{accept_command}`
+{repair}"""
 
 
 def build_situation_editor_packet(
