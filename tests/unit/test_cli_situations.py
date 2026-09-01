@@ -148,6 +148,53 @@ def test_evidence_locked_rebuild_archives_editorial_chain_but_keeps_observations
     assert state.accepted_situation_index_sha256 == ""
 
 
+def test_whole_episode_migration_preserves_valid_index_and_clears_legacy_progress(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = _empty_run(tmp_path)
+    initial = read_state(run)
+    episode = Path(initial.episode_dir)
+    new_state(
+        run,
+        stage=Stage.CAN_CON_NGUOI_XU_LY,
+        episode_dir=episode,
+        source_video=Path(initial.source_video),
+    )
+    raw = json.loads((run / "run_state.json").read_text(encoding="utf-8"))
+    raw.update(
+        {
+            "locked_situation_ids": ["situation-001", "situation-002"],
+            "current_situation_id": "situation-003",
+            "editor_task_id": "situation-003-revision-002",
+            "accepted_situation_index_sha256": "a" * 64,
+            "repair_history": [
+                {"owner": "ANTIGRAVITY", "codes": ["OLD"], "phase": "SITUATION", "beat_ids": []}
+            ],
+        }
+    )
+    (run / "run_state.json").write_text(json.dumps(raw), encoding="utf-8")
+    (run / "situation_index.json").write_text('{"valid":true}\n', encoding="utf-8")
+    (run / "transcript_english.json").write_text("{}\n", encoding="utf-8")
+    (run / "shots.json").write_text("{}\n", encoding="utf-8")
+    (run / "frame_manifest.json").write_text("{}\n", encoding="utf-8")
+    stale = episode / "Kich_ban" / "narration_plan.json"
+    stale.write_text('{"old":true}\n', encoding="utf-8")
+    monkeypatch.setattr(cli, "_editor_task_command", lambda _run: 0)
+
+    assert cli._migrate_run(run, "whole-episode-review") == 0
+
+    migrated = read_state(run)
+    assert migrated.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG
+    assert migrated.current_situation_id == "__episode__"
+    assert migrated.locked_situation_ids == ()
+    assert migrated.repair_history == ()
+    assert migrated.accepted_situation_index_sha256 == "a" * 64
+    assert (run / "situation_index.json").is_file()
+    assert not stale.exists()
+    archive = run / "revisions" / "whole-episode-review-revision-001"
+    assert (archive / "episode" / "Kich_ban" / "narration_plan.json").is_file()
+
+
 def test_prior_episode_artifacts_are_ignored_without_current_acceptance(
     tmp_path: Path,
 ) -> None:

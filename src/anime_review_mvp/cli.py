@@ -194,6 +194,7 @@ from .workflow import (
     record_repair,
     record_stage_metric,
     reset_for_evidence_locked_rebuild,
+    reset_for_whole_episode_review,
     resume_beat_repair,
     resume_browser_review,
     route_editor_repair,
@@ -279,6 +280,7 @@ def _parser() -> argparse.ArgumentParser:
             "require-situation-index",
             "autonomous-operator",
             "evidence-locked-rebuild",
+            "whole-episode-review",
         ),
     )
     editor_task = subparsers.add_parser("editor-task")
@@ -3186,6 +3188,34 @@ def _migrate_run(run_dir: Path, reason: str) -> int:
         if result == 0:
             print(archive)
         return result
+    if reason == "whole-episode-review":
+        marker = run_dir / "whole_episode_review_migration.json"
+        if marker.is_file() and state.stage is Stage.CHO_ANTIGRAVITY_TINH_HUONG:
+            return _operator_command(run_dir)
+        if not (run_dir / "situation_index.json").is_file() or not (
+            state.accepted_situation_index_sha256
+        ):
+            raise MvpError("whole-episode migration requires an accepted situation index")
+        archive = _archive_whole_episode_revision(run_dir, episode)
+        reset_for_whole_episode_review(run_dir)
+        marker.write_text(
+            json.dumps(
+                {
+                    "archive": str(archive.resolve()),
+                    "index_sha256": state.accepted_situation_index_sha256,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        _write_next(
+            run_dir,
+            "Dữ liệu biên tập cũ đã lưu trong revisions; tạo một task toàn tập mới.",
+            code="WHOLE_EPISODE_REVIEW_MIGRATION",
+        )
+        return _editor_task_command(run_dir)
     if reason != "user-rejected":
         raise MvpError("unsupported migration reason")
     if state.stage is not Stage.HOAN_THANH:
@@ -3414,6 +3444,63 @@ def _archive_evidence_locked_revision(run_dir: Path, episode: Path) -> Path:
         "verifier_ledger.jsonl",
     )
     for name in generated_run_artifacts:
+        move(run_root / name, run_root, "run")
+    return archive
+
+
+def _archive_whole_episode_revision(run_dir: Path, episode: Path) -> Path:
+    """Archive derivative state while preserving source evidence and the accepted index."""
+    run_root = run_dir.resolve()
+    episode_root = episode.resolve()
+    revisions = run_root / "revisions"
+    revision = 1
+    while (revisions / f"whole-episode-review-revision-{revision:03d}").exists():
+        revision += 1
+    archive = revisions / f"whole-episode-review-revision-{revision:03d}"
+
+    def move(source: Path, base: Path, bucket: str) -> None:
+        if not source.exists():
+            return
+        resolved = source.resolve()
+        base_resolved = base.resolve()
+        if not resolved.is_relative_to(base_resolved):
+            raise MvpError(f"refusing to archive path outside expected root: {resolved}")
+        destination = archive / bucket / resolved.relative_to(base_resolved)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(resolved), str(destination))
+
+    for directory_name in ("Su_that", "Kich_ban", "TTS", "Thanh_pham", "Bao_cao"):
+        directory = episode_root / directory_name
+        if directory.is_dir():
+            for child in tuple(directory.iterdir()):
+                move(child, episode_root, "episode")
+    plan_dir = episode_root / "Ke_hoach_canh"
+    if plan_dir.is_dir():
+        for child in tuple(plan_dir.iterdir()):
+            move(child, episode_root, "episode")
+    for name in (
+        "accepted_editorial",
+        "accepted_verification",
+        "cue_tts",
+        "editor_staging",
+        "editor_tasks",
+        "proxy",
+        "proxy_evidence",
+        "verifier_staging",
+        "adaptive_edl.json",
+        "aligned_narration.wav",
+        "cue_tts_manifest.json",
+        "editor_ledger.jsonl",
+        "episode_coherence_audit.json",
+        "episode_review_acceptance.json",
+        "final_candidate.mp4",
+        "final_render_result.json",
+        "loudness_report.json",
+        "normalized_narration.wav",
+        "operator_status.json",
+        "semantic_timeline.json",
+        "verifier_ledger.jsonl",
+    ):
         move(run_root / name, run_root, "run")
     return archive
 

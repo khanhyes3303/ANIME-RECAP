@@ -719,6 +719,32 @@ def reset_for_evidence_locked_rebuild(run_dir: Path) -> RunState:
     return state
 
 
+def reset_for_whole_episode_review(run_dir: Path) -> RunState:
+    """Discard legacy per-situation progress while preserving an accepted index."""
+    state = read_state(run_dir)
+    state = replace(
+        state,
+        stage=Stage.CHO_ANTIGRAVITY_TINH_HUONG,
+        repair_history=(),
+        stage_metrics=(),
+        locked_situation_ids=(),
+        current_situation_id="__episode__",
+        last_local_repair_fingerprint="",
+        last_local_repair_codes=(),
+        editor_task_id="",
+        verifier_task_id="",
+        editorial_revision=1,
+        approved_proxy_sha256="",
+        approved_artifact_sha256="",
+        proxy_rejection_note="whole-episode-review",
+        last_verifier_fingerprint="",
+        last_verifier_codes=(),
+        verifier_stall_count=0,
+    )
+    _write_state(state)
+    return state
+
+
 def begin_proxy_verifier_task(run_dir: Path, task_id: str, revision: int) -> RunState:
     state = read_state(run_dir)
     if state.stage is not Stage.CHO_ANTIGRAVITY_KIEM_DINH_PROXY:
