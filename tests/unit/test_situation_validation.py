@@ -22,6 +22,7 @@ from anime_review_mvp.situation_validation import (
     validate_edl_exclusions,
     validate_keep_skip,
     validate_narration_plan,
+    validate_narration_story_grounding,
     validate_narration_style,
     validate_semantic_range,
     validate_situations,
@@ -372,6 +373,61 @@ def test_v2_style_rejects_repeated_ai_intensifier() -> None:
 
     with pytest.raises(MvpError, match="NARRATION_STYLE_REPETITIVE"):
         validate_narration_style(plan)
+
+
+def test_v2_rejects_narration_from_a_later_situation() -> None:
+    source_range = replace(
+        _range("range-001", 1_000, 4_000, "shot-001"),
+        story_fact="Nhóm côn đồ khoe địa bàn rồi nổi giận với Jiro.",
+        semantic_event_id="gang-confrontation",
+        action_phase="SETUP",
+        story_purpose="Jiro đối đầu nhóm côn đồ dưới gầm cầu.",
+        shot_uses=(SemanticShotUse(
+            "shot-001", "gang-confrontation", "SETUP",
+            "Jiro đối đầu nhóm côn đồ dưới gầm cầu.",
+        ),),
+    )
+    cue = NarrationCue(
+        "cue-001", "situation-001",
+        "Jiro tìm thấy chú mèo đen bị thương trong rừng rồi mang nó về nhà.",
+        ("claim-001",), 1_500, "SETUP", ("transcript-001",),
+        ("frame-range-001",), ("shot-001",), (), (), (), (),
+    )
+    plan = NarrationPlan(
+        "LOCAL_EDITOR", "situation-v2",
+        (replace(_plan(source_range).units[0], cues=(cue,)),),
+        (NarrationClaim("claim-001", "Nhóm côn đồ khoe địa bàn.", ("event-001",)),),
+    )
+
+    with pytest.raises(MvpError, match="NARRATION_SITUATION_SHIFT.*cue-001"):
+        validate_narration_story_grounding(plan)
+
+
+def test_v2_accepts_natural_narration_grounded_in_the_story_fact() -> None:
+    source_range = replace(
+        _range("range-001", 1_000, 4_000, "shot-001"),
+        story_fact="Nhóm côn đồ khoe địa bàn rồi nổi giận với Jiro.",
+        semantic_event_id="gang-confrontation",
+        action_phase="SETUP",
+        story_purpose="Jiro đối đầu nhóm côn đồ dưới gầm cầu.",
+        shot_uses=(SemanticShotUse(
+            "shot-001", "gang-confrontation", "SETUP",
+            "Jiro đối đầu nhóm côn đồ dưới gầm cầu.",
+        ),),
+    )
+    cue = NarrationCue(
+        "cue-001", "situation-001",
+        "Đám côn đồ dưới gầm cầu huênh hoang khoe địa bàn, nhưng Jiro chẳng hề sợ.",
+        ("claim-001",), 1_500, "SETUP", ("transcript-001",),
+        ("frame-range-001",), ("shot-001",), (), (), (), (),
+    )
+    plan = NarrationPlan(
+        "LOCAL_EDITOR", "situation-v2",
+        (replace(_plan(source_range).units[0], cues=(cue,)),),
+        (NarrationClaim("claim-001", "Nhóm côn đồ khoe địa bàn.", ("event-001",)),),
+    )
+
+    validate_narration_story_grounding(plan)
 
 
 def test_v2_cue_cannot_drop_transcript_grounding_from_its_range() -> None:

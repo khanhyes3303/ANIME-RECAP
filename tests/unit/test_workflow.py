@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import anime_review_mvp.workflow as workflow
 from anime_review_mvp.errors import MvpError
 from anime_review_mvp.workflow import (
     RunState,
@@ -42,6 +43,24 @@ def test_new_state_persists_engine_repository_identity(tmp_path: Path) -> None:
     assert Path(state.repository_root).resolve() == Path(__file__).resolve().parents[2]
     assert len(state.code_commit) == 40
     assert state.contract_version == "anime-review-v3"
+
+
+def test_failed_checkpoint_replace_preserves_last_readable_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = new_state(tmp_path / "run")
+    before = (state.run_dir / "run_state.json").read_bytes()
+
+    def fail_replace(_source: object, _destination: object) -> None:
+        raise OSError("simulated disconnect during checkpoint")
+
+    monkeypatch.setattr(workflow.os, "replace", fail_replace)
+    with pytest.raises(MvpError, match="checkpoint"):
+        advance(state.run_dir, Stage.CHUAN_BI, Stage.TRICH_XUAT_BANG_CHUNG)
+
+    assert (state.run_dir / "run_state.json").read_bytes() == before
+    assert read_state(state.run_dir).stage is Stage.CHUAN_BI
+    assert not tuple(state.run_dir.glob(".run_state.json.*.tmp"))
 
 
 def test_state_advances_only_from_persisted_expected_stage(tmp_path: Path) -> None:

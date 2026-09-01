@@ -132,6 +132,7 @@ from .situation_validation import (
     validate_cue_transcript_grounding,
     validate_edl_exclusions,
     validate_narration_plan,
+    validate_narration_story_grounding,
     validate_situations,
 )
 from .situations import (
@@ -402,6 +403,9 @@ def _autonomous_task_prompt(prompt: str, run_dir: Path, accept_command: str) -> 
         "Đọc lại next_action.json và cong_viec_antigravity.json sau mỗi lệnh rồi thực hiện "
         "task kế tiếp. Không yêu cầu người dùng copy từng tình huống. Nếu accept thất bại, "
         "sửa đúng task hiện tại theo lỗi engine rồi chạy accept lại.\n"
+        "Nếu mất mạng hoặc phiên bị ngắt, chạy lại operator và tiếp tục đúng task_id hiện "
+        "có trong run_state.json. Không tạo lại toàn bộ narration, không đổi thứ tự và không "
+        "ghi lại các locked_situation_ids; chỉ xử lý current_situation_id.\n"
         "Bắt buộc tự mở và quan sát các frame được tham chiếu. Không tạo hoặc chạy script "
         "để tự điền situation, narration, audit hay giả lập việc xem frame; không đọc mã "
         "validator để tối ưu dữ liệu theo điều kiện PASS. Logo hãng phát hành, bumper, intro, "
@@ -2928,6 +2932,7 @@ def _accept_antigravity_command(run_dir: Path, task_id: str, staging_dir: Path) 
     staged_narration = load_json(staging_dir / "narration_draft.json", NarrationPlan)
     validate_submission_scope(entry, staged_situation, staged_narration)
     validate_cue_transcript_grounding(staged_narration, full_transcript)
+    validate_narration_story_grounding(staged_narration)
     accepted = accept_antigravity_submission(run_dir, task_id, staging_dir)
     situation_draft = staged_situation
     narration_draft = staged_narration
@@ -3280,6 +3285,8 @@ def _archive_evidence_locked_revision(run_dir: Path, episode: Path) -> Path:
     if plan_dir.is_dir():
         for child in tuple(plan_dir.iterdir()):
             move(child, episode_root, "episode")
+    # Synthesized voice belongs to the interrupted editorial revision.
+    move(episode_root / "_Cache" / "cue_tts", episode_root, "episode")
 
     generated_run_artifacts = (
         "accepted_editorial",

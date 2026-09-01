@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import uuid
 from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -200,9 +202,19 @@ def _write_state(state: RunState) -> None:
     payload["locked_situation_ids"] = list(state.locked_situation_ids)
     payload["last_local_repair_codes"] = list(state.last_local_repair_codes)
     payload["last_verifier_codes"] = list(state.last_verifier_codes)
-    _state_path(state.run_dir).write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    destination = _state_path(state.run_dir)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(temporary, destination)
+    except OSError as exc:
+        raise MvpError(f"cannot atomically write run checkpoint: {destination}") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def new_state(

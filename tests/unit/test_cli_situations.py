@@ -118,6 +118,9 @@ def test_evidence_locked_rebuild_archives_editorial_chain_but_keeps_observations
     stale_proxy.write_bytes(b"stale proxy")
     stale_episode = episode / "Kich_ban" / "narration_plan.json"
     stale_episode.write_text('{"stale":true}\n', encoding="utf-8")
+    stale_tts_cache = episode / "_Cache" / "cue_tts" / "bad-key" / "audio.wav"
+    stale_tts_cache.parent.mkdir(parents=True)
+    stale_tts_cache.write_bytes(b"stale synthesized voice")
     monkeypatch.setattr(cli, "_structure_task_command", lambda _run: 0)
 
     assert cli._migrate_run(run, "evidence-locked-rebuild") == 0
@@ -128,9 +131,13 @@ def test_evidence_locked_rebuild_archives_editorial_chain_but_keeps_observations
     assert (archive / "run" / "accepted_editorial" / "situation-001" / "draft.json").is_file()
     assert (archive / "run" / "proxy" / "review_proxy.mp4").is_file()
     assert (archive / "episode" / "Kich_ban" / "narration_plan.json").is_file()
+    assert (
+        archive / "episode" / "_Cache" / "cue_tts" / "bad-key" / "audio.wav"
+    ).is_file()
     assert not stale_run.exists()
     assert not stale_proxy.exists()
     assert not stale_episode.exists()
+    assert not stale_tts_cache.exists()
     state = read_state(run)
     assert state.stage is Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG
     assert state.locked_situation_ids == ()

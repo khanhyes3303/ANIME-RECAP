@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 from itertools import pairwise
 
@@ -25,6 +26,48 @@ def _overlap(start_ms: int, end_ms: int, other_start_ms: int, other_end_ms: int)
 
 def _normalized_words(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
+
+
+_STORY_GROUNDING_STOP_WORDS = frozenset({
+    "va", "la", "cua", "co", "mot", "nhung", "duoc", "trong", "cho", "voi",
+    "khi", "da", "dang", "roi", "thi", "ma", "nay", "do", "tu", "den", "vao",
+    "ra", "len", "xuong", "ve", "nhu", "de", "vi", "nen", "van", "cung", "lai",
+    "rat", "bi", "se", "tai", "theo", "truoc", "sau", "qua", "chi", "khong",
+    "tren", "duoi", "con", "hon", "hay", "hoac", "neu", "tung", "cac", "anh",
+    "han", "ho", "no", "minh", "nguoi", "cau",
+})
+
+
+def _grounding_words(value: str) -> set[str]:
+    normalized = "".join(
+        character
+        for character in unicodedata.normalize("NFD", value.casefold())
+        if unicodedata.category(character) != "Mn"
+    ).replace("đ", "d")
+    return {
+        word
+        for word in re.findall(r"[a-z0-9]+", normalized)
+        if len(word) >= 3 and word not in _STORY_GROUNDING_STOP_WORDS
+    }
+
+
+def validate_narration_story_grounding(plan: NarrationPlan) -> None:
+    """Reject narration that no longer describes its cue's locked story fact."""
+    if plan.policy_version != "situation-v2":
+        return
+    claim_by_id = {claim.claim_id: claim for claim in plan.claims}
+    for unit in plan.units:
+        for cue in unit.cues:
+            cue_evidence_range(unit, cue)
+            claims = tuple(claim_by_id[claim_id] for claim_id in cue.claim_ids)
+            grounded_words = _grounding_words(" ".join(claim.text for claim in claims))
+            spoken_words = _grounding_words(cue.text)
+            required_overlap = min(2, len(grounded_words))
+            if len(grounded_words & spoken_words) < required_overlap:
+                raise MvpError(
+                    "NARRATION_SITUATION_SHIFT: "
+                    f"cue_id={cue.cue_id} situation_id={cue.situation_id}"
+                )
 
 
 def validate_narration_style(plan: NarrationPlan) -> None:
@@ -286,6 +329,7 @@ def validate_narration_plan(
     if plan.policy_version != situations.policy_version:
         raise MvpError("narration and situation policy versions must match")
     validate_narration_style(plan)
+    validate_narration_story_grounding(plan)
     situation_by_id = {item.situation_id: item for item in situations.situations}
     uses_scoped_v2_evidence = plan.policy_version == "situation-v2"
     known_events = set() if truth is None else {item.event_id for item in truth.events}
