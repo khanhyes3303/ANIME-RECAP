@@ -46,7 +46,10 @@ def _evidence(*cue_ids: str) -> ProxyEvidenceManifest:
 
 
 def _plan(*cue_ids: str) -> SimpleNamespace:
-    cue_items = tuple(SimpleNamespace(cue_id=cue_id) for cue_id in cue_ids)
+    cue_items = tuple(
+        SimpleNamespace(cue_id=cue_id, text="Jiro phát hiện và cứu con mèo.")
+        for cue_id in cue_ids
+    )
     return SimpleNamespace(units=(SimpleNamespace(cues=cue_items),))
 
 
@@ -193,6 +196,82 @@ def test_proxy_audit_rejects_repeated_visual_template() -> None:
     )
 
     assert "PROXY_AUDIT_BOILERPLATE_INVALID" in result.finding_codes
+
+
+def test_proxy_audit_rejects_visual_and_note_that_echo_the_narration() -> None:
+    review = _review(
+        "cue-001",
+        observed_visual=(
+            "Hình ảnh phân cảnh thể hiện chi tiết diễn biến: "
+            "Jiro phát hiện và cứu con mèo."
+        ),
+    )
+    review.note = "Khớp chính xác hình ảnh cho đoạn: Jiro phát hiện và cứu con mèo."
+    audit = SimpleNamespace(
+        cue_reviews=(review,),
+        boundary_reviews=(
+            SimpleNamespace(boundary="START", verdict="CLEAN"),
+            SimpleNamespace(boundary="END", verdict="CLEAN"),
+        ),
+    )
+
+    result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
+
+    assert "PROXY_AUDIT_NARRATION_ECHO_INVALID" in result.finding_codes
+
+
+def test_proxy_audit_rejects_generic_clean_boundary_note() -> None:
+    boundary_frames = tuple(frame.path for frame in _frames())
+    audit = SimpleNamespace(
+        cue_reviews=(_review("cue-001"),),
+        boundary_reviews=(
+            SimpleNamespace(
+                boundary="START",
+                verdict="CLEAN",
+                frame_refs=boundary_frames,
+                transcript_refs=(),
+                finding_codes=(),
+                note="Biên START hoàn toàn sạch sẽ, khớp với khung hình đầu cuối.",
+            ),
+            SimpleNamespace(
+                boundary="END",
+                verdict="CLEAN",
+                frame_refs=boundary_frames,
+                transcript_refs=(),
+                finding_codes=(),
+                note="Cảnh cuối cho thấy Jiro đứng cạnh con mèo dưới tán cây.",
+            ),
+        ),
+    )
+
+    result = validate_proxy_audit(audit, _plan("cue-001"), _evidence("cue-001"))
+
+    assert "PROXY_BOUNDARY_DESCRIPTION_INVALID" in result.finding_codes
+
+
+def test_situation_audit_rejects_visual_description_copied_from_cue() -> None:
+    cue = SimpleNamespace(
+        cue_id="cue-001",
+        text="Jiro phát hiện và cứu con mèo.",
+        transcript_refs=("Jiro nhìn thấy con mèo",),
+        frame_refs=("frame-001.jpg",),
+    )
+    plan = SimpleNamespace(
+        units=(SimpleNamespace(situation_id="situation-001", cues=(cue,)),)
+    )
+    review = _review(
+        "cue-001",
+        observed_visual=(
+            "Hình ảnh phân cảnh thể hiện chi tiết diễn biến: "
+            "Jiro phát hiện và cứu con mèo."
+        ),
+    )
+    review.frame_refs = ("frame-001.jpg",)
+    review.transcript_refs = ("Jiro nhìn thấy con mèo",)
+    audit = SimpleNamespace(situation_id="situation-001", cue_reviews=(review,))
+
+    with pytest.raises(MvpError, match="SITUATION_AUDIT_NARRATION_ECHO_INVALID"):
+        validate_situation_audit(audit, plan)
 
 
 def test_proxy_audit_requires_exact_boundary_frames() -> None:

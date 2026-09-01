@@ -6,11 +6,19 @@ import pytest
 
 from anime_review_mvp.adaptive_edl import AdaptiveEdlDocument, AdaptiveEdlSegment
 from anime_review_mvp.errors import MvpError
-from anime_review_mvp.models import Event, Shot, SourceRegionAnnotation, TruthDocument
+from anime_review_mvp.models import (
+    Event,
+    Shot,
+    SourceRegionAnnotation,
+    TranscriptDocument,
+    TranscriptSegment,
+    TruthDocument,
+)
 from anime_review_mvp.situation_index import SituationIndexDocument, SituationIndexEntry
 from anime_review_mvp.situation_validation import (
     coherence_findings,
     validate_causal_chains,
+    validate_cue_transcript_grounding,
     validate_edl_exclusions,
     validate_keep_skip,
     validate_narration_plan,
@@ -316,6 +324,54 @@ def test_v2_validation_uses_scoped_evidence_without_legacy_truth() -> None:
     validate_narration_plan(
         plan, document, None, SHOTS, POLICY, 20_000, require_bridges=False
     )
+
+
+def test_v2_cue_cannot_drop_transcript_grounding_from_its_range() -> None:
+    source_range = replace(
+        _range("range-001", 1_000, 4_000, "shot-001"),
+        transcript_refs=(),
+        semantic_event_id="jiro-confession",
+        action_phase="REACTION",
+        story_purpose="Jiro bộc lộ sự cô độc.",
+        shot_uses=(
+            SemanticShotUse(
+                "shot-001",
+                "jiro-confession",
+                "REACTION",
+                "Jiro bộc lộ sự cô độc.",
+            ),
+        ),
+    )
+    cue_without_transcript = NarrationCue(
+        "cue-001",
+        "situation-001",
+        "Jiro bị xa lánh rồi về nhà tâm sự.",
+        ("claim-001",),
+        1_500,
+        "REVEAL",
+        (),
+        ("frame-range-001",),
+        ("shot-001",),
+        ("Jiro",),
+        (),
+        (),
+        (),
+    )
+    unit = replace(_plan(source_range).units[0], cues=(cue_without_transcript,))
+
+    plan = NarrationPlan(
+        "LOCAL_EDITOR",
+        "situation-v2",
+        (unit,),
+        (NarrationClaim("claim-001", "Jiro bị xa lánh.", ("event-001",)),),
+    )
+    transcript = TranscriptDocument(
+        "en",
+        (TranscriptSegment(1_200, 2_000, "Why are they avoiding you?", ()),),
+    )
+
+    with pytest.raises(MvpError, match="CUE_TRANSCRIPT_GROUNDING_REQUIRED"):
+        validate_cue_transcript_grounding(plan, transcript)
 
 
 def test_range_mixing_shot_meanings_is_rejected_regardless_of_duration() -> None:

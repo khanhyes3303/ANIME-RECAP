@@ -80,6 +80,7 @@ class RunState:
     repository_root: str = ""
     code_commit: str = ""
     contract_version: str = ""
+    policy_sha256: str = ""
     repair_history: tuple[RepairRecord, ...] = ()
     stage_metrics: tuple[StageMetric, ...] = ()
     locked_situation_ids: tuple[str, ...] = ()
@@ -221,6 +222,7 @@ def new_state(
         repository_root=identity.repository_root,
         code_commit=identity.git_commit,
         contract_version=identity.contract_version,
+        policy_sha256=identity.policy_sha256,
     )
     _write_state(state)
     return state
@@ -229,12 +231,18 @@ def new_state(
 def bind_run_code_identity(run_dir: Path, identity: RunCodeIdentity) -> RunState:
     """Persist identity for a legacy run exactly once."""
     state = read_state(run_dir)
-    existing = (state.repository_root, state.code_commit, state.contract_version)
+    existing = (
+        state.repository_root,
+        state.code_commit,
+        state.contract_version,
+        state.policy_sha256,
+    )
     if any(existing):
         if existing != (
             identity.repository_root,
             identity.git_commit,
             identity.contract_version,
+            identity.policy_sha256,
         ):
             raise MvpError("RUN_CODE_IDENTITY_MISMATCH")
         return state
@@ -243,6 +251,7 @@ def bind_run_code_identity(run_dir: Path, identity: RunCodeIdentity) -> RunState
         repository_root=identity.repository_root,
         code_commit=identity.git_commit,
         contract_version=identity.contract_version,
+        policy_sha256=identity.policy_sha256,
     )
     _write_state(state)
     return state
@@ -291,6 +300,7 @@ def read_state(run_dir: Path) -> RunState:
             "code_commit",
             "contract_version",
         }
+        policy_identity_fields = {*identity_fields, "policy_sha256"}
         if frozenset(raw) not in {
             frozenset(legacy_fields),
             frozenset(current_fields),
@@ -298,6 +308,7 @@ def read_state(run_dir: Path) -> RunState:
             frozenset(v2_fields),
             frozenset(verifier_fields),
             frozenset(identity_fields),
+            frozenset(policy_identity_fields),
         }:
             raise MvpError("run state fields do not match the contract")
         return RunState(
@@ -308,6 +319,7 @@ def read_state(run_dir: Path) -> RunState:
             repository_root=raw.get("repository_root", ""),
             code_commit=raw.get("code_commit", ""),
             contract_version=raw.get("contract_version", ""),
+            policy_sha256=raw.get("policy_sha256", ""),
             repair_history=tuple(
                 RepairRecord(
                     item["owner"],
@@ -630,8 +642,13 @@ def begin_verifier_task(run_dir: Path, task_id: str, situation_id: str, revision
 def reset_for_evidence_locked_rebuild(run_dir: Path) -> RunState:
     """Discard editorial state while preserving source-observation artifacts."""
     state = read_state(run_dir)
+    identity = capture_run_code_identity(Path(__file__).resolve().parents[2])
     state = replace(
         state,
+        repository_root=identity.repository_root,
+        code_commit=identity.git_commit,
+        contract_version=identity.contract_version,
+        policy_sha256=identity.policy_sha256,
         stage=Stage.CHO_ANTIGRAVITY_CHIA_TINH_HUONG,
         repair_history=(),
         stage_metrics=(),

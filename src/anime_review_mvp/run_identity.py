@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -22,6 +23,13 @@ class RunCodeIdentity:
     repository_root: str
     git_commit: str
     contract_version: str = "anime-review-v3"
+    policy_sha256: str = ""
+
+
+def _calculate_policy_sha256(root: Path) -> str:
+    from .antigravity import calculate_policy_sha256
+
+    return calculate_policy_sha256(root)
 
 
 def _git_output(path: Path, arguments: list[str], runner: Runner) -> str:
@@ -46,7 +54,11 @@ def capture_run_code_identity(
         _git_output(path.resolve(), ["rev-parse", "--show-toplevel"], runner)
     ).resolve()
     git_commit = _git_output(repository_root, ["rev-parse", "HEAD"], runner)
-    return RunCodeIdentity(str(repository_root), git_commit)
+    return RunCodeIdentity(
+        str(repository_root),
+        git_commit,
+        policy_sha256=_calculate_policy_sha256(repository_root),
+    )
 
 
 def validate_run_code_identity(
@@ -55,6 +67,7 @@ def validate_run_code_identity(
     *,
     engine_root: Path | None = None,
     runner: Runner = subprocess.run,
+    policy_hasher: Callable[[Path], str] = _calculate_policy_sha256,
 ) -> None:
     del run_dir
     actual_root = (engine_root or Path(__file__).resolve().parents[2]).resolve()
@@ -77,3 +90,5 @@ def validate_run_code_identity(
     )
     if completed.returncode != 0:
         raise MvpError("RUN_CODE_IDENTITY_MISMATCH")
+    if recorded.policy_sha256 and policy_hasher(actual_root) != recorded.policy_sha256:
+        raise MvpError("RUN_POLICY_IDENTITY_MISMATCH")

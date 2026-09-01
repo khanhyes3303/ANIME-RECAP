@@ -83,6 +83,12 @@ def semantic_review_signature(text: str) -> str:
     return " ".join(normalized.split())
 
 
+def _echoes_narration(review_text: str, cue_text: str) -> bool:
+    review = semantic_review_signature(review_text)
+    cue = semantic_review_signature(cue_text)
+    return bool(cue and len(cue.split()) >= 4 and cue in review)
+
+
 def build_situation_audit_packet(
     scope: SituationScope,
     plan: NarrationPlan,
@@ -190,6 +196,10 @@ def validate_situation_audit(
             or (transcript and narration == transcript)
         ):
             raise MvpError("SITUATION_AUDIT_EVIDENCE_INVALID")
+        if _echoes_narration(item.observed_visual, cue.text) or _echoes_narration(
+            item.note, cue.text
+        ):
+            raise MvpError("SITUATION_AUDIT_NARRATION_ECHO_INVALID")
         visual_signatures.append(visual)
     if len(visual_signatures) != len(set(visual_signatures)):
         raise MvpError("SITUATION_AUDIT_EVIDENCE_INVALID")
@@ -277,6 +287,7 @@ def validate_proxy_audit(
             for item in non_clean_boundaries
         )
     evidence_by_cue = {item.cue_id: item for item in evidence.cues}
+    cue_by_id = {cue.cue_id: cue for unit in plan.units for cue in unit.cues}
     if set(observed) - set(evidence_by_cue):
         codes.append("PROXY_EVIDENCE_REFERENCE_INVALID")
     if any(
@@ -308,6 +319,16 @@ def validate_proxy_audit(
             not narration_meaning or narration_meaning == transcript_meaning
         ):
             codes.append("PROXY_AUDIT_NARRATION_MEANING_INVALID")
+        cue = cue_by_id.get(item.cue_id)
+        if cue is not None and item.verdict == "MATCH" and any(
+            _echoes_narration(value, cue.text)
+            for value in (
+                getattr(item, "observed_visual", ""),
+                getattr(item, "narration_meaning", ""),
+                getattr(item, "note", ""),
+            )
+        ):
+            codes.append("PROXY_AUDIT_NARRATION_ECHO_INVALID")
     boundary_evidence = {item.boundary: item for item in evidence.boundaries}
     for item in getattr(audit, "boundary_reviews", ()):
         expected_boundary = boundary_evidence.get(item.boundary)
@@ -318,6 +339,11 @@ def validate_proxy_audit(
         )
         if expected_boundary is None or set(getattr(item, "frame_refs", ())) != expected_frames:
             codes.append("PROXY_BOUNDARY_EVIDENCE_INVALID")
+        boundary_note = semantic_review_signature(getattr(item, "note", ""))
+        if item.verdict == "CLEAN" and (
+            not boundary_note or "hoàn toàn sạch" in boundary_note
+        ):
+            codes.append("PROXY_BOUNDARY_DESCRIPTION_INVALID")
     visual_signatures = tuple(
         semantic_review_signature(getattr(item, "observed_visual", ""))
         for item in reviews

@@ -98,7 +98,7 @@ def test_legacy_run_identity_is_persisted_once(
     new_state(run)
     state_path = run / "run_state.json"
     payload = json.loads(state_path.read_text(encoding="utf-8"))
-    for field in ("repository_root", "code_commit", "contract_version"):
+    for field in ("repository_root", "code_commit", "contract_version", "policy_sha256"):
         payload.pop(field)
     state_path.write_text(json.dumps(payload), encoding="utf-8")
     identity = RunCodeIdentity(str(tmp_path.resolve()), "c" * 40)

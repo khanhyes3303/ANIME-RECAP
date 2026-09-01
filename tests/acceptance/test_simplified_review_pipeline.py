@@ -132,11 +132,16 @@ def test_simplified_pipeline_builds_real_timeline_and_validates_evidence_offline
         for index, item in enumerate(evidence.cues)
     )
     boundary_reviews = tuple(
-        SimpleNamespace(
-            boundary=item.boundary, verdict="CLEAN",
-            frame_refs=tuple(frame.path for frame in item.program_frames),
-            transcript_refs=(), finding_codes=(),
-        )
+            SimpleNamespace(
+                boundary=item.boundary, verdict="CLEAN",
+                frame_refs=tuple(frame.path for frame in item.program_frames),
+                transcript_refs=(), finding_codes=(),
+                note=(
+                    "Khung đầu cho thấy Jiro bước vào sân, không có logo hay opening."
+                    if item.boundary == "START"
+                    else "Khung cuối cho thấy Rago đứng trong rừng, không có credit hay preview."
+                ),
+            )
         for item in evidence.boundaries
     )
 

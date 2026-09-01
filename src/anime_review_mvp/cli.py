@@ -129,6 +129,7 @@ from .situation_scope import (
     validate_submission_scope,
 )
 from .situation_validation import (
+    validate_cue_transcript_grounding,
     validate_edl_exclusions,
     validate_narration_plan,
     validate_situations,
@@ -349,6 +350,7 @@ def _validate_run_command_identity(run_dir: Path) -> object:
             state.repository_root,
             state.code_commit,
             state.contract_version,
+            state.policy_sha256,
         )
         if state.repository_root and state.code_commit and state.contract_version
         else capture_run_code_identity(run_dir)
@@ -2921,6 +2923,7 @@ def _accept_antigravity_command(run_dir: Path, task_id: str, staging_dir: Path) 
     staged_situation = load_json(staging_dir / "situation_draft.json", SituationDocument)
     staged_narration = load_json(staging_dir / "narration_draft.json", NarrationPlan)
     validate_submission_scope(entry, staged_situation, staged_narration)
+    validate_cue_transcript_grounding(staged_narration, full_transcript)
     accepted = accept_antigravity_submission(run_dir, task_id, staging_dir)
     situation_draft = staged_situation
     narration_draft = staged_narration

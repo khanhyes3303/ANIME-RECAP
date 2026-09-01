@@ -57,6 +57,27 @@ def test_identity_accepts_newer_engine_in_same_checkout(tmp_path: Path) -> None:
     )
 
 
+def test_identity_rejects_policy_changed_after_run_started(tmp_path: Path) -> None:
+    recorded = RunCodeIdentity(
+        str(tmp_path.resolve()),
+        "a" * 40,
+        "anime-review-v3",
+        "b" * 64,
+    )
+
+    def descendant(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with pytest.raises(MvpError, match="RUN_POLICY_IDENTITY_MISMATCH"):
+        validate_run_code_identity(
+            tmp_path / "run",
+            recorded,
+            engine_root=tmp_path,
+            runner=descendant,
+            policy_hasher=lambda _root: "c" * 64,
+        )
+
+
 def test_capture_identity_uses_repository_containing_run(tmp_path: Path) -> None:
     repository = (tmp_path / "repo").resolve()
     responses = iter(
@@ -71,4 +92,7 @@ def test_capture_identity_uses_repository_containing_run(tmp_path: Path) -> None
         runner=lambda *args, **kwargs: next(responses),
     )
 
-    assert identity == RunCodeIdentity(str(repository), "c" * 40, "anime-review-v3")
+    assert identity.repository_root == str(repository)
+    assert identity.git_commit == "c" * 40
+    assert identity.contract_version == "anime-review-v3"
+    assert len(identity.policy_sha256) == 64

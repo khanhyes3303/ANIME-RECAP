@@ -5,8 +5,14 @@ from collections import Counter
 from itertools import pairwise
 
 from .errors import MvpError
-from .models import AuditFinding, Shot, TruthDocument
-from .situations import EditorialPolicy, EvidenceRange, NarrationPlan, SituationDocument
+from .models import AuditFinding, Shot, TranscriptDocument, TruthDocument
+from .situations import (
+    EditorialPolicy,
+    EvidenceRange,
+    NarrationPlan,
+    SituationDocument,
+    cue_evidence_range,
+)
 
 
 def _duplicates(values: list[str]) -> bool:
@@ -19,6 +25,32 @@ def _overlap(start_ms: int, end_ms: int, other_start_ms: int, other_end_ms: int)
 
 def _normalized_words(value: str) -> tuple[str, ...]:
     return tuple(re.findall(r"\w+", value.casefold(), flags=re.UNICODE))
+
+
+def validate_cue_transcript_grounding(
+    plan: NarrationPlan,
+    transcript: TranscriptDocument,
+) -> None:
+    """Require source transcript evidence whenever a cue range contains speech."""
+    for unit in plan.units:
+        for cue in unit.cues:
+            evidence = cue_evidence_range(unit, cue)
+            overlapping_text = {
+                segment.text.strip()
+                for segment in transcript.segments
+                if segment.text.strip()
+                and _overlap(
+                    evidence.source_start_ms,
+                    evidence.source_end_ms,
+                    segment.start_ms,
+                    segment.end_ms,
+                )
+            }
+            cue_refs = {value.strip() for value in cue.transcript_refs if value.strip()}
+            if overlapping_text and (not cue_refs or not cue_refs <= overlapping_text):
+                raise MvpError(f"CUE_TRANSCRIPT_GROUNDING_REQUIRED: {cue.cue_id}")
+            if not overlapping_text and cue_refs:
+                raise MvpError(f"CUE_TRANSCRIPT_REFERENCE_INVALID: {cue.cue_id}")
 
 
 def validate_causal_chains(document: SituationDocument) -> None:

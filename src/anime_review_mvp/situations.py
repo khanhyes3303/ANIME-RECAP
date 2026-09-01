@@ -245,8 +245,17 @@ def cue_evidence_range(unit: NarrationUnit, cue: NarrationCue) -> EvidenceRange:
         if evidence.source_start_ms <= cue.visual_anchor_source_ms < evidence.source_end_ms
         and set(cue.shot_ids) <= set(evidence.shot_ids)
         and set(cue.frame_refs) <= set(evidence.frame_refs)
-        and (not cue.transcript_refs or set(cue.transcript_refs) <= set(evidence.transcript_refs))
+        and bool(cue.transcript_refs) == bool(evidence.transcript_refs)
+        and set(cue.transcript_refs) <= set(evidence.transcript_refs)
     )
+    if not cue.transcript_refs and any(
+        evidence.source_start_ms <= cue.visual_anchor_source_ms < evidence.source_end_ms
+        and set(cue.shot_ids) <= set(evidence.shot_ids)
+        and set(cue.frame_refs) <= set(evidence.frame_refs)
+        and evidence.transcript_refs
+        for evidence in unit.evidence_ranges
+    ):
+        raise MvpError(f"CUE_TRANSCRIPT_GROUNDING_REQUIRED: {cue.cue_id}")
     if len(candidates) != 1:
         raise MvpError(
             f"CUE_EVIDENCE_RANGE_INVALID: {cue.cue_id} resolves to {len(candidates)} ranges"
