@@ -253,4 +253,6 @@ def test_episode_packet_and_prompt_define_one_complete_editorial_job(tmp_path: P
     assert "không đọc mã validator" in normalized
     assert "không phát `goal_complete`" in normalized
     assert "accept-antigravity" in normalized
+    assert "--input" in prompt
+    assert "--staging" not in prompt
     assert "250000 ms" in normalized

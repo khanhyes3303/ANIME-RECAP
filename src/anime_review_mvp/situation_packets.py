@@ -137,7 +137,7 @@ def render_episode_review_prompt(packet: EpisodeReviewPacket) -> str:
     run_dir = Path(packet.output_dir).parents[1]
     accept_command = (
         f'accept-antigravity --run "{run_dir.resolve()}" --task {packet.task_id} '
-        f'--staging "{Path(packet.output_dir).resolve()}"'
+        f'--input "{Path(packet.output_dir).resolve()}"'
     )
     return f"""Antigravity là biên tập viên cho một nhiệm vụ duy nhất cho toàn bộ tập phim.
 
