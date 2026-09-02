@@ -122,6 +122,7 @@ from .run_identity import (
     capture_run_code_identity,
     validate_run_code_identity,
 )
+from .run_lock import exclusive_run_lock
 from .semantic_timeline import SemanticTimeline, build_semantic_timeline
 from .situation_index import load_situation_index, next_editable_situation
 from .situation_packets import (
@@ -497,6 +498,11 @@ def _operator_engine_step(run_dir: Path, state: object) -> bool:
 
 
 def _operator_command(run_dir: Path) -> int:
+    with exclusive_run_lock(run_dir, "operator"):
+        return _operator_command_locked(run_dir)
+
+
+def _operator_command_locked(run_dir: Path) -> int:
     """Advance local stages until a deterministic Antigravity/user gate."""
     directive = None
     state = read_state(run_dir)

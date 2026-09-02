@@ -254,6 +254,22 @@ def accept_antigravity_submission(
         ):
             raise MvpError("EDITOR_REVISION_STALE")
         return prior
+    previous_revision = max(
+        (
+            record
+            for record in ledger
+            if record.situation_id == task.situation_id
+            and record.revision < task.revision
+        ),
+        key=lambda record: record.revision,
+        default=None,
+    )
+    if (
+        previous_revision is not None
+        and previous_revision.situation_sha256 == situation_hash
+        and previous_revision.narration_sha256 == narration_hash
+    ):
+        raise MvpError("EDITOR_REVISION_UNCHANGED")
     for name, source in sources.items():
         _atomic_copy(source, accepted_dir / name)
     accepted = AcceptedEditorialRevision(

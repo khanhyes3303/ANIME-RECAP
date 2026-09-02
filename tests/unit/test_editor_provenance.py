@@ -143,6 +143,49 @@ def test_episode_review_acceptance_is_idempotent_after_reconnect(tmp_path: Path)
     assert (accepted / "narration_draft.json").is_file()
 
 
+def test_episode_review_repair_rejects_an_unchanged_new_revision(tmp_path: Path) -> None:
+    run = tmp_path / "run"
+    source = tmp_path / "situation_index.json"
+    source.write_text('{"situations":[]}', encoding="utf-8")
+    first = create_editor_task(
+        run,
+        "run-001",
+        "__episode__",
+        1,
+        (source,),
+        task_kind="EPISODE_REVIEW",
+    )
+    first_staging = run / "editor_staging" / first.task_id
+    first_staging.mkdir(parents=True)
+    (first_staging / "situations_draft.json").write_text(
+        '{"situations":[]}', encoding="utf-8"
+    )
+    (first_staging / "narration_draft.json").write_text(
+        '{"units":[]}', encoding="utf-8"
+    )
+    accept_antigravity_submission(run, first.task_id, first_staging)
+
+    repair = create_editor_task(
+        run,
+        "run-001",
+        "__episode__",
+        2,
+        (source,),
+        task_kind="EPISODE_REVIEW",
+    )
+    repair_staging = run / "editor_staging" / repair.task_id
+    repair_staging.mkdir(parents=True)
+    (repair_staging / "situations_draft.json").write_text(
+        '{"situations":[]}', encoding="utf-8"
+    )
+    (repair_staging / "narration_draft.json").write_text(
+        '{"units":[]}', encoding="utf-8"
+    )
+
+    with pytest.raises(MvpError, match="EDITOR_REVISION_UNCHANGED"):
+        accept_antigravity_submission(run, repair.task_id, repair_staging)
+
+
 def test_load_verifier_ledger_round_trips_records(tmp_path: Path) -> None:
     ledger_path = tmp_path / "verifier_ledger.jsonl"
     record = AcceptedVerifierRevision(
